@@ -1,0 +1,17 @@
+{
+  "name": "@plotroom/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@plotroom/core": "workspace:*",
+    "@plotroom/db": "workspace:*",
+    "@plotroom/plugin-sdk": "workspace:*"
+  }
+}

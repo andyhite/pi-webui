@@ -14,8 +14,23 @@ git clone <remote> plotroom
 cd plotroom
 git config merge.ff only
 git config pull.rebase true
-pnpm install       # once the workspace exists
+pnpm install
+pnpm verify        # format:check + typecheck + lint + test
 ```
+
+Requires Node 22+ and pnpm 9. Husky hooks install with `pnpm install`.
+
+| Command       | Does                                      |
+| ------------- | ----------------------------------------- |
+| `pnpm verify` | everything CI checks — run before pushing |
+| `pnpm build`  | `tsc -b` across the project graph         |
+| `pnpm test`   | Vitest                                    |
+| `pnpm lint`   | ESLint                                    |
+| `pnpm format` | Prettier, writing changes                 |
+
+Local hooks refuse commits on `main`, reject non-conforming branch names, and
+run commitlint on every message. CI repeats all of it and additionally rejects
+merge commits in a PR.
 
 ## Workflow
 
@@ -49,19 +64,19 @@ Conventional Commits 1.0.0 is required:
 <optional footer(s)>
 ```
 
-| Type | Use for |
-|---|---|
-| `feat` | new user-visible capability |
-| `fix` | bug fix |
-| `docs` | documentation only |
-| `refactor` | behavior-preserving code change |
-| `perf` | performance change |
-| `test` | tests only |
-| `build` | build system, dependencies, packaging |
-| `ci` | CI configuration |
-| `chore` | maintenance with no src/test impact |
-| `style` | formatting only |
-| `revert` | reverts a previous commit |
+| Type       | Use for                               |
+| ---------- | ------------------------------------- |
+| `feat`     | new user-visible capability           |
+| `fix`      | bug fix                               |
+| `docs`     | documentation only                    |
+| `refactor` | behavior-preserving code change       |
+| `perf`     | performance change                    |
+| `test`     | tests only                            |
+| `build`    | build system, dependencies, packaging |
+| `ci`       | CI configuration                      |
+| `chore`    | maintenance with no src/test impact   |
+| `style`    | formatting only                       |
+| `revert`   | reverts a previous commit             |
 
 Rules:
 

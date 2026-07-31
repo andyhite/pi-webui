@@ -6,7 +6,7 @@ Canonical operating rules for any agent (or human) working in this repository. R
 
 **PlotRoom** — a context-authoring canvas for operating a fleet of AI agents. A single operator composes context (tickets, PRs, documents, files, notes, prior agent output) as a spatial node graph, wires that context into commands, and runs many agent sessions against it simultaneously.
 
-- **Source of truth for behavior:** [`docs/product-spec.md`](docs/product-spec.md) ("North Star v1"). It describes *what* the product does and never *how*. Treat its 12 governing principles and §15 ("What must exist in the first cut") as binding constraints, not suggestions.
+- **Source of truth for behavior:** [`docs/product-spec.md`](docs/product-spec.md) ("North Star v1"). It describes _what_ the product does and never _how_. Treat its 12 governing principles and §15 ("What must exist in the first cut") as binding constraints, not suggestions.
 - **Status:** greenfield rebuild. The stack is decided (see "Stack" below); no application code exists yet.
 - **Explicit non-goals** are listed in spec §14. Do not implement workflow control flow, schedulers/triggers that start work, inbound webhooks, inferred relationships, multi-user, or silent truncation.
 
@@ -23,21 +23,21 @@ These four are schema-shaped — getting them wrong early permanently degrades h
 
 Decided. Do not substitute alternatives without asking.
 
-| Layer | Choice |
-|---|---|
-| Language | TypeScript, `strict` everywhere |
-| Shell | Electron (desktop) + the same renderer served to the browser by the local server |
-| Server | Node + Hono, HTTP + WebSocket; owns all state |
-| Persistence | SQLite (single portable file) via Drizzle ORM; FTS5 for search |
-| Canvas | React + xyflow (React Flow) |
-| UI | React |
-| Monorepo | pnpm workspaces + Turborepo |
-| Tests | Vitest (unit), Playwright (canvas e2e) |
-| Lint/format | ESLint + Prettier |
-| Enforcement | commitlint + husky (Conventional Commits) |
-| CI | GitHub Actions: typecheck, lint, test, commitlint |
+| Layer       | Choice                                                                           |
+| ----------- | -------------------------------------------------------------------------------- |
+| Language    | TypeScript, `strict` everywhere                                                  |
+| Shell       | Electron (desktop) + the same renderer served to the browser by the local server |
+| Server      | Node + Hono, HTTP + WebSocket; owns all state                                    |
+| Persistence | SQLite (single portable file) via Drizzle ORM; FTS5 for search                   |
+| Canvas      | React + xyflow (React Flow)                                                      |
+| UI          | React                                                                            |
+| Monorepo    | pnpm workspaces + Turborepo                                                      |
+| Tests       | Vitest (unit), Playwright (canvas e2e)                                           |
+| Lint/format | ESLint + Prettier                                                                |
+| Enforcement | commitlint + husky (Conventional Commits)                                        |
+| CI          | GitHub Actions: typecheck, lint, test, commitlint                                |
 
-### Intended layout
+### Layout (scaffolded)
 
 ```
 apps/
@@ -50,6 +50,34 @@ packages/
   plugin-sdk/  plugin contract + host (worker_threads)
   ui/          canvas + panels (React)
 ```
+
+Packages are `@plotroom/<name>`, private, ESM-only, and linked with
+`workspace:*`. Each has `build`, `typecheck`, `lint`, and `test` scripts;
+Turborepo drives them from the root.
+
+### Commands
+
+```sh
+pnpm install
+pnpm verify        # format:check + typecheck + lint + test — run before pushing
+pnpm build         # tsc -b across the project graph
+pnpm test          # vitest
+pnpm format        # prettier --write
+```
+
+TypeScript uses project references (`tsc -b`). Each project writes its build
+info to `dist/.tsbuildinfo`, so deleting `dist/` correctly forces a rebuild —
+do not move it back to the repo root, where the projects collide.
+
+### Enforcement
+
+Husky hooks run locally and CI repeats them:
+
+- `pre-commit` — refuses commits on `main`, checks branch naming, runs
+  `format:check`. Override the `main` guard only with `ALLOW_MAIN_COMMIT=1`.
+- `commit-msg` — commitlint against Conventional Commits.
+- `.github/workflows/ci.yml` — format, typecheck, lint, test; plus commitlint
+  over the PR range and a job that rejects merge commits.
 
 The renderer is one web app. Desktop and browser are two ways to load it; never fork the UI per target.
 
@@ -92,7 +120,7 @@ Every commit message MUST follow [Conventional Commits 1.0.0](https://www.conven
 - **Description:** imperative mood, lowercase, no trailing period, ≤ 72 chars on the subject line.
 - **Scope:** optional, lowercase, a short area name (e.g. `canvas`, `graph`, `sessions`, `workspaces`, `integrations`, `docs`).
 - **Breaking changes:** `!` after the type/scope AND a `BREAKING CHANGE:` footer.
-- Body explains *why*, not *what* the diff already shows.
+- Body explains _why_, not _what_ the diff already shows.
 
 Examples:
 

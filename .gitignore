@@ -1,0 +1,36 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# caches
+.turbo/
+.vite/
+coverage/
+playwright-report/
+test-results/
+
+# local state (spec §12: durable state lives outside the repo)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.plotroom/
+
+# env and secrets
+.env
+.env.*
+!.env.example
+
+# editors and OS
+.DS_Store
+.idea/
+*.swp
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
