@@ -210,7 +210,7 @@ run the renderer in._
 
 ### Epic 4.1 — Session runtime abstraction (`sessions`)
 
-- [ ] **Decide and record** the runtime boundary (open decision in AGENTS.md): the interface PlotRoom owns — start, stream, inject-between-turns, stop, fork-from-point, accounting taps — vs what a runtime adapter supplies
+- [x] **Decide and record** the runtime boundary (open decision in AGENTS.md): the interface PlotRoom owns — start, stream, inject-between-turns, stop, fork-from-point, accounting taps — vs what a runtime adapter supplies — _accepted at Sync 1: pi coding agent first, Claude Agent SDK second (docs/decisions/0001)_
 - [ ] First runtime adapter (one concrete agent runtime end-to-end)
 - [ ] Phase derivation from observation: thinking, responding, tool-running, compacting, waiting-* , stopped, failed, idle (§3.6; principle 7 — derived, never agent-reported)
 - [ ] Per-session accounting: turns, elapsed, tokens, cost, last-activity, context-window meter with thresholds (§3.6)

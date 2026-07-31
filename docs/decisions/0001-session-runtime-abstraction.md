@@ -1,7 +1,11 @@
 # 0001 — Session runtime abstraction
 
-- **Status:** Proposed (awaiting operator acceptance at Sync 1; the AGENTS.md
-  "Open decisions" entry stays open until then)
+- **Status:** Accepted at Sync 1, with one operator amendment: **adapter
+  order flipped — pi coding agent first, Claude Agent SDK second.** The
+  multi-provider reach (pi drives Claude models and hundreds of others) and
+  its native injection/fork semantics outweigh the Claude SDK's blessed
+  per-call permission callback, which pi must match via tool-layer wrapping —
+  verified during adapter v1, before claims enforcement depends on it.
 - **Date:** 2026-02-10
 - **Epic:** 4.1 — Session runtime abstraction (`sessions`)
 - **Deciders:** Track C (proposal), operator (acceptance)
@@ -170,18 +174,21 @@ via bridge).
    runtime-independent. Adapters translate one runtime's native surface into
    `RuntimeObservation` events and a small command set. Adapters are processes
    owned by the server, never by the renderer.
-2. **First concrete adapter: Claude Agent SDK.** It is the only candidate
-   strong on all of C1 (observation granularity), C2 (mid-turn input
-   acceptance), C4 (usage + cost as data), and C6 (per-call permission
-   interception) — the four criteria the spec is least willing to compromise
-   on. Its weak spot, fork-from-arbitrary-point, is deliberately placed on
-   PlotRoom's side of the boundary anyway (PlotRoom owns the transcript, so it
-   can seed a fork from its own record for any runtime).
-3. **Second adapter target: pi coding agent** — the best fit on injection
-   semantics and local session records, and it proves the abstraction is real
-   (two adapters, one product behavior) while adding provider diversity.
-   OpenAI Codex SDK is the alternative second adapter if provider coverage
-   matters more than injection fidelity.
+2. **First concrete adapter: pi coding agent** (operator decision at Sync 1).
+   Strongest on injection semantics (steering messages are natively
+   queued → delivered, exactly §6.5), closest to native on fork-from-point
+   (local JSONL sessions with branching), fully local, and multi-provider —
+   one adapter reaches Claude models and hundreds of others, which is also
+   the hedge against single-vendor auth or pricing changes. Its known gap is
+   C6: no single blessed per-call permission callback, so PlotRoom's
+   approvals (§6.6) and path claims (§3.4) gate tools via pi's extensible
+   tool layer — this wrapping is verified early in adapter v1, before claims
+   enforcement depends on it.
+3. **Second adapter target: Claude Agent SDK** — strongest on observation
+   granularity, cost-as-data, and per-call permission interception
+   (`canUseTool`); it proves the abstraction is real (two adapters, one
+   product behavior). OpenAI Codex SDK is the alternative second adapter if
+   provider coverage matters more than injection fidelity.
 4. **ACP is a watch item, not the boundary.** Today it standardizes too little
    of what PlotRoom needs (no usage/cost, no fork, thin compaction story). The
    adapter interface below is deliberately close in shape to ACP's session
@@ -365,9 +372,13 @@ export type SessionPhase =
 - **Delivery detection on next-turn-only runtimes** (Codex-style): "queued"
   can last an entire long turn. That is spec-legal (§6.5 exists precisely for
   this) but needs the UI to show it honestly.
-- **Auth/entitlement coupling.** Claude Agent SDK requires Anthropic
-  credentials; a second adapter (pi or Codex) is also the hedge against
-  single-vendor auth or pricing changes.
+- **Auth/entitlement coupling.** Vendor SDKs require their vendor's
+  credentials; pi-first keeps the primary path multi-provider, and the second
+  adapter keeps the seam honest.
+- **C6 wrapping on pi.** pi lacks a single blessed per-call permission
+  callback; approvals/claims gating is built on its tool layer and must be
+  verified early in adapter v1 — if it cannot be enforced (not advised),
+  adapter order reverts to the Claude Agent SDK.
 
 ## Proposed AGENTS.md update
 
@@ -391,9 +402,9 @@ The runtime boundary is decided (docs/decisions/0001-session-runtime-abstraction
 PlotRoom owns a `SessionRuntimeAdapter` interface in `@plotroom/core`
 (`core/src/sessions/`); adapters translate one runtime's surface into a
 timestamped `RuntimeObservation` stream plus start / resume / fork / inject /
-respond / stop. The first adapter is the **Claude Agent SDK**; the second
-(proving the seam) is the **pi coding agent**. ACP is tracked but is not the
-boundary.
+respond / stop. The first adapter is the **pi coding agent** (multi-provider,
+native queued→delivered injection, near-native fork); the second (proving the
+seam) is the **Claude Agent SDK**. ACP is tracked but is not the boundary.
 
 Non-negotiables at this seam:
 

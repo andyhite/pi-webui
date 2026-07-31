@@ -154,6 +154,32 @@ xyflow is the base. The spec's harder canvas requirements are built **on top of*
 - **Mid-drag refusal** — `isValidConnection` / connection-state hooks, so an illegal edge never looks legal.
 - Nodes stay DOM-based so plugin card renderers and keyboard accessibility (spec §11) work.
 
+### Session runtime notes
+
+The runtime boundary is decided (docs/decisions/0001-session-runtime-abstraction.md).
+PlotRoom owns a `SessionRuntimeAdapter` interface in `@plotroom/core`
+(`core/src/sessions/`); adapters translate one runtime's surface into a
+timestamped `RuntimeObservation` stream plus start / resume / fork / inject /
+respond / stop. The first adapter is the **pi coding agent** (multi-provider,
+native queued→delivered injection, near-native fork); the second (proving the
+seam) is the **Claude Agent SDK**. ACP is tracked but is not the boundary.
+
+Non-negotiables at this seam:
+
+- **Phases are derived in core** from observations (plus PlotRoom's own
+  approval/claim state and silence timeouts) — never agent-reported.
+- **Injection is a ledger**: `inject()` resolves on queue acceptance;
+  delivery is a separate observed event. The UI shows queued vs delivered.
+- **Session records store PlotRoom's observation log**, not vendor payloads,
+  so resume/fork/accounting survive vendor churn; fork-from-point is emulated
+  by transcript-prefix seeding when a runtime lacks native fork.
+- **Out-of-budget stops are initiated by PlotRoom** and recorded as their own
+  outcome, distinct from failure.
+- **pi's per-call permission gating is verified early in adapter v1** —
+  approvals (§6.6) and claims (§3.4) must be enforced, not advised; if pi's
+  tool layer cannot enforce them, adapter order reverts to the Claude Agent
+  SDK (see the decision record's risks).
+
 ## Git rules
 
 ### Conventional Commits — required
@@ -261,7 +287,6 @@ Record answers here as they are decided; do not assume.
 - Retention policy defaults (N runs per definition; version window currently defaults to 30 days)
 - Collection membership model (the `collection` kind has no members yet)
 - Electron packaging/updater tooling (electron-builder vs electron-forge)
-- Agent runtime(s) driving sessions, and the session/runtime abstraction boundary
 - Plugin distribution and permission-grant UX
 - Styling approach for the UI package
 - Versioning and release process
