@@ -8,3 +8,5 @@
 
 export * from "./solver/push.js";
 export * from "./placement/store.js";
+export * from "./routing/selection.js";
+export * from "./routing/use-selection-route.js";
