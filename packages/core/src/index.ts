@@ -12,3 +12,5 @@ export * from "./output-address.js";
 export * from "./objects.js";
 export * from "./renderings.js";
 export * from "./versions.js";
+export * from "./edges.js";
+export * from "./lineage.js";

@@ -57,14 +57,21 @@ can be asserted directly; the store applies the same rule in SQL. Deferred: the
 `collection` kind has a type but no membership model yet — it lands with the
 collection expand/prune gesture (Epic 3.3)._
 
-### Epic 1.2 — Edges and authorship (`graph`)
+### Epic 1.2 — Edges and authorship (`graph`) — _done_
 
-- [ ] Context edges: ordered inputs into a command or running session (§3.5, §3.7)
-- [ ] **§15-2: `edges.author_id NOT NULL`**, distinguishing human vs session authors (§3.7, principle 1)
-- [ ] Provenance edges: recorded automatically with meaning — command → session, session → created object, sibling/fork/handoff relations (§3.7); never authored
-- [ ] Legal-connection rules as a core predicate: content → command, content → running session, nothing else (§3.7) — one function the canvas, the API, and agent tools all call
-- [ ] Command-topology acyclicity check (transitive; sessions exempt) (§3.7)
-- [ ] Lineage model: initiation chains, ancestor/descendant queries — the enforcement substrate for principle 1's reflexivity rule (§2.1, §2.8)
+- [x] Context edges: ordered inputs into a command or running session (§3.5, §3.7)
+- [x] **§15-2: `edges.author_id NOT NULL`**, distinguishing human vs session authors (§3.7, principle 1)
+- [x] Provenance edges: recorded automatically with meaning — command → session, session → created object, sibling/fork/handoff relations (§3.7); never authored
+- [x] Legal-connection rules as a core predicate: content → command, content → running session, nothing else (§3.7) — one function the canvas, the API, and agent tools all call
+- [x] Command-topology acyclicity check (transitive; sessions exempt) (§3.7)
+- [x] Lineage model: initiation chains, ancestor/descendant queries — the enforcement substrate for principle 1's reflexivity rule (§2.1, §2.8)
+
+_Predicates (`checkConnection`, `wouldCycle`, `checkAuthoring`) live in
+`@plotroom/core`; `GraphStore` in `@plotroom/db` calls them and adds duplicate
+refusal and soft delete. Authorship is enforced twice: the predicate refuses,
+and the schema cannot represent an unattributed context edge. Deferred: cycle
+detection rebuilds the command graph per insert — fine at current scale,
+revisit if a board gets large (Phase 2)._
 
 ### Epic 1.3 — Workstreams (`workstreams`)
 

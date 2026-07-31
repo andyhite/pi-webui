@@ -119,4 +119,78 @@ export const migrations: readonly Migration[] = [
         ON object_versions (run_referenced, pinned, created_at);
     `,
   },
+  {
+    id: 3,
+    name: "nodes_and_edges",
+    sql: `
+      CREATE TABLE nodes (
+        id            TEXT PRIMARY KEY,
+        role          TEXT NOT NULL CHECK (role IN ('content', 'command', 'session')),
+        -- What this node stands for: an object, a command, or a session.
+        ref_id        TEXT NOT NULL,
+        workstream_id TEXT,
+        running       INTEGER NOT NULL DEFAULT 0,
+        created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+        deleted_at    INTEGER,
+        UNIQUE (role, ref_id)
+      );
+
+      CREATE INDEX nodes_workstream_idx ON nodes (workstream_id);
+
+      CREATE TABLE edges (
+        id         TEXT PRIMARY KEY,
+        kind       TEXT NOT NULL CHECK (kind IN ('context', 'provenance')),
+        from_node  TEXT NOT NULL REFERENCES nodes (id) ON DELETE CASCADE,
+        to_node    TEXT NOT NULL REFERENCES nodes (id) ON DELETE CASCADE,
+
+        -- Section 15 invariant 2: every context edge records its author.
+        -- NOT NULL is the whole point; a nullable column would let a single
+        -- unattributed write make the graph unable to say who decided what
+        -- agents know. Provenance edges are recorded by the system, never
+        -- authored, and carry the reserved author 'system'.
+        author_kind    TEXT NOT NULL CHECK (author_kind IN ('human', 'session', 'system')),
+        author_session TEXT,
+
+        -- Context edges only: assembly order of this input into its target.
+        ordinal    INTEGER,
+        -- Provenance edges only: what the relationship means.
+        relation   TEXT,
+
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        deleted_at INTEGER,
+
+        CHECK (
+          (author_kind = 'session' AND author_session IS NOT NULL) OR
+          (author_kind <> 'session' AND author_session IS NULL)
+        ),
+        CHECK (
+          (kind = 'context'    AND ordinal IS NOT NULL AND relation IS NULL
+                               AND author_kind IN ('human', 'session')) OR
+          (kind = 'provenance' AND ordinal IS NULL AND relation IS NOT NULL
+                               AND author_kind = 'system')
+        )
+      );
+
+      CREATE UNIQUE INDEX edges_context_unique_idx
+        ON edges (from_node, to_node)
+        WHERE kind = 'context' AND deleted_at IS NULL;
+
+      CREATE UNIQUE INDEX edges_context_ordinal_idx
+        ON edges (to_node, ordinal)
+        WHERE kind = 'context' AND deleted_at IS NULL;
+
+      CREATE INDEX edges_to_idx ON edges (to_node, kind);
+      CREATE INDEX edges_from_idx ON edges (from_node, kind);
+
+      -- Initiation chains: principle 1's enforcement substrate. A null parent
+      -- means a human gesture started this session.
+      CREATE TABLE session_lineage (
+        session_id    TEXT PRIMARY KEY,
+        initiated_by  TEXT REFERENCES session_lineage (session_id),
+        created_at    INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+
+      CREATE INDEX session_lineage_parent_idx ON session_lineage (initiated_by);
+    `,
+  },
 ];

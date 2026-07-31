@@ -122,6 +122,21 @@ is a pure predicate (`isCompactable` in `@plotroom/core`) mirrored by
 `ObjectStore.compactVersions` — change both together, and keep the predicate as
 the place the rule is stated.
 
+**Graph rules are predicates in `@plotroom/core`, called by the store.** Never
+reimplement a rule at a call site — the canvas, the API, and agent tools must
+refuse identically (principle 8):
+
+| Rule               | Predicate         | Spec                                                              |
+| ------------------ | ----------------- | ----------------------------------------------------------------- |
+| Legal connections  | `checkConnection` | §3.7 (content → command, content → running session, nothing else) |
+| Command acyclicity | `wouldCycle`      | §3.7 (sessions exempt — injection is bidirectional)               |
+| Reflexivity        | `checkAuthoring`  | principle 1 (no session authors into its own chain)               |
+| Version compaction | `isCompactable`   | §15 invariant 3                                                   |
+
+Authorship is enforced twice on purpose: the predicate refuses, and the schema
+cannot represent an unattributed context edge (`author_kind NOT NULL` plus a
+CHECK that only provenance edges may be `system`).
+
 **Stores take an injectable clock** (`ObjectStore(state, () => seconds)`).
 Retention, drift, and idempotency are untestable against a real clock.
 

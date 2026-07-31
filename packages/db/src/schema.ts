@@ -145,6 +145,83 @@ export const objectVersions = sqliteTable(
   ],
 );
 
+/** A placed node on the graph: content, a command, or a session (§3.7). */
+export const nodes = sqliteTable(
+  "nodes",
+  {
+    id: text("id").primaryKey(),
+    role: text("role", {
+      enum: ["content", "command", "session"],
+    }).notNull(),
+    /** The object, command, or session this node stands for. */
+    refId: text("ref_id").notNull(),
+    workstreamId: text("workstream_id"),
+    running: integer("running", { mode: "boolean" }).notNull().default(false),
+    createdAt: integer("created_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+    /** Soft delete: authored state is recoverable (principle 10). */
+    deletedAt: integer("deleted_at"),
+  },
+  (table) => [
+    uniqueIndex("nodes_role_ref_idx").on(table.role, table.refId),
+    index("nodes_workstream_idx").on(table.workstreamId),
+  ],
+);
+
+/**
+ * Context and provenance edges (§3.7).
+ *
+ * `authorKind` is NOT NULL by design — §15 invariant 2. Provenance edges are
+ * recorded by the system rather than authored, and carry the reserved author
+ * "system"; that is a statement about who recorded it, not an unknown.
+ */
+export const edges = sqliteTable(
+  "edges",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind", { enum: ["context", "provenance"] }).notNull(),
+    fromNode: text("from_node")
+      .notNull()
+      .references(() => nodes.id, { onDelete: "cascade" }),
+    toNode: text("to_node")
+      .notNull()
+      .references(() => nodes.id, { onDelete: "cascade" }),
+    authorKind: text("author_kind", {
+      enum: ["human", "session", "system"],
+    }).notNull(),
+    authorSession: text("author_session"),
+    /** Context edges only: assembly order into the target (§3.5). */
+    ordinal: integer("ordinal"),
+    /** Provenance edges only: what the relationship means. */
+    relation: text("relation"),
+    createdAt: integer("created_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+    deletedAt: integer("deleted_at"),
+  },
+  (table) => [
+    index("edges_to_idx").on(table.toNode, table.kind),
+    index("edges_from_idx").on(table.fromNode, table.kind),
+  ],
+);
+
+/** Initiation chains; a null parent means a human gesture (principle 1). */
+export const sessionLineage = sqliteTable(
+  "session_lineage",
+  {
+    sessionId: text("session_id").primaryKey(),
+    initiatedBy: text("initiated_by"),
+    createdAt: integer("created_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [index("session_lineage_parent_idx").on(table.initiatedBy)],
+);
+
+export type NodeRow = typeof nodes.$inferSelect;
+export type EdgeRow = typeof edges.$inferSelect;
+export type SessionLineageRow = typeof sessionLineage.$inferSelect;
 export type BlobRow = typeof blobs.$inferSelect;
 export type BlobRefRow = typeof blobRefs.$inferSelect;
 export type ObjectRow = typeof objects.$inferSelect;
