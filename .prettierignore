@@ -1,4 +1,5 @@
 node_modules/
+.pi-subagents/
 dist/
 .turbo/
 coverage/

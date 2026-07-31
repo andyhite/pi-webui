@@ -8,6 +8,9 @@ build/
 out/
 *.tsbuildinfo
 
+# agent orchestration runtime artifacts
+.pi-subagents/
+
 # caches
 .turbo/
 .vite/
