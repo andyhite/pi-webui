@@ -5,3 +5,4 @@ dist/
 coverage/
 pnpm-lock.yaml
 docs/product-spec.md
+.pi-subagents/
