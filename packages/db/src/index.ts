@@ -1,8 +1,10 @@
 /**
  * @plotroom/db — durable, portable state (spec §12).
  *
- * SQLite in a single file, accessed via Drizzle. Owns the schema, migrations,
- * and the retention/compaction rule (§3.2, §4.4).
+ * SQLite in a single file plus a content-addressed blobs/ tree, together in one
+ * state directory that is the unit of backup and movement. Access is via
+ * Drizzle; content goes through BlobStore, which hides the inline/external
+ * split. Search is an index-only FTS5 table populated on write.
  *
  * The schema must satisfy the four §15 invariants from day one:
  *   1. runs store the full assembled content AND the configuration used
@@ -11,4 +13,9 @@
  *   4. outputs are addressed per run; `latest` is a derived view
  */
 
-export const SCHEMA_VERSION = 0;
+export * from "./client.js";
+export * from "./paths.js";
+export * from "./schema.js";
+export * from "./blob-store.js";
+export * from "./search.js";
+export { migrations, type Migration } from "./migrations.js";

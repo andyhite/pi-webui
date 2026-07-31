@@ -90,7 +90,33 @@ The schema must satisfy the four §15 invariants from day one:
 - outputs are addressed per run (`output@n`); `latest` is a derived view, never the only address.
 - versions carry retention metadata so the compaction rule is implementable, not retrofitted.
 
-Large blobs (transcripts, assembled content, diffs) need a deliberate storage strategy — keep them out of hot rows.
+**Content storage is hybrid, decided.** One state directory is the unit of
+backup and movement:
+
+```
+<state-dir>/
+  plotroom.db          rows, indexes, FTS index, inline content
+  blobs/ab/cdef0123…   content-addressed files, large content only
+```
+
+- Bytes at or below `INLINE_MAX_BYTES` (64KB) live inline in the `blobs` row;
+  larger content spills to `blobs/<hash>`. Callers never choose — everything
+  goes through `BlobStore` in `packages/db`.
+- Blobs are identified by sha256, so identical content is stored once. Assembled
+  run content repeats heavily across runs; dedup is load-bearing, not an
+  optimization.
+- `blob_refs` makes retention a query, not a guess: anything referenced is
+  retained, `compact()` removes only what nothing points at, and `pinned` marks
+  what must never be compacted.
+- Transcript release (§6.1) deletes the external file and keeps the row, so a
+  marker can be drawn and the content reloaded. Nothing is silently deleted.
+- Migrations are embedded in `src/migrations.ts` (append-only, never edit a
+  shipped one), not read from disk — a packaged build cannot ship without its
+  schema.
+
+**Search** is an index-only FTS5 table populated on write, so inline and
+external content are equally searchable and archived sessions stay findable
+(§6.8).
 
 ### Canvas notes
 
@@ -203,7 +229,8 @@ CONTRIBUTING.md        How to contribute (workflow detail)
 
 Record answers here as they are decided; do not assume.
 
-- Blob storage strategy for transcripts, assembled content, and diffs (in-DB vs content-addressed files)
+- The graph schema itself: workstreams, nodes, edges, commands, runs, sessions, versions
+- Retention policy defaults (N runs per definition, compaction window)
 - Electron packaging/updater tooling (electron-builder vs electron-forge)
 - Agent runtime(s) driving sessions, and the session/runtime abstraction boundary
 - Plugin distribution and permission-grant UX
