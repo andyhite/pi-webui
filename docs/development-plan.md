@@ -42,14 +42,20 @@ Dependency rule of thumb: each phase depends on the previous ones, but epics wit
 
 **Exit criteria:** `@plotroom/core` exposes a typed API over objects, versions, edges, workstreams, runs, and sessions, fully unit-tested; the schema satisfies all four §15 invariants by construction (asserted in tests, e.g. `NOT NULL` author on edges).
 
-### Epic 1.1 — Objects, content, and versions (`graph`)
+### Epic 1.1 — Objects, content, and versions (`graph`) — _done_
 
-- [ ] Object table: first-class concepts as one generic object kind — ticket, PR, review, document, diff, commit, note, transcript, collection (§3.1); external identity that survives re-reads (reconcile, never duplicate)
-- [ ] Three renderings contract per object: card, compact summary, agent-ready content (§3.2) — stored/derivable, supplied by the producer
-- [ ] Version model: every content change is a new version; deltas ("what's new") expressible per kind, full content as fallback (§3.2)
-- [ ] **§15-3: retention metadata on versions** — run-referenced flag, compaction window, pin propagation — so the compaction rule is implementable from day one (§3.2, §4.4)
-- [ ] Scope: world vs local objects; promote-to-world as a first-class operation (§3.2)
-- [ ] Last-known content survives source loss/restart, bounded to placed objects (§3.2)
+- [x] Object table: first-class concepts as one generic object kind — ticket, PR, review, document, diff, commit, note, transcript, collection (§3.1); external identity that survives re-reads (reconcile, never duplicate)
+- [x] Three renderings contract per object: card, compact summary, agent-ready content (§3.2) — stored/derivable, supplied by the producer
+- [x] Version model: every content change is a new version; deltas ("what's new") expressible per kind, full content as fallback (§3.2)
+- [x] **§15-3: retention metadata on versions** — run-referenced flag, compaction window, pin propagation — so the compaction rule is implementable from day one (§3.2, §4.4)
+- [x] Scope: world vs local objects; promote-to-world as a first-class operation (§3.2)
+- [x] Last-known content survives source loss/restart, bounded to placed objects (§3.2)
+
+_Landed as `@plotroom/core` object/version/rendering types plus `ObjectStore` in
+`@plotroom/db`. The compaction rule is a pure predicate (`isCompactable`) so it
+can be asserted directly; the store applies the same rule in SQL. Deferred: the
+`collection` kind has a type but no membership model yet — it lands with the
+collection expand/prune gesture (Epic 3.3)._
 
 ### Epic 1.2 — Edges and authorship (`graph`)
 
@@ -76,6 +82,15 @@ Dependency rule of thumb: each phase depends on the previous ones, but epics wit
 - [ ] **§15-1: run history records full assembled content + configuration** — the exact ordered content and versions in, config, output, cost (§3.7, §4.4)
 - [ ] **§15-4: per-run output addressing** — `output@n` general case, `latest` derived (§4.4)
 - [ ] Run-history retention rule: last N per definition + pinned + window (§4.4)
+
+### Epic 1.0 — Primitives (`core`)
+
+_Small, but every later epic assumes them; idempotency and retention tests are
+untestable without an injectable clock._
+
+- [ ] Id generation and branded id types (partly in place)
+- [ ] Injectable clock, threaded through stores (partly in place: `ObjectStore`)
+- [ ] Test fixtures/factories for objects, versions, workstreams, runs
 
 ### Epic 1.5 — Sessions and drift (`sessions`, `graph`)
 
@@ -111,7 +126,7 @@ Dependency rule of thumb: each phase depends on the previous ones, but epics wit
 
 - [ ] All state in the single portable store; survives restart; backup/move story (§12)
 - [ ] Reset and cleanup verbs: arrangement / derived state / everything — each stating what it removes first (§12)
-- [ ] Version compaction job implementing the §15-3 rule (windowed, pin-aware)
+- [ ] Version compaction **job** implementing the §15-3 rule (windowed, pin-aware) — the schema and the predicate land in Epic 1.1; this epic owns only scheduling and blob sweeping
 
 ---
 
@@ -151,7 +166,10 @@ Dependency rule of thumb: each phase depends on the previous ones, but epics wit
 - [ ] Dock rail + panel registry; state persists across panel close (§11)
 - [ ] Graph warnings surface: legal-but-questionable topologies flagged on card and editor, machine-readable for agents later (§5)
 
-### Epic 3.5 — Web + desktop shells (`web`, `desktop`)
+### Epic 3.0 — Web + desktop shells (`web`, `desktop`) — _do first_
+
+_Moved ahead of 3.1–3.4: nothing in this phase is demoable without a host to
+run the renderer in._
 
 - [ ] `apps/web` renderer served by the server; single renderer for both targets (never forked per target)
 - [ ] Electron main: spawn-or-attach to server; packaging decision (electron-builder vs forge — record in AGENTS.md)

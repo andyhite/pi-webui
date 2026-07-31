@@ -18,4 +18,5 @@ export * from "./paths.js";
 export * from "./schema.js";
 export * from "./blob-store.js";
 export * from "./search.js";
+export * from "./object-store.js";
 export { migrations, type Migration } from "./migrations.js";

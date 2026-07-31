@@ -6,6 +6,7 @@ Canonical operating rules for any agent (or human) working in this repository. R
 
 **PlotRoom** — a context-authoring canvas for operating a fleet of AI agents. A single operator composes context (tickets, PRs, documents, files, notes, prior agent output) as a spatial node graph, wires that context into commands, and runs many agent sessions against it simultaneously.
 
+- **Sequencing:** [`docs/development-plan.md`](docs/development-plan.md) — phases → epics → tasks, with exit criteria. Check the next unchecked item there before starting work, and tick items in the same PR that lands them. The spec wins when the two disagree.
 - **Source of truth for behavior:** [`docs/product-spec.md`](docs/product-spec.md) ("North Star v1"). It describes _what_ the product does and never _how_. Treat its 12 governing principles and §15 ("What must exist in the first cut") as binding constraints, not suggestions.
 - **Status:** greenfield rebuild. The stack is decided (see "Stack" below); no application code exists yet.
 - **Explicit non-goals** are listed in spec §14. Do not implement workflow control flow, schedulers/triggers that start work, inbound webhooks, inferred relationships, multi-user, or silent truncation.
@@ -113,6 +114,16 @@ backup and movement:
 - Migrations are embedded in `src/migrations.ts` (append-only, never edit a
   shipped one), not read from disk — a packaged build cannot ship without its
   schema.
+
+**Objects and versions** live in `objects` / `object_versions`. External
+identity is uniquely indexed so a re-read reconciles rather than duplicating;
+content identical to the latest version writes no version. The compaction rule
+is a pure predicate (`isCompactable` in `@plotroom/core`) mirrored by
+`ObjectStore.compactVersions` — change both together, and keep the predicate as
+the place the rule is stated.
+
+**Stores take an injectable clock** (`ObjectStore(state, () => seconds)`).
+Retention, drift, and idempotency are untestable against a real clock.
 
 **Search** is an index-only FTS5 table populated on write, so inline and
 external content are equally searchable and archived sessions stay findable
@@ -229,8 +240,9 @@ CONTRIBUTING.md        How to contribute (workflow detail)
 
 Record answers here as they are decided; do not assume.
 
-- The graph schema itself: workstreams, nodes, edges, commands, runs, sessions, versions
-- Retention policy defaults (N runs per definition, compaction window)
+- Remaining graph schema: workstreams, nodes, edges, commands, runs, sessions
+- Retention policy defaults (N runs per definition; version window currently defaults to 30 days)
+- Collection membership model (the `collection` kind has no members yet)
 - Electron packaging/updater tooling (electron-builder vs electron-forge)
 - Agent runtime(s) driving sessions, and the session/runtime abstraction boundary
 - Plugin distribution and permission-grant UX

@@ -9,3 +9,6 @@
 export * from "./ids.js";
 export * from "./author.js";
 export * from "./output-address.js";
+export * from "./objects.js";
+export * from "./renderings.js";
+export * from "./versions.js";

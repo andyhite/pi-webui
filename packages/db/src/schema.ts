@@ -6,6 +6,7 @@ import {
   primaryKey,
   sqliteTable,
   text,
+  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
 /**
@@ -70,5 +71,81 @@ export const blobRefs = sqliteTable(
   ],
 );
 
+/**
+ * Spec §3.1: one generic object table. Integrations populate the concepts that
+ * exist; they never add new ones.
+ */
+export const objects = sqliteTable(
+  "objects",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(),
+    scope: text("scope", { enum: ["world", "local"] }).notNull(),
+    /** Set for local objects; null once promoted to world scope (§3.2). */
+    workstreamId: text("workstream_id"),
+    /** External identity survives re-reads, so refresh reconciles (§3.1). */
+    externalSystem: text("external_system"),
+    externalId: text("external_id"),
+    title: text("title").notNull(),
+    latestVersionId: text("latest_version_id"),
+    createdAt: integer("created_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+    promotedAt: integer("promoted_at"),
+  },
+  (table) => [
+    uniqueIndex("objects_external_idx")
+      .on(table.externalSystem, table.externalId)
+      .where(sql`external_system IS NOT NULL`),
+    index("objects_kind_idx").on(table.kind),
+    index("objects_workstream_idx").on(table.workstreamId),
+  ],
+);
+
+/**
+ * Spec §3.2: a change to an object's content produces a new version. Retention
+ * metadata (§15 invariant 3) is present from the first write — retrofitting it
+ * leaves the product unable to say which past versions were safe to drop.
+ */
+export const objectVersions = sqliteTable(
+  "object_versions",
+  {
+    id: text("id").primaryKey(),
+    objectId: text("object_id")
+      .notNull()
+      .references(() => objects.id, { onDelete: "cascade" }),
+    ordinal: integer("ordinal").notNull(),
+    contentHash: text("content_hash").notNull(),
+    contentBlobId: text("content_blob_id")
+      .notNull()
+      .references(() => blobs.id),
+    cardJson: text("card_json").notNull(),
+    summary: text("summary").notNull(),
+    deltaSummary: text("delta_summary"),
+    deltaBlobId: text("delta_blob_id").references(() => blobs.id),
+    runReferenced: integer("run_referenced", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
+    createdAt: integer("created_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex("object_versions_ordinal_idx").on(
+      table.objectId,
+      table.ordinal,
+    ),
+    index("object_versions_object_idx").on(table.objectId, table.ordinal),
+    index("object_versions_retention_idx").on(
+      table.runReferenced,
+      table.pinned,
+      table.createdAt,
+    ),
+  ],
+);
+
 export type BlobRow = typeof blobs.$inferSelect;
 export type BlobRefRow = typeof blobRefs.$inferSelect;
+export type ObjectRow = typeof objects.$inferSelect;
+export type ObjectVersionRow = typeof objectVersions.$inferSelect;
