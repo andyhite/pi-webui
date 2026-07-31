@@ -12,14 +12,15 @@ import {
   newObjectId,
   newRunId,
   newVersionId,
+  newWorkstreamId,
   type CommandId,
-  type ObjectId,
   type RunId,
   type VersionId,
 } from "./ids.js";
 import type { PlotObject } from "./objects.js";
 import type { Renderings } from "./renderings.js";
 import type { ObjectVersion } from "./versions.js";
+import type { Workstream } from "./workstreams.js";
 
 /** A fixed, obviously fake instant; far enough from zero to survive windows. */
 export const TEST_EPOCH = 1_000_000;
@@ -83,6 +84,19 @@ export function makeVersion(
     summary: "a fixture version",
     runReferenced: false,
     pinned: false,
+    createdAt: TEST_EPOCH,
+    ...overrides,
+  };
+}
+
+export function makeWorkstream(
+  overrides: Partial<Workstream> = {},
+): Workstream {
+  return {
+    id: newWorkstreamId(),
+    subjectId: null,
+    status: "active",
+    archivedAt: null,
     createdAt: TEST_EPOCH,
     ...overrides,
   };
