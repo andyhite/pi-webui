@@ -7,3 +7,16 @@
  */
 
 export const CONTRACT_VERSION = 0;
+
+export {
+  PluginHost,
+  PluginUnavailableError,
+  type PluginHealth,
+  type PluginHostOptions,
+} from "./host.js";
+export type {
+  HostToWorkerMessage,
+  PluginModule,
+  WorkerBootData,
+  WorkerToHostMessage,
+} from "./protocol.js";
