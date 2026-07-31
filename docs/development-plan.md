@@ -103,6 +103,8 @@ untestable without an injectable clock._
 
 - [ ] Session entity: phases, per-session launch choices, accounting fields, end states including out-of-budget as distinct from failure (§3.6)
 - [ ] Transcript as content: versioned, delta = new turns; bounded with recoverable release markers (§3.6, §6.1)
+- [ ] Live-transcript checkpoint rule: consumers drift on session end or explicit checkpoint, never per turn (§3.6)
+- [ ] **Interrupted** as a distinct end state for crash/restart with sessions in flight — not stopped, not failed; resumable like any session (§3.6, principle 11)
 - [ ] Drift derivation: consumed-version tracking; transitive, per-consumer, cross-workstream flags; drift is a state, never an action (§3.2, §4.5)
 - [ ] Triage verbs on attention items: acknowledge (advance baseline), snooze, mute (§4.5)
 - [ ] Soft-delete/recoverability for all authored state, agent deletions included (principle 10)
@@ -202,6 +204,8 @@ run the renderer in._
 
 - [ ] Assembly: ordered edges → assembled content, with content-budget warnings; hard cap opt-in per command; never silent truncation (§3.5, principle 12)
 - [ ] Run preview: exactly what will execute + cost estimate + spend cap acceptance, before anything starts (§4.1)
+- [ ] Cost estimates state their basis and render as ranges — "based on N prior runs" / "no history; input size only" — never a bare number (§4.1)
+- [ ] Completion proof is point-in-time: proven at submission, never silently revoked; later condition regression surfaces as drift/attention on done work (§3.5, principle 3)
 - [ ] Run-one; producing-session completion loop: submission checked against world conditions, failing condition returned as feedback, session continues within budget (§3.5, principle 3)
 - [ ] Open sessions: end by user; feed downstream via promote or transcript wiring (§3.5)
 - [ ] Idempotent initiation: one gesture → one session/run, across retries and reconnects (principle 9)
@@ -215,6 +219,7 @@ run the renderer in._
 - [ ] Live status (branch, uncommitted, ahead/behind) reflecting terminal-made changes too; divergence detection for continuation gating (§3.4, §4.3)
 - [ ] Discovery: scan configured search paths; discovered ≠ placed (§3.4, principle 6); create/attach/remove/force-remove; protected primary checkout + default branch
 - [ ] Provisioning cost awareness: shared caches where possible, cost reported (§3.4)
+- [ ] Host-auth invariant: workspace git operations use the host machine's own git/SSH config; app credentials are never used for workspace git and never written into workspace git config or remotes; clone-from-PR fails honestly when the host cannot authenticate (§3.4, §9.3) — enforced with a test, not a convention
 
 ### Epic 4.4 — Path claims (`claims`)
 
@@ -225,6 +230,7 @@ run the renderer in._
 - [ ] Lease expiry + activity renewal; automatic release on session end
 - [ ] Waitlists as visible state; wait-for-cycle deadlock detection refusing the newest claim with an actionable message
 - [ ] Claim-precise divergence: stale iff a read path was written by a different holder (§3.4)
+- [ ] Operator as implicit claim holder: hand edits are their own divergence class, staling a session only for paths it read (§3.4)
 - [ ] Session tools: request, yield, inspect (enforced server-side, not by convention — principle 4)
 
 ### Epic 4.5 — Agent tool surface (`tools`)
@@ -253,6 +259,7 @@ run the renderer in._
 
 - [ ] Injection as new turn + permanent graph content wired to the session (§6.5, principle 5); queued → delivered states for between-turn delivery
 - [ ] Session-to-session injection with attribution (peer gesture, lineage rule applies)
+- [ ] Transcript checkpoint gesture (human and agent) feeding the Epic 1.5 checkpoint rule (§3.6)
 - [ ] Structured questions: options as bubbles on the node, answered inline, result returned structurally, unpicked options remain visible; **no timed defaults** (§6.4, principle 2)
 - [ ] Human broadcast (selection / workstream / everything running) (§6.5)
 - [ ] Session broadcast: scope-of-material-state only, mandatory declared category, rate-bounded per window, induced spend charged to sender's budget chain, operator-visible (§6.5)
