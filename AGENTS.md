@@ -7,7 +7,7 @@ Canonical operating rules for any agent (or human) working in this repository. R
 **PlotRoom** — a context-authoring canvas for operating a fleet of AI agents. A single operator composes context (tickets, PRs, documents, files, notes, prior agent output) as a spatial node graph, wires that context into commands, and runs many agent sessions against it simultaneously.
 
 - **Source of truth for behavior:** [`docs/product-spec.md`](docs/product-spec.md) ("North Star v1"). It describes *what* the product does and never *how*. Treat its 12 governing principles and §15 ("What must exist in the first cut") as binding constraints, not suggestions.
-- **Status:** greenfield rebuild. The repo currently contains documentation only; no application code, build system, or dependencies have been chosen yet.
+- **Status:** greenfield rebuild. The stack is decided (see "Stack" below); no application code exists yet.
 - **Explicit non-goals** are listed in spec §14. Do not implement workflow control flow, schedulers/triggers that start work, inbound webhooks, inferred relationships, multi-user, or silent truncation.
 
 ### Spec invariants worth memorizing
@@ -18,6 +18,61 @@ These four are schema-shaped — getting them wrong early permanently degrades h
 2. **Every context edge records its author** (human or session).
 3. Version retention follows the **compaction rule** (run-referenced retained, unreferenced intermediates compacted after a window, pinned runs never).
 4. **Per-run output addressing** — `output@n` is the general case; `latest` is a special case of it.
+
+## Stack
+
+Decided. Do not substitute alternatives without asking.
+
+| Layer | Choice |
+|---|---|
+| Language | TypeScript, `strict` everywhere |
+| Shell | Electron (desktop) + the same renderer served to the browser by the local server |
+| Server | Node + Hono, HTTP + WebSocket; owns all state |
+| Persistence | SQLite (single portable file) via Drizzle ORM; FTS5 for search |
+| Canvas | React + xyflow (React Flow) |
+| UI | React |
+| Monorepo | pnpm workspaces + Turborepo |
+| Tests | Vitest (unit), Playwright (canvas e2e) |
+| Lint/format | ESLint + Prettier |
+| Enforcement | commitlint + husky (Conventional Commits) |
+| CI | GitHub Actions: typecheck, lint, test, commitlint |
+
+### Intended layout
+
+```
+apps/
+  desktop/     Electron main; spawns or attaches to a server
+  web/         renderer entrypoint served by the server
+  server/      Hono HTTP + WS; single owner of all state
+packages/
+  core/        graph, workstreams, sessions, budgets, claims
+  db/          Drizzle schema + migrations
+  plugin-sdk/  plugin contract + host (worker_threads)
+  ui/          canvas + panels (React)
+```
+
+The renderer is one web app. Desktop and browser are two ways to load it; never fork the UI per target.
+
+### Persistence notes
+
+The schema must satisfy the four §15 invariants from day one:
+
+- `edges.author_id` is `NOT NULL` and distinguishes human vs session authors.
+- `runs` stores the full assembled content **and** the configuration it ran under.
+- outputs are addressed per run (`output@n`); `latest` is a derived view, never the only address.
+- versions carry retention metadata so the compaction rule is implementable, not retrofitted.
+
+Large blobs (transcripts, assembled content, diffs) need a deliberate storage strategy — keep them out of hot rows.
+
+### Canvas notes
+
+xyflow is the base. The spec's harder canvas requirements are built **on top of** it, not by forking it:
+
+- **Rigid-body push** — custom drag handling (`onNodeDrag`) plus a collision/push solver over node extents. No physics simulation; an arrangement at rest stays put.
+- **Collapsing containers** — xyflow parent/child nodes; a collapsed workstream is one node and edges draw to its frame.
+- **Zoom-level semantics** — read the viewport zoom and switch node renderers by level (workstream card → inner nodes → full detail).
+- **Mid-drag refusal** — `isValidConnection` / connection-state hooks, so an illegal edge never looks legal.
+- Nodes stay DOM-based so plugin card renderers and keyboard accessibility (spec §11) work.
 
 ## Git rules
 
@@ -120,9 +175,9 @@ CONTRIBUTING.md        How to contribute (workflow detail)
 
 Record answers here as they are decided; do not assume.
 
-- Language, runtime, and package manager
-- Application shell (desktop packaging) and rendering approach
-- Persistence layer for graph, sessions, and run history
-- Test framework and CI provider
-- Commit-message and branch-name linting/enforcement tooling
+- Blob storage strategy for transcripts, assembled content, and diffs (in-DB vs content-addressed files)
+- Electron packaging/updater tooling (electron-builder vs electron-forge)
+- Agent runtime(s) driving sessions, and the session/runtime abstraction boundary
+- Plugin distribution and permission-grant UX
+- Styling approach for the UI package
 - Versioning and release process
