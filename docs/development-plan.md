@@ -73,11 +73,18 @@ and the schema cannot represent an unattributed context edge. Deferred: cycle
 detection rebuilds the command graph per insert — fine at current scale,
 revisit if a board gets large (Phase 2)._
 
-### Epic 1.3 — Workstreams (`workstreams`)
+### Epic 1.3 — Workstreams (`workstreams`) — _done_
 
-- [ ] Workstream entity: subject (authored, optional), lifecycle (active/done/abandoned/archived — authored, with product _suggestions_ never auto-transitions), containment of commands/sessions/local objects (§3.3)
-- [ ] Scope rule enforcement: objects cross boundaries as world objects; commands and sessions never do (§3.3)
-- [ ] Attention rollup aggregation model (computed, stored where needed for the card) (§3.3, §7)
+- [x] Workstream entity: subject (authored, optional), lifecycle (active/done/abandoned/archived — authored, with product _suggestions_ never auto-transitions), containment of commands/sessions/local objects (§3.3)
+- [x] Scope rule enforcement: objects cross boundaries as world objects; commands and sessions never do (§3.3)
+- [x] Attention rollup aggregation model (computed, stored where needed for the card) (§3.3, §7)
+
+_Landed as `checkLifecycleAuthoring`, `checkScope`, `suggestDone`, and
+`rollupAttention` predicates in `@plotroom/core` plus `WorkstreamStore` in
+`@plotroom/db`. `suggestDone` is pure and nothing calls it to transition;
+authored mutations are attributed in `workstream_events` (schema-enforced, no
+`system` author). Session-authored lifecycle changes are refused outright
+until Phase 6 approvals land propose-and-accept._
 
 ### Epic 1.4 — Commands and runs (`commands`, `runs`)
 
@@ -90,14 +97,18 @@ revisit if a board gets large (Phase 2)._
 - [ ] **§15-4: per-run output addressing** — `output@n` general case, `latest` derived (§4.4)
 - [ ] Run-history retention rule: last N per definition + pinned + window (§4.4)
 
-### Epic 1.0 — Primitives (`core`)
+### Epic 1.0 — Primitives (`core`) — _done_
 
 _Small, but every later epic assumes them; idempotency and retention tests are
 untestable without an injectable clock._
 
-- [ ] Id generation and branded id types (partly in place)
-- [ ] Injectable clock, threaded through stores (partly in place: `ObjectStore`)
-- [ ] Test fixtures/factories for objects, versions, workstreams, runs
+- [x] Id generation and branded id types (partly in place)
+- [x] Injectable clock, threaded through stores (partly in place: `ObjectStore`)
+- [x] Test fixtures/factories for objects, versions, workstreams, runs
+
+_Fixtures live at `@plotroom/core/testing` (subpath export, outside the
+production API); the run factory is a placeholder carrying only what
+retention/`output@n` tests need until Epic 1.4 lands the schema._
 
 ### Epic 1.5 — Sessions and drift (`sessions`, `graph`)
 
@@ -147,10 +158,15 @@ untestable without an injectable clock._
 
 ### Epic 3.1 — Canvas foundation (`canvas`)
 
-- [ ] xyflow integration; nodes DOM-based (plugin renderers + a11y later, §11)
-- [ ] Rigid-body push: custom drag handling + collision/push solver over node extents; chains propagate; at-rest stays put (§5)
-- [ ] Durable placement across restarts; derived initial arrangement; "reset arrangement" as the only auto-layout verb (§5)
-- [ ] Selection as the route: selected node reflected in the address; one navigation primitive for click/palette/queue/deep-link (§5)
+- [x] xyflow integration; nodes DOM-based (plugin renderers + a11y later, §11)
+- [x] Rigid-body push: custom drag handling + collision/push solver over node extents; chains propagate; at-rest stays put (§5)
+- [ ] Durable placement across restarts; derived initial arrangement; "reset arrangement" as the only auto-layout verb (§5) — _placement persistence landed behind a storage interface (localStorage until the server exists); derived initial arrangement and the reset verb remain_
+- [x] Selection as the route: selected node reflected in the address; one navigation primitive for click/palette/queue/deep-link (§5)
+
+_Landed unstyled per the design gate (fleet rule 5), against fixture data in
+`apps/web`; mid-drag refusal wired through `isValidConnection` over
+`checkConnection`. Epic 3.0's server-served renderer and Electron
+spawn-or-attach wait for Phase 2 as planned._
 
 ### Epic 3.2 — Zoom, containers, and legibility (`canvas`)
 
@@ -336,7 +352,7 @@ run the renderer in._
 ### Epic 7.1 — Plugin contract and host (`plugin-sdk`)
 
 - [ ] Contract: concept producers, write actions, agent tools, content renderers (incl. deltas), card renderers, panels, palette entries, workspace kinds, condition checks, notification routes, command definitions, themes (§10.1)
-- [ ] worker_threads host with failure isolation (throw/hang/load-fail → plugin unavailable, reported) (§10.2)
+- [x] worker_threads host with failure isolation (throw/hang/load-fail → plugin unavailable, reported) (§10.2) — _skeleton landed early (W1–3): load/health/ping/dispose with isolation tests; the contract surface freezes here in Phase 7_
 - [ ] Declared permissions granted by the user; no silent reach; credentials never exposed to sessions or other plugins (§10.2, §9.3)
 - [ ] Contract versioning with refusal/warning; install/enable/disable/remove without restart; plugin health surface (§10.2)
 - [ ] Enforced: plugins cannot author intent — tools act as the calling session (§10.2, principle 1)
