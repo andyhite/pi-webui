@@ -13,6 +13,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
+    "dev": "tsc -b --watch --preserveWatchOutput",
     "typecheck": "tsc -b",
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests"
