@@ -7,3 +7,4 @@
  */
 
 export * from "./solver/push.js";
+export * from "./placement/store.js";
