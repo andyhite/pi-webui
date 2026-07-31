@@ -233,6 +233,7 @@ Rules:
 - **Agents MUST do all work in a worktree and NEVER change the branch of the primary checkout.** No `git checkout`/`git switch` in the primary checkout, ever — another agent or the operator may be relying on it, and switching it breaks every concurrent session at once. Create a worktree for your branch and work there; if you find the primary checkout on anything other than `main`, report it rather than "fixing" it.
 - Never create a worktree inside the repo directory.
 - One worktree per branch; remove it when the branch lands: `git worktree remove ../plotroom-<branch>` then `git worktree prune`.
+- **Agents clean up after themselves.** Once your work has merged to `main`, removing your worktree (and deleting the merged topic branch) is part of the task — not optional, not someone else's job. A task is not complete while its worktree still exists. The only exception is a worktree another agent or the operator explicitly asked you to leave in place.
 - The primary checkout stays on `main` and is never removed.
 
 ## Agent working agreement
