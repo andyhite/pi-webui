@@ -40,6 +40,9 @@ RULES YOU ENFORCE (repeat to every subagent):
    mechanics only — no visual styling, no theming.
 7. If a subagent is blocked or a decision isn't covered by spec/AGENTS.md, it
    stops and asks you; genuinely open decisions go to the operator.
+8. Worktree cleanup: after a track's branch ff-merges to main, remove its
+   worktree and delete the merged branch (AGENTS.md). A track is not "done"
+   while its worktree still exists.
 
 MODEL SELECTION — you choose each subagent's model per task:
 - Sonnet 5: the default for typical day-to-day implementation work.
@@ -140,6 +143,9 @@ RULES YOU ENFORCE (repeat to every subagent):
    mechanics only — no visual styling, no theming.
 7. If a subagent is blocked or a decision isn't covered by spec/AGENTS.md, it
    stops and asks you; genuinely open decisions go to the operator.
+8. Worktree cleanup: after a track's branch ff-merges to main, remove its
+   worktree and delete the merged branch (AGENTS.md). A track is not "done"
+   while its worktree still exists.
 
 MODEL SELECTION — you choose each subagent's model per task:
 - Sonnet 5: the default for typical day-to-day implementation work.
@@ -235,6 +241,9 @@ RULES YOU ENFORCE (repeat to every subagent):
    mechanics only — no visual styling, no theming.
 7. If a subagent is blocked or a decision isn't covered by spec/AGENTS.md, it
    stops and asks you; genuinely open decisions go to the operator.
+8. Worktree cleanup: after a track's branch ff-merges to main, remove its
+   worktree and delete the merged branch (AGENTS.md). A track is not "done"
+   while its worktree still exists.
 
 MODEL SELECTION — you choose each subagent's model per task:
 - Sonnet 5: the default for typical day-to-day implementation work.
@@ -327,6 +336,9 @@ RULES YOU ENFORCE (repeat to every subagent):
    mechanics only — no visual styling, no theming.
 7. If a subagent is blocked or a decision isn't covered by spec/AGENTS.md, it
    stops and asks you; genuinely open decisions go to the operator.
+8. Worktree cleanup: after a track's branch ff-merges to main, remove its
+   worktree and delete the merged branch (AGENTS.md). A track is not "done"
+   while its worktree still exists.
 
 MODEL SELECTION — you choose each subagent's model per task:
 - Sonnet 5: the default for typical day-to-day implementation work.
@@ -421,6 +433,9 @@ RULES YOU ENFORCE (repeat to every subagent):
    mechanics only — no visual styling, no theming.
 7. If a subagent is blocked or a decision isn't covered by spec/AGENTS.md, it
    stops and asks you; genuinely open decisions go to the operator.
+8. Worktree cleanup: after a track's branch ff-merges to main, remove its
+   worktree and delete the merged branch (AGENTS.md). A track is not "done"
+   while its worktree still exists.
 
 MODEL SELECTION — you choose each subagent's model per task:
 - Sonnet 5: the default for typical day-to-day implementation work.
@@ -515,6 +530,9 @@ RULES YOU ENFORCE (repeat to every subagent):
    mechanics only — no visual styling, no theming.
 7. If a subagent is blocked or a decision isn't covered by spec/AGENTS.md, it
    stops and asks you; genuinely open decisions go to the operator.
+8. Worktree cleanup: after a track's branch ff-merges to main, remove its
+   worktree and delete the merged branch (AGENTS.md). A track is not "done"
+   while its worktree still exists.
 
 MODEL SELECTION — you choose each subagent's model per task:
 - Sonnet 5: the default for typical day-to-day implementation work.
@@ -603,6 +621,9 @@ RULES YOU ENFORCE (repeat to every subagent):
    mechanics only — no visual styling, no theming.
 7. If a subagent is blocked or a decision isn't covered by spec/AGENTS.md, it
    stops and asks you; genuinely open decisions go to the operator.
+8. Worktree cleanup: after a track's branch ff-merges to main, remove its
+   worktree and delete the merged branch (AGENTS.md). A track is not "done"
+   while its worktree still exists.
 
 MODEL SELECTION — you choose each subagent's model per task:
 - Sonnet 5: the default for typical day-to-day implementation work.
@@ -694,6 +715,9 @@ RULES YOU ENFORCE (repeat to every subagent):
    mechanics only — no visual styling, no theming.
 7. If a subagent is blocked or a decision isn't covered by spec/AGENTS.md, it
    stops and asks you; genuinely open decisions go to the operator.
+8. Worktree cleanup: after a track's branch ff-merges to main, remove its
+   worktree and delete the merged branch (AGENTS.md). A track is not "done"
+   while its worktree still exists.
 
 MODEL SELECTION — you choose each subagent's model per task:
 - Sonnet 5: the default for typical day-to-day implementation work.
