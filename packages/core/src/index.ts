@@ -7,6 +7,7 @@
  */
 
 export * from "./ids.js";
+export * from "./clock.js";
 export * from "./author.js";
 export * from "./output-address.js";
 export * from "./objects.js";

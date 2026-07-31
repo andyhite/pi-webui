@@ -1,10 +1,13 @@
-import { randomUUID } from "node:crypto";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import {
   checkAuthoring,
   checkConnection,
+  newEdgeId,
+  newNodeId,
+  systemClock,
   wouldCycle,
   type Author,
+  type Clock,
   type ConnectionRefusal,
   type GraphNode,
   type NodeId,
@@ -55,7 +58,7 @@ export interface ContextEdgeInput {
 export class GraphStore {
   constructor(
     private readonly state: PlotroomDatabase,
-    private readonly now: () => number = () => Math.floor(Date.now() / 1000),
+    private readonly now: Clock = systemClock,
   ) {}
 
   place(input: PlaceNodeInput): NodeRow {
@@ -69,7 +72,7 @@ export class GraphStore {
     // twice returns the same node rather than a second one.
     if (existing) return existing;
 
-    const id = `node_${randomUUID()}`;
+    const id = newNodeId();
 
     this.state.db
       .insert(nodes)
@@ -137,7 +140,7 @@ export class GraphStore {
       });
     }
 
-    const id = `edge_${randomUUID()}`;
+    const id = newEdgeId();
 
     this.state.db
       .insert(edges)
@@ -169,7 +172,7 @@ export class GraphStore {
     to: string,
     relation: ProvenanceKind,
   ): EdgeRow {
-    const id = `edge_${randomUUID()}`;
+    const id = newEdgeId();
 
     this.state.db
       .insert(edges)

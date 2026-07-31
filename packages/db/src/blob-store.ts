@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { and, eq, isNull, notInArray, sql } from "drizzle-orm";
 import { dirname } from "node:path";
+import { systemClock, type Clock } from "@plotroom/core";
 import type { PlotroomDatabase } from "./client.js";
 import { blobPath } from "./paths.js";
 import { blobRefs, blobs, INLINE_MAX_BYTES } from "./schema.js";
@@ -44,7 +45,10 @@ export class BlobReleasedError extends Error {
  * stored once — assembled run content repeats heavily across runs (§4.4).
  */
 export class BlobStore {
-  constructor(private readonly state: PlotroomDatabase) {}
+  constructor(
+    private readonly state: PlotroomDatabase,
+    private readonly now: Clock = systemClock,
+  ) {}
 
   put(content: string | Uint8Array, options: PutOptions): StoredBlob {
     const encoding: BlobEncoding =
@@ -161,7 +165,7 @@ export class BlobStore {
 
     this.state.db
       .update(blobs)
-      .set({ isExternal: false, releasedAt: Math.floor(Date.now() / 1000) })
+      .set({ isExternal: false, releasedAt: this.now() })
       .where(eq(blobs.id, id))
       .run();
 

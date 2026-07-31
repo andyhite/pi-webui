@@ -1,9 +1,13 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import {
   chooseDelta,
   isCompactable,
+  newObjectId,
+  newVersionId,
+  systemClock,
   DEFAULT_COMPACTION_POLICY,
+  type Clock,
   type CompactionPolicy,
   type ContentDelta,
   type ExternalIdentity,
@@ -62,9 +66,9 @@ export class ObjectStore {
 
   constructor(
     private readonly state: PlotroomDatabase,
-    private readonly now: () => number = () => Math.floor(Date.now() / 1000),
+    private readonly now: Clock = systemClock,
   ) {
-    this.blobs = new BlobStore(state);
+    this.blobs = new BlobStore(state, now);
   }
 
   /**
@@ -114,7 +118,7 @@ export class ObjectStore {
       };
     }
 
-    const objectId = `obj_${randomUUID()}`;
+    const objectId = newObjectId();
 
     this.state.db
       .insert(objects)
@@ -335,7 +339,7 @@ export class ObjectStore {
     input: WriteObjectInput,
     previous: ObjectVersionRow | undefined | null,
   ): { id: string; ordinal: number } {
-    const id = `ver_${randomUUID()}`;
+    const id = newVersionId();
     const ordinal = (previous?.ordinal ?? 0) + 1;
 
     const content = this.blobs.put(input.renderings.agentContent, {
