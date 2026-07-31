@@ -402,6 +402,113 @@ Recorded intentions only; pull one in deliberately, never by drift:
 4. **Never silently truncate, never auto-run, never infer relationships** (principles 2, 7, 12; §14) — treated as review checklist items.
 5. **Open decisions** (AGENTS.md) are resolved inside the phase that first needs them, and the answer is recorded in AGENTS.md in the same PR: graph schema + retention-policy defaults (Phase 1), runtime abstraction (Phase 4), packaging (Phase 3/8), plugin distribution + permission UX (Phase 7), UI styling (Phase 3), release process (Phase 8).
 
+## Tracks and timeline
+
+The phases above are sequenced for a single lane. This section maps them onto
+**three parallel tracks** — people or agent worktrees — each the sole writer of
+a disjoint set of packages. Calendar assumes one full-time equivalent per
+track; halve the parallelism and the total roughly doubles.
+
+### The tracks
+
+| Track                      | Owns                                                          | Sole writer of                                                                             |
+| -------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| **A — Data & Server**      | schema, core domain, API, budgets/run-history backend         | `packages/core` (except C's subtrees below), `packages/db`, `apps/server`                  |
+| **B — Canvas & UI**        | canvas mechanics, panels, shells, attention surfaces          | `packages/ui`, `apps/web`, `apps/desktop`                                                  |
+| **C — Runtime & Platform** | session runtime, workspaces, claims, agent tools, plugin host | `packages/plugin-sdk`; from W4: `packages/core/src/sessions/`, `packages/core/src/claims/` |
+
+### Fleet operating rules
+
+1. **One worktree per track**, named per AGENTS.md (`../plotroom-<branch>`), one topic branch per epic.
+2. **Single writer per path.** The ownership column above is a claim, not a suggestion. A track needing a change in another track's files asks that track (or the operator) — it does not edit.
+3. **Lockfile protocol.** `pnpm-lock.yaml` is the one legitimately shared file. Never hand-merge it: rebase onto `main`, take `main`'s version, rerun `pnpm install`, commit the regenerated result. Tracks adding dependencies in the same window land smallest-first.
+4. **Sync points are gates.** Work past a sync point does not start until the sync passes.
+5. **The critical path is Track A**: 1.2 → 1.4 → 2.2 → 4.2 → 5.5 → 6.2. A slip in A shifts the calendar; slips in B or C absorb into their own lane until the next sync.
+
+### Timeline
+
+Phase 0 and Epic 1.1 are complete; week 1 starts from the current state of
+`main`.
+
+**Weeks 1–3 — Substrate**
+
+| Track | Work                                                                                                                                                                                                                                                                                                                                  |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A     | Epic 1.0 primitives (finish: fixtures/factories, clock threading), then Epic 1.2: edges + `NOT NULL` authorship, the edge-legality predicate, command-topology acyclicity, lineage/initiation-chain model. **Day 1: commit the legality predicate signature** so B can consume it. Overflow buffer: start Epic 1.3.                   |
+| B     | Epic 3.0 minimal web shell (a dev-served renderer is enough until the server exists; Electron spawn-or-attach waits for Phase 2), then Epic 3.1 against fixture data: xyflow + React scaffolding, rigid-body push solver, durable placement, selection-as-route. Imports `@plotroom/core` types read-only.                            |
+| C     | Epic 4.1 spike: evaluate agent runtimes, draft the adapter interface (start / stream / inject-between-turns / stop / fork-from-point / accounting taps). **Deliverable is a decision record + AGENTS.md update, not code in `core`.** Plus: plugin worker_threads host skeleton in `packages/plugin-sdk` (standalone, from Epic 7.1). |
+
+**⛳ Sync 1 (end W3):** schema review of edges/lineage against §15-2 and principle 1; runtime decision accepted and recorded. Nothing downstream starts until this passes.
+
+**Weeks 4–5 — Domain fan-out**
+
+| Track | Work                                                                                                                             |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------- |
+| A     | Epic 1.3 (workstreams) → Epic 1.4 (commands, runs, run history, `output@n`)                                                      |
+| B     | Epic 3.2 zoom/containers/minimap; Epic 3.3 authoring gestures with mid-drag refusal over A's legality predicate (still fixtures) |
+| C     | Epic 1.5 sessions/drift entities in `core/src/sessions/` (C's subtree; types coordinated with A), then runtime adapter v1        |
+
+**Weeks 6–7 — Server**
+
+| Track | Work                                                                                                                      |
+| ----- | ------------------------------------------------------------------------------------------------------------------------- |
+| A     | Epic 2.1 (Hono + WS backbone) and Epic 2.2 (graph/workstream API, server-side refusals)                                   |
+| B     | Epic 3.4 (palette, command palette, dock rail); finish Epic 3.0 (renderer served by the server, Electron spawn-or-attach) |
+| C     | Epic 4.3 git workspaces: provisioning, readiness gate, divergence detection                                               |
+
+**⛳ Sync 2 (end W7):** canvas switches from fixtures to the real API + WS stream.
+
+**Weeks 8–10 — First run**
+
+| Track | Work                                                                                                                               |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| A     | Epic 4.2 context assembly, run preview, run-history capture; Epic 2.3 durability + compaction job                                  |
+| B     | Phase 3 polish; start Epic 5.1 Conversation + Diff panels                                                                          |
+| C     | Epic 4.4 path claims (leases, waitlists, deadlock detection) in `core/src/claims/`; Epic 4.5 agent tools + reflexivity enforcement |
+
+**🏁 Milestone (end W10):** drop command on ticket → run → streamed transcript → proven completion, end to end.
+
+**Weeks 11–14 — Steering (Phase 5)**
+
+| Track | Work                                                                 |
+| ----- | -------------------------------------------------------------------- |
+| A     | Epic 5.5 scoped runs, concurrency queue, preview-is-the-contract     |
+| B     | Epic 5.1 finish; Epic 5.3 speech bubbles                             |
+| C     | Epic 5.2 injection/questions/broadcast; Epic 5.4 resume/fork/handoff |
+
+**🏁 Milestone (end W14):** the originating-problem demo — many sessions, inject mid-flight, answer a question from a bubble, stop at three scopes.
+
+**Weeks 15–18 — Attention & money (Phase 6)**
+
+| Track | Work                                                                                                        |
+| ----- | ----------------------------------------------------------------------------------------------------------- |
+| A     | Epic 6.2 budgets/spend/fleet panel; Epic 6.4 run comparison                                                 |
+| B     | Epic 6.1 queue + health alerts + outbound routing surfaces                                                  |
+| C     | Epic 6.3 approvals/pre-grants/irreversibility; begin finalizing the 7.1 plugin contract (shapes now stable) |
+
+**Weeks 19–23 — Plugins (Phase 7)**
+
+| Track | Work                                                                                                                 |
+| ----- | -------------------------------------------------------------------------------------------------------------------- |
+| A     | Epic 7.2 integration substrate (refresh, scoping, writes-read-back)                                                  |
+| B     | Renderer contribution points; Filesystem plugin; plugin health UI                                                    |
+| C     | Epic 7.1 contract freeze + permissions; port git onto the contract; GitHub then Jira; Epic 7.4 standing instructions |
+
+**Weeks 24–26 — Ship (Phase 8)**
+
+| Track | Work                                                                                                 |
+| ----- | ---------------------------------------------------------------------------------------------------- |
+| A     | Epic 8.2 search/archive; Epic 8.3 settings/logs                                                      |
+| B     | Epic 8.1 keyboard + accessibility                                                                    |
+| C     | Epic 8.4 packaging/installers/remote backend                                                         |
+| All   | Epic 8.5 Playwright e2e + §15 invariant regression suite (runs continuously from W11; hardened here) |
+
+### What cannot be parallelized
+
+- Edges/lineage (Epic 1.2) with anything that consumes them — one author, reviewed hard at Sync 1.
+- Phase 5 steering before the Phase 4 runtime adapter exists — injection, fork, and questions are all adapter surface.
+- Epic 7.3's git plugin before Phase 4 ships natively — a deliberate double touch that keeps Phase 4 unblocked.
+
 ## Sequencing rationale (why this order)
 
 - **Schema before surface** (Phases 1–2): the §15 invariants are the stated reason this rebuild exists as a document; everything else is additive, these are not.
