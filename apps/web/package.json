@@ -5,12 +5,21 @@
   "type": "module",
   "scripts": {
     "build": "tsc -b",
+    "dev": "vite",
     "typecheck": "tsc -b",
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@plotroom/core": "workspace:*",
-    "@plotroom/ui": "workspace:*"
+    "@plotroom/ui": "workspace:*",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.5",
+    "vite": "^8.2.0"
   }
 }
