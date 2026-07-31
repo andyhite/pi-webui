@@ -109,7 +109,11 @@ importers:
         specifier: ^0.31.10
         version: 0.31.10
 
-  packages/plugin-sdk: {}
+  packages/plugin-sdk:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.2
+        version: 26.1.2
 
   packages/ui:
     dependencies:
