@@ -2,6 +2,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import {
   checkAuthoring,
   checkConnection,
+  checkScope,
   newEdgeId,
   newNodeId,
   systemClock,
@@ -13,12 +14,15 @@ import {
   type NodeId,
   type NodeRole,
   type ProvenanceKind,
+  type ScopeRefusal,
   type SessionId,
+  type WorkstreamId,
 } from "@plotroom/core";
 import type { PlotroomDatabase } from "./client.js";
 import {
   edges,
   nodes,
+  objects,
   sessionLineage,
   type EdgeRow,
   type NodeRow,
@@ -30,6 +34,14 @@ export class ConnectionRefused extends Error {
   ) {
     super(refusal.message);
     this.name = "ConnectionRefused";
+  }
+}
+
+/** Thrown when a placement would break the scope rule (§3.3). */
+export class ScopeRefused extends Error {
+  constructor(readonly refusal: ScopeRefusal) {
+    super(refusal.message);
+    this.name = "ScopeRefused";
   }
 }
 
@@ -72,6 +84,20 @@ export class GraphStore {
     // twice returns the same node rather than a second one.
     if (existing) return existing;
 
+    // Scope rule (§3.3): a local object is placed only in the workstream
+    // that owns it. Commands and sessions are confined by construction —
+    // one node per subject, placed once.
+    if (input.role === "content") {
+      const scope = this.objectScopeOf(input.refId);
+      if (scope) {
+        const check = checkScope(
+          scope,
+          (input.workstreamId ?? null) as WorkstreamId | null,
+        );
+        if (!check.legal) throw new ScopeRefused(check.refusal);
+      }
+    }
+
     const id = newNodeId();
 
     this.state.db
@@ -113,11 +139,25 @@ export class GraphStore {
    * initiation chain (principle 1).
    */
   addContextEdge(input: ContextEdgeInput): EdgeRow {
-    const from = this.toGraphNode(this.node(input.from));
-    const to = this.toGraphNode(this.node(input.to));
+    const fromRow = this.node(input.from);
+    const toRow = this.node(input.to);
+    const from = this.toGraphNode(fromRow);
+    const to = this.toGraphNode(toRow);
 
     const legality = checkConnection(from, to);
     if (!legality.legal) throw new ConnectionRefused(legality.refusal);
+
+    // Scope rule (§3.3): objects cross workstream boundaries only as world
+    // objects. The object's own row is the truth — a promoted object crosses
+    // freely no matter where its node was first placed.
+    const scope = this.objectScopeOf(fromRow.refId);
+    if (scope) {
+      const scopeCheck = checkScope(
+        scope,
+        (toRow.workstreamId ?? null) as WorkstreamId | null,
+      );
+      if (!scopeCheck.legal) throw new ConnectionRefused(scopeCheck.refusal);
+    }
 
     const authoring = checkAuthoring(
       this.lineageIndex(),
@@ -397,6 +437,28 @@ export class GraphStore {
     }
 
     return null;
+  }
+
+  /**
+   * The scope facts for a content node's object, when it is one. Content
+   * with no object row (not yet materialized) is unconstrained.
+   */
+  private objectScopeOf(
+    refId: string,
+  ): Parameters<typeof checkScope>[0] | null {
+    const row = this.state.db
+      .select()
+      .from(objects)
+      .where(eq(objects.id, refId))
+      .get();
+
+    if (!row) return null;
+
+    return {
+      kind: "object",
+      scope: row.scope,
+      workstreamId: (row.workstreamId ?? null) as WorkstreamId | null,
+    };
   }
 
   private sessionOf(node: GraphNode): SessionId | null {

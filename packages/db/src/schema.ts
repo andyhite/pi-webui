@@ -206,6 +206,62 @@ export const edges = sqliteTable(
   ],
 );
 
+/**
+ * Spec §3.3: the container between "a node" and "the graph". Subject and
+ * lifecycle are authored; the attention columns cache the derived rollup for
+ * the collapsed card and are never authored.
+ */
+export const workstreams = sqliteTable(
+  "workstreams",
+  {
+    id: text("id").primaryKey(),
+    /** Authored and optional; a subject-less scratch workstream is legal. */
+    subjectObjectId: text("subject_object_id").references(() => objects.id),
+    status: text("status", { enum: ["active", "done", "abandoned"] })
+      .notNull()
+      .default("active"),
+    /** The archive gesture: off the board, searchable, recoverable (§3.3). */
+    archivedAt: integer("archived_at"),
+    attentionStatus: text("attention_status"),
+    attentionJson: text("attention_json"),
+    createdAt: integer("created_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("workstreams_board_idx").on(table.status, table.archivedAt),
+  ],
+);
+
+/**
+ * The attribution trail for authored workstream mutations (§3.3,
+ * principle 10). No 'system' author exists here: the product only suggests.
+ */
+export const workstreamEvents = sqliteTable(
+  "workstream_events",
+  {
+    id: text("id").primaryKey(),
+    workstreamId: text("workstream_id")
+      .notNull()
+      .references(() => workstreams.id, { onDelete: "cascade" }),
+    kind: text("kind", {
+      enum: ["created", "subject_set", "status_set", "archived", "unarchived"],
+    }).notNull(),
+    value: text("value"),
+    authorKind: text("author_kind", { enum: ["human", "session"] }).notNull(),
+    authorSession: text("author_session"),
+    createdAt: integer("created_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    index("workstream_events_stream_idx").on(
+      table.workstreamId,
+      table.createdAt,
+    ),
+  ],
+);
+
 /** Initiation chains; a null parent means a human gesture (principle 1). */
 export const sessionLineage = sqliteTable(
   "session_lineage",
@@ -220,6 +276,8 @@ export const sessionLineage = sqliteTable(
 );
 
 export type NodeRow = typeof nodes.$inferSelect;
+export type WorkstreamRow = typeof workstreams.$inferSelect;
+export type WorkstreamEventRow = typeof workstreamEvents.$inferSelect;
 export type EdgeRow = typeof edges.$inferSelect;
 export type SessionLineageRow = typeof sessionLineage.$inferSelect;
 export type BlobRow = typeof blobs.$inferSelect;

@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { humanAuthor, sessionAuthor, type SessionId } from "@plotroom/core";
+import { makeRenderings } from "@plotroom/core/testing";
 import { openDatabase, type PlotroomDatabase } from "./client.js";
-import { ConnectionRefused, GraphStore } from "./graph-store.js";
+import { ConnectionRefused, GraphStore, ScopeRefused } from "./graph-store.js";
+import { ObjectStore } from "./object-store.js";
 
 let dir: string;
 let state: PlotroomDatabase;
@@ -335,6 +337,99 @@ describe("command topology has no cycles (§3.7)", () => {
         author: sessionAuthor("sess_y" as SessionId),
       }).kind,
     ).toBe("context");
+  });
+});
+
+describe("the scope rule is enforced at the boundary (§3.3)", () => {
+  let objects: ObjectStore;
+
+  beforeEach(() => {
+    objects = new ObjectStore(state, () => 1_000_000);
+  });
+
+  function localNote(workstreamId: string): string {
+    return objects.write({
+      kind: "note",
+      title: "local finding",
+      workstreamId,
+      renderings: makeRenderings(),
+    }).objectId;
+  }
+
+  it("keeps a local object's wires inside its workstream", () => {
+    const noteId = localNote("ws_a");
+    const note = graph.place({
+      role: "content",
+      refId: noteId,
+      workstreamId: "ws_a",
+    });
+    const command = graph.place({
+      role: "command",
+      refId: "cmd_b",
+      workstreamId: "ws_b",
+    });
+
+    expect(() =>
+      graph.addContextEdge({
+        from: note.id,
+        to: command.id,
+        author: humanAuthor,
+      }),
+    ).toThrow(/promote/);
+  });
+
+  it("allows a local object within its own workstream", () => {
+    const noteId = localNote("ws_a");
+    const note = graph.place({
+      role: "content",
+      refId: noteId,
+      workstreamId: "ws_a",
+    });
+    const command = graph.place({
+      role: "command",
+      refId: "cmd_a",
+      workstreamId: "ws_a",
+    });
+
+    expect(
+      graph.addContextEdge({
+        from: note.id,
+        to: command.id,
+        author: humanAuthor,
+      }).kind,
+    ).toBe("context");
+  });
+
+  it("lets a promoted object cross: world objects are free (§3.2)", () => {
+    const noteId = localNote("ws_a");
+    const note = graph.place({
+      role: "content",
+      refId: noteId,
+      workstreamId: "ws_a",
+    });
+    const command = graph.place({
+      role: "command",
+      refId: "cmd_b",
+      workstreamId: "ws_b",
+    });
+
+    objects.promote(noteId);
+
+    expect(
+      graph.addContextEdge({
+        from: note.id,
+        to: command.id,
+        author: humanAuthor,
+      }).kind,
+    ).toBe("context");
+  });
+
+  it("refuses placing a local object into another workstream", () => {
+    const noteId = localNote("ws_a");
+
+    expect(() =>
+      graph.place({ role: "content", refId: noteId, workstreamId: "ws_b" }),
+    ).toThrow(ScopeRefused);
   });
 });
 

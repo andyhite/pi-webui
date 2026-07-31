@@ -193,4 +193,56 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX session_lineage_parent_idx ON session_lineage (initiated_by);
     `,
   },
+  {
+    id: 4,
+    name: "workstreams",
+    sql: `
+      CREATE TABLE workstreams (
+        id                TEXT PRIMARY KEY,
+        -- The subject is authored and optional: dragging a ticket in gives
+        -- the container its identity, and a subject-less scratch workstream
+        -- is legal (§3.3).
+        subject_object_id TEXT REFERENCES objects (id),
+        -- Lifecycle is authored, never auto-transitioned; the product only
+        -- suggests (§3.3).
+        status            TEXT NOT NULL DEFAULT 'active'
+                          CHECK (status IN ('active', 'done', 'abandoned')),
+        -- Archive is a gesture, not a status: an archived workstream leaves
+        -- the board, stays searchable reported as archived, and is
+        -- recoverable (§3.3, principle 10).
+        archived_at       INTEGER,
+        -- Attention rollup cache for the collapsed card (§3.3, §7): derived
+        -- from the feeds, never authored, safe to recompute at any time.
+        attention_status  TEXT,
+        attention_json    TEXT,
+        created_at        INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+
+      CREATE INDEX workstreams_board_idx ON workstreams (status, archived_at);
+
+      -- Every authored workstream mutation is attributed, and the trail is
+      -- what makes lifecycle changes and the archive gesture recoverable
+      -- (principle 10). There is deliberately no 'system' author here:
+      -- nothing in this table is machine-initiated — the product suggests,
+      -- a human confirms (§3.3).
+      CREATE TABLE workstream_events (
+        id             TEXT PRIMARY KEY,
+        workstream_id  TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        kind           TEXT NOT NULL CHECK (kind IN
+                         ('created', 'subject_set', 'status_set', 'archived', 'unarchived')),
+        -- The new status or subject object id, where the kind carries one.
+        value          TEXT,
+        author_kind    TEXT NOT NULL CHECK (author_kind IN ('human', 'session')),
+        author_session TEXT,
+        created_at     INTEGER NOT NULL DEFAULT (unixepoch()),
+        CHECK (
+          (author_kind = 'session' AND author_session IS NOT NULL) OR
+          (author_kind = 'human' AND author_session IS NULL)
+        )
+      );
+
+      CREATE INDEX workstream_events_stream_idx
+        ON workstream_events (workstream_id, created_at);
+    `,
+  },
 ];
