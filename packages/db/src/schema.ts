@@ -990,6 +990,12 @@ export const runQueue = sqliteTable(
     contractHash: text("contract_hash").notNull(),
     contractJson: text("contract_json").notNull(),
     spendCapMicros: integer("spend_cap_micros"),
+    /**
+     * The runtime the caller named, if any. Part of what was asked for, so it
+     * travels with the entry: running the same content on a different runtime is
+     * a different run (§4.1).
+     */
+    runtimeJson: text("runtime_json"),
     runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
     sessionId: text("session_id").references(() => sessions.id, {
       onDelete: "set null",

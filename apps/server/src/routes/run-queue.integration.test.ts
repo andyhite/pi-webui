@@ -649,6 +649,104 @@ describe("re-run all drifted (§4.1)", () => {
   });
 });
 
+describe("the limit bounds initiation, not one endpoint (§4.1)", () => {
+  it("answers POST /api/runs with 202 and a queued run when no slot is free", async () => {
+    const harness = await bootWithScript(staysOpen, 1);
+    const workstream = str(
+      await harness.ok("/workstreams", { method: "POST", body: {} }),
+      "workstream.id",
+    );
+    const first = await command(harness, {
+      workstreamId: workstream,
+      name: "A",
+    });
+    const second = await command(harness, {
+      workstreamId: workstream,
+      name: "B",
+    });
+
+    // The single-command endpoint, twice, with the limit at one. The second is
+    // admitted rather than refused: the gesture already happened, and the system
+    // is only deciding when.
+    const started = await harness.call("/runs", {
+      method: "POST",
+      body: {
+        commandId: first.commandId,
+        initiationKey: "direct-1",
+        runtime: { script: staysOpen },
+      },
+    });
+    expect(started.status).toBe(201);
+
+    const admitted = await harness.call("/runs", {
+      method: "POST",
+      body: {
+        commandId: second.commandId,
+        initiationKey: "direct-2",
+        runtime: { script: staysOpen },
+      },
+    });
+
+    expect(admitted.status).toBe(202);
+    expect(at(admitted.body, "run")).toBeNull();
+    expect(at(admitted.body, "session")).toBeNull();
+    expect(at(admitted.body, "queued.state")).toBe("queued");
+    expect(String(at(admitted.body, "queued.detail"))).toContain("slot");
+
+    // Visible in the same queue as a scoped run, and cancellable there.
+    const queued = list(await harness.ok("/run-queue"), "queued").filter(
+      (entry) => at(entry, "state") === "queued",
+    );
+    expect(queued).toHaveLength(1);
+    expect(at(queued[0], "commandId")).toBe(second.commandId);
+
+    // The same gesture again is the same gesture, on this side of the limit too.
+    const again = await harness.call("/runs", {
+      method: "POST",
+      body: {
+        commandId: second.commandId,
+        initiationKey: "direct-2",
+        runtime: { script: staysOpen },
+      },
+    });
+    expect(again.status).toBe(202);
+    expect(at(again.body, "queued.id")).toBe(str(admitted.body, "queued.id"));
+
+    // And it starts when a slot frees, under the key the caller used.
+    await harness.ok(`/sessions/${str(started.body, "session.id")}/stop`, {
+      method: "POST",
+      body: {},
+    });
+    const running = await waitFor(async () => {
+      const entry = list(await harness.ok("/run-queue"), "queued").find(
+        (candidate) => at(candidate, "commandId") === second.commandId,
+      );
+      return at(entry, "state") === "running" ? entry : null;
+    }, "the directly-initiated run to start once a slot freed");
+    expect(at(running, "sessionId")).not.toBeNull();
+  });
+
+  it("keeps the ordinary one-session case a plain 201 under the default limit", async () => {
+    // The W10 milestone gate runs one session under the shipped default, so the
+    // familiar shape has to stay the familiar shape.
+    const harness = await bootWithScript(staysOpen, 4);
+    const fixture = await command(harness, { name: "A" });
+
+    const started = await harness.call("/runs", {
+      method: "POST",
+      body: {
+        commandId: fixture.commandId,
+        initiationKey: "plain-1",
+        runtime: { script: staysOpen },
+      },
+    });
+
+    expect(started.status).toBe(201);
+    expect(at(started.body, "queued")).toBeNull();
+    expect(at(started.body, "session.id")).toBeTruthy();
+  });
+});
+
 describe("one gesture creates one batch (principle 9)", () => {
   it("answers a replayed initiation key with the same batch", async () => {
     const harness = await bootWithScript(staysOpen, 2);

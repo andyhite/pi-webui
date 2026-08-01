@@ -60,6 +60,8 @@ export interface EnqueueInput {
   readonly contract: unknown;
   readonly spendCapMicros?: number | null;
   readonly detail?: string | null;
+  /** The runtime the caller named; omitted means the configured one. */
+  readonly runtime?: unknown;
 }
 
 export interface QueuedEntry {
@@ -231,6 +233,8 @@ export class RunQueueStore {
         contractHash: input.contractHash,
         contractJson: JSON.stringify(input.contract),
         spendCapMicros: input.spendCapMicros ?? null,
+        runtimeJson:
+          input.runtime === undefined ? null : JSON.stringify(input.runtime),
         runId: null,
         sessionId: null,
         detail: input.detail ?? null,
@@ -437,5 +441,10 @@ export class RunQueueStore {
   /** Contract as stored, parsed. */
   contractOf(entry: RunQueueRow): unknown {
     return JSON.parse(entry.contractJson);
+  }
+
+  /** The runtime selection as stored, parsed. Null means the configured runtime. */
+  runtimeOf(entry: RunQueueRow): unknown {
+    return entry.runtimeJson === null ? null : JSON.parse(entry.runtimeJson);
   }
 }

@@ -162,7 +162,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", objectRoutes(stores));
   app.route("/api", graphRoutes(stores));
   app.route("/api", commandRoutes(stores));
-  app.route("/api", runRoutes(stores, runs));
+  app.route("/api", runRoutes(stores, runs, queue));
   app.route("/api", runQueueRoutes(queue));
   app.route("/api", sessionRoutes(stores, runs, claims));
   app.route("/api", claimRoutes(claims));

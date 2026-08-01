@@ -19,7 +19,7 @@ import type { EventBus } from "../events/bus.js";
 import { refused } from "../http/errors.js";
 import type { Logger } from "../logging/logger.js";
 import type { ApiStores } from "../routes/api.js";
-import type { RunService } from "./service.js";
+import type { RunOneInput, RunOneResult, RunService } from "./service.js";
 import { resolveScope, type ScopedCommand } from "./scopes.js";
 
 /**
@@ -253,6 +253,106 @@ export class RunQueueService {
     };
   }
 
+  /**
+   * Run one command, bounded by the same limit (§4.1).
+   *
+   * The limit "bounds how many sessions run at once" — it is a property of
+   * initiation, not of one endpoint, so the single-command gesture goes through
+   * admission too rather than being a second door that ignores it (cross-cutting
+   * rule 3: enforced, not documented).
+   *
+   * Under the limit this is exactly the run path, unchanged. At the limit it
+   * admits instead: one batch of one, visible in the queue with its position and
+   * cancellable before it starts. The caller is told which happened rather than
+   * being given a run that does not exist yet.
+   */
+  async runOne(input: {
+    readonly commandId: string;
+    readonly initiationKey: string;
+    readonly actor: Author;
+    readonly runtime?: NonNullable<RunOneInput["runtime"]>;
+    readonly spendCapMicros?: number | null;
+  }): Promise<
+    | { readonly admitted: true; readonly result: RunOneResult }
+    | { readonly admitted: false; readonly queued: QueuedRun }
+  > {
+    const { stores } = this.deps;
+
+    // The same gesture twice is the same gesture, whichever side of the limit it
+    // landed on the first time (principle 9). A key that already produced a run
+    // replays through the run path; a key that already queued answers with that
+    // entry, including once it has since started.
+    const existing = stores.queue.batchByKey(input.initiationKey);
+    if (existing !== undefined) {
+      const entry = stores.queue.entriesForBatch(existing.id)[0];
+      if (entry !== undefined) {
+        if (entry.runId !== null && entry.sessionId !== null) {
+          return {
+            admitted: true,
+            result: await this.deps.runs.runOne({
+              commandId: input.commandId,
+              initiationKey: entry.initiationKey,
+              actor: input.actor,
+              ...(input.runtime === undefined
+                ? {}
+                : { runtime: input.runtime }),
+            }),
+          };
+        }
+        return { admitted: false, queued: this.toQueuedRun(entry) };
+      }
+    }
+
+    if (
+      stores.runs.initiation(input.initiationKey) !== undefined ||
+      this.runningCount() < this.deps.concurrencyLimit
+    ) {
+      return {
+        admitted: true,
+        result: await this.deps.runs.runOne({
+          commandId: input.commandId,
+          initiationKey: input.initiationKey,
+          actor: input.actor,
+          ...(input.runtime === undefined ? {} : { runtime: input.runtime }),
+          ...(input.spendCapMicros === undefined
+            ? {}
+            : { spendCapMicros: input.spendCapMicros }),
+        }),
+      };
+    }
+
+    const preview = stores.runs.preview(input.commandId);
+    const batch = stores.queue.createBatch({
+      initiationKey: input.initiationKey,
+      scope: "one",
+      scopeId: input.commandId,
+      actor: input.actor,
+      ...(input.spendCapMicros === undefined
+        ? {}
+        : { spendCapMicros: input.spendCapMicros }),
+    });
+    const entry = stores.queue.enqueue({
+      batchId: batch.id,
+      commandId: input.commandId,
+      // The client's own key, unchanged: when this is admitted it enters the run
+      // path under the same key the caller used, so the gesture stays one gesture.
+      initiationKey: input.initiationKey,
+      position: 1,
+      contractHash: contractHashOf(preview),
+      contract: contractOf(preview),
+      ...(input.runtime === undefined ? {} : { runtime: input.runtime }),
+      ...(input.spendCapMicros === undefined
+        ? {}
+        : { spendCapMicros: input.spendCapMicros }),
+      detail: `waiting for a session slot: ${this.deps.concurrencyLimit} of ${this.deps.concurrencyLimit} are in use`,
+    });
+
+    this.publishBatch(batch, "created", input.actor);
+    this.publishEntry(entry, "created", input.actor);
+
+    return { admitted: false, queued: this.toQueuedRun(entry, 0) };
+  }
+
   /* ------------------------------------------------------------- the queue */
 
   /** What a queue surface shows: everything open, positioned (§4.1). */
@@ -384,7 +484,14 @@ export class RunQueueService {
     if (event.session.end === null) return;
 
     const entry = this.deps.stores.queue.entryForSession(event.session.id);
-    if (entry === undefined || entry.settledAt !== null) return;
+    if (entry === undefined || entry.settledAt !== null) {
+      // A session that was never queued still held a slot, and its ending still
+      // frees one. Not every session comes through the queue — an ordinary run
+      // under the limit does not — so the drain cannot be conditional on finding
+      // an entry, or the queue would only ever be unblocked by its own runs.
+      await this.drain();
+      return;
+    }
 
     const end = event.session.end;
 
@@ -493,11 +600,18 @@ export class RunQueueService {
     const starting = stores.queue.markStarting(entry.id);
     this.publishEntry(starting, "updated", actorOfBatch(batch));
 
+    const runtime = stores.queue.runtimeOf(entry) as NonNullable<
+      RunOneInput["runtime"]
+    > | null;
+
     try {
       const started = await this.deps.runs.runOne({
         commandId: entry.commandId,
         initiationKey: entry.initiationKey,
         actor: actorOfBatch(batch),
+        // Exactly the runtime the caller named, or the configured one when it
+        // named none: a queued run must not quietly change runtimes (§4.1).
+        ...(runtime === null ? {} : { runtime }),
         ...(entry.spendCapMicros === null
           ? {}
           : { spendCapMicros: entry.spendCapMicros }),

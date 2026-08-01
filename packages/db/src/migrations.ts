@@ -1070,4 +1070,18 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX run_queue_command_idx ON run_queue (command_id);
     `,
   },
+  {
+    id: 14,
+    name: "run_queue_runtime",
+    sql: `
+      -- Which runtime the caller named, carried with the entry.
+      --
+      -- A queued run "executes exactly what it previewed" (§4.1), and the runtime
+      -- is part of what was asked for: dropping the selection on the way through
+      -- the queue would run the same content on a different runtime, which is a
+      -- different run. NULL means "the configured runtime", which is what an
+      -- ordinary run means when it names none.
+      ALTER TABLE run_queue ADD COLUMN runtime_json TEXT;
+    `,
+  },
 ];

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { validateJsonBody } from "../http/validate.js";
+import type { RunQueueService } from "../runs/queue.js";
 import type { RunService } from "../runs/service.js";
 import { runtimeScriptSchema } from "../runtime/scripted.js";
 import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
@@ -51,6 +52,7 @@ const submitBody = z.object({
 export function runRoutes(
   stores: ApiStores,
   service: RunService,
+  queue: RunQueueService,
 ): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
 
@@ -66,10 +68,28 @@ export function runRoutes(
     c.json(service.preview(param(c, "id"))),
   );
 
-  /** Run one command (§4.1): idempotent in the initiation key. */
+  /**
+   * Run one command (§4.1): idempotent in the initiation key, and **bounded by
+   * the concurrency limit** like every other initiation.
+   *
+   * The limit "bounds how many sessions run at once", which is a property of
+   * initiation rather than of one endpoint — so this gesture goes through the same
+   * admission the scoped ones do instead of being a second door that ignores it.
+   * That makes the response two-shaped, deliberately:
+   *
+   * - **201** (or 200 for a replayed key) with `{ run, session, status }` — a slot
+   *   was free and the session is running, exactly as before;
+   * - **202** with `{ queued, run: null, session: null }` — the gesture was
+   *   admitted and is waiting, with its position, cancellable before it starts
+   *   (§4.1). It is not a refusal: the system is deciding *when*, never *whether*.
+   *
+   * A caller that reads `session.id` unconditionally fails loudly on a 202 rather
+   * than quietly proceeding with a session that does not exist yet, which is the
+   * behaviour to want here.
+   */
   app.post("/runs", validateJsonBody(runBody), async (c) => {
     const input = body<z.infer<typeof runBody>>(c);
-    const result = await service.runOne({
+    const admission = await queue.runOne({
       commandId: input.commandId,
       initiationKey: input.initiationKey,
       actor: actorOf(c),
@@ -79,6 +99,21 @@ export function runRoutes(
         : { spendCapMicros: input.spendCapMicros }),
     });
 
+    if (!admission.admitted) {
+      return c.json(
+        {
+          run: null,
+          session: null,
+          status: null,
+          warning: null,
+          replayed: false,
+          queued: admission.queued,
+        },
+        202,
+      );
+    }
+
+    const result = admission.result;
     return c.json(
       {
         run: result.run,
@@ -88,6 +123,7 @@ export function runRoutes(
         // truncates, and the warning travels with the run that carries it.
         warning: result.warning,
         replayed: result.replayed,
+        queued: null,
       },
       result.replayed ? 200 : 201,
     );
