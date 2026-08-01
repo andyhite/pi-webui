@@ -24,11 +24,13 @@ import {
 } from "@plotroom/core";
 import {
   sessionCanvasNode,
+  type AttentionItem,
   type CanvasContainerInput,
   type CanvasEdgeInput,
   type CanvasNodeInput,
   type ContextEdgeFact,
   type ContextInputRow,
+  type FleetSummary,
   type GraphSnapshot,
   type OpenQuestion,
   type PaletteEntry,
@@ -37,6 +39,7 @@ import {
   type WarningFacts,
   type WarningGraphNode,
   type WorkspaceDiff,
+  type WorkstreamActivityEntry,
 } from "@plotroom/ui";
 
 export const FIXTURE_CONTAINERS: readonly CanvasContainerInput[] = [
@@ -531,4 +534,150 @@ export const FIXTURE_WORKSPACE_DIFF: WorkspaceDiff = {
       status: "deleted",
     },
   ],
+};
+
+/**
+ * The attention queue's fixture feed (Epic 6.1, §7): kept in *this*
+ * app's own node ids (`FIXTURE_NODES` above) rather than reusing
+ * `@plotroom/ui`'s generic `createFixtureAttentionDataSource` default
+ * scenarios, so selecting a row actually navigates to a node this fixture
+ * graph has — a demo that pointed at ids nothing on screen has would make
+ * "selecting a row moves the canvas to it" untestable by eye.
+ */
+export const FIXTURE_ATTENTION_ITEMS: readonly AttentionItem[] = [
+  {
+    id: "attn-approval-1",
+    feed: "approval",
+    target: {
+      nodeId: "session-running",
+      workstreamId: "workstream-oxy-2982",
+      sessionId: "session-running",
+    },
+    rank: 0,
+    summary: "session #1 wants to force-push origin/main (irreversible)",
+    payload: {
+      kind: "approval",
+      approvalId: "approval-1",
+      capability: "git:force-push",
+    },
+    raisedAt: 1_700_000_100,
+    snoozeUntil: null,
+  },
+  {
+    id: "attn-question-1",
+    feed: "question",
+    target: {
+      nodeId: "session-running",
+      workstreamId: "workstream-oxy-2982",
+      sessionId: "session-running",
+    },
+    rank: 1,
+    summary: "session #1: keep going with the migration?",
+    payload: {
+      kind: "question",
+      questionId: "q1",
+      text: "keep going with the migration?",
+      options: ["yes", "no", "ask again later"],
+    },
+    raisedAt: 1_700_000_050,
+    snoozeUntil: null,
+  },
+  {
+    id: "attn-drift-1",
+    feed: "drift",
+    target: {
+      nodeId: "command-implement",
+      workstreamId: "workstream-oxy-2982",
+    },
+    rank: 2,
+    summary: "ticket OXY-2982 changed since command-implement's last run",
+    payload: {
+      kind: "drift",
+      objectId: "ticket-oxy-2982",
+      changedSummary: "ticket status moved from In Progress to In Review",
+    },
+    raisedAt: 1_700_000_000,
+    snoozeUntil: null,
+  },
+  {
+    id: "attn-health-1",
+    feed: "health",
+    target: {
+      nodeId: "session-running",
+      workstreamId: "workstream-oxy-2982",
+      sessionId: "session-running",
+    },
+    rank: 3,
+    summary: "session #1 has been silent for 12 minutes",
+    payload: { kind: "health", alert: "idle" },
+    raisedAt: 1_699_999_800,
+    snoozeUntil: null,
+  },
+  {
+    id: "attn-completion-1",
+    feed: "completion",
+    target: {
+      nodeId: "session-ended",
+      workstreamId: "workstream-oxy-2982",
+      sessionId: "session-ended",
+    },
+    rank: 4,
+    summary: "session #2 finished: updated the contributing guide",
+    payload: { kind: "completion", sessionId: "session-ended" },
+    raisedAt: 1_699_050_000,
+    snoozeUntil: null,
+  },
+];
+
+/** §7.3: readable names for the what-changed panel's per-workstream sections. */
+export const FIXTURE_WORKSTREAM_NAMES: ReadonlyMap<string, string> = new Map([
+  ["workstream-oxy-2982", "OXY-2982"],
+]);
+
+/**
+ * §7.3's "what changed while I was away": a short, capped per-workstream
+ * event history, entry ids stable so `appendActivityEntry`'s cap has
+ * something real to trim in a live feed — this fixture is small enough
+ * that trimming never actually happens, which is the honest state of a
+ * fresh board.
+ */
+export const FIXTURE_WHAT_CHANGED: readonly WorkstreamActivityEntry[] = [
+  {
+    id: "activity-1",
+    workstreamId: "workstream-oxy-2982",
+    kind: "completion",
+    text: "session #2 finished",
+    at: 1_699_050_000,
+    targetNodeId: "session-ended",
+  },
+  {
+    id: "activity-2",
+    workstreamId: "workstream-oxy-2982",
+    kind: "ticket-updated",
+    text: "ticket OXY-2982 moved to In Review",
+    at: 1_700_000_000,
+    targetNodeId: "ticket-oxy-2982",
+  },
+  {
+    id: "activity-3",
+    workstreamId: "workstream-oxy-2982",
+    kind: "failure",
+    text: "a delegated session failed overnight",
+    at: 1_700_000_200,
+    // Deliberately a node this fixture graph does not have — exercises the
+    // honest tombstone (§7.3's "tolerates that target being gone").
+    targetNodeId: "session-deleted-overnight",
+  },
+];
+
+/**
+ * The Fleet panel's fixture (§8, §11) for offline/dev mode; `LIVE` mode
+ * aggregates the real thing (`createApiFleetDataSource`, see `App.tsx`).
+ */
+export const FIXTURE_FLEET_SUMMARY: FleetSummary = {
+  todayTotalMicros: 4_250_000,
+  biggestSpender: { sessionId: "session-running", amountMicros: 3_100_000 },
+  runningCount: 1,
+  concurrencyLimit: 4,
+  queuedCount: 0,
 };

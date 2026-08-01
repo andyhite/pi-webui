@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { humanAuthor } from "@plotroom/core";
 import type { SessionId, SessionPhase, Transcript } from "@plotroom/core";
 import type {
+  AttentionItem,
   BubbleSource,
   CommandPaletteItem,
   ContextInputRow,
   Collection,
+  ContinueVsFreshView,
   GraphSnapshot,
+  HandoffBriefView,
   Note,
   OpenQuestion,
   Placements,
+  SessionDetail,
 } from "@plotroom/ui";
 import {
   CommandPalette,
@@ -17,19 +21,27 @@ import {
   ConversationPanel,
   DiffPanel,
   DockRail,
+  FleetPanel,
   GraphWarningsPanel,
   NotePanel,
   PaletteRail,
   PlotCanvas,
+  QueuePanel,
   StopControls,
+  TimelinePanel,
+  WhatChangedPanel,
+  attentionCount,
   beginRun,
   browserWebSocketFactory,
   createApiActions,
   createApiDiffDataSource,
+  createApiFleetDataSource,
   createApiGraphDataSource,
   createApiQuestionDataSource,
   createApiSessionDataSource,
+  createFixtureAttentionDataSource,
   createFixtureDiffDataSource,
+  createFixtureFleetDataSource,
   createFixtureGraphDataSource,
   createFixtureQuestionDataSource,
   createFixtureSessionDataSource,
@@ -38,26 +50,35 @@ import {
   createPanelRegistry,
   createWebStoragePlacementStore,
   createWebStorageSessionDraftsStore,
+  decideNotification,
   definePanel,
+  deriveBadgeCount,
   deriveCommandBubbleSources,
   deriveGraphWarnings,
   deriveInitialArrangement,
   deriveInjectionBubbleSources,
   deriveSessionBubbleSources,
+  deriveWindowTitle,
   dragOutMember,
+  EMPTY_NOTIFICATION_STATE,
   endRun,
   expandCollection,
+  nextNotificationEdgeState,
   pruneMember,
   useSelectionRoute,
 } from "@plotroom/ui";
 import type { InjectionLedgerEntry, WarningGraphNode } from "@plotroom/ui";
 
 import {
+  FIXTURE_ATTENTION_ITEMS,
   FIXTURE_COLLECTION,
+  FIXTURE_FLEET_SUMMARY,
   FIXTURE_INJECTIONS,
   FIXTURE_OPEN_QUESTIONS,
   FIXTURE_RELEASED_CONTENT,
   FIXTURE_SESSIONS,
+  FIXTURE_WHAT_CHANGED,
+  FIXTURE_WORKSTREAM_NAMES,
   FIXTURE_SESSION_STATUSES,
   FIXTURE_SNAPSHOT,
   FIXTURE_TRANSCRIPT,
@@ -155,12 +176,6 @@ const CHECKPOINT_DISABLED_REASON = LIVE
   ? undefined
   : "offline mode: checkpointing was not saved";
 
-/** Drafts and prompt history persist per session (§6.2), the same durable-store seam as placement. */
-const sessionDraftsStore = createWebStorageSessionDraftsStore(
-  window.localStorage,
-  "plotroom.session-drafts.v1",
-);
-
 const now = () => Date.now();
 /**
  * Bubble timestamps are epoch **seconds** throughout (`BubbleSource.
@@ -171,6 +186,38 @@ const now = () => Date.now();
  * converted before feeding the bubble derivation seam.
  */
 const nowSeconds = () => Math.floor(now() / 1000);
+
+/**
+ * The attention data seam (Epic 6.1, §7): fixture-fed either way — there is
+ * no live server endpoint yet (Track A's Stage 2 job; see `@plotroom/ui`'s
+ * `attention/types.ts` for the landed contract this data source will
+ * implement server-side). `createFixtureAttentionDataSource` is real
+ * mechanics over a realistic scenario, not a stub: triage, ranking, and
+ * snooze/mute all work exactly as they will once a live source replaces
+ * this one, behind the identical `AttentionDataSource` interface.
+ */
+const attentionDataSource = createFixtureAttentionDataSource(
+  FIXTURE_ATTENTION_ITEMS,
+  nowSeconds,
+);
+
+/**
+ * The Fleet panel's data seam (§8, §11, Epic 6.2): live over what exists on
+ * main today — `GET /api/sessions` plus per-session `GET /api/sessions/:id/
+ * spend` — real aggregation, not a fixture standing in for missing data.
+ * The concurrency limit's value has no read endpoint at all yet (a genuine
+ * gap for Track A, documented in `@plotroom/ui`'s `fleet/types.ts`), so it
+ * rides on the shipped default here until one exists.
+ */
+const fleetDataSource = LIVE
+  ? createApiFleetDataSource({ http: httpClient, now: nowSeconds })
+  : createFixtureFleetDataSource(FIXTURE_FLEET_SUMMARY);
+
+/** Drafts and prompt history persist per session (§6.2), the same durable-store seam as placement. */
+const sessionDraftsStore = createWebStorageSessionDraftsStore(
+  window.localStorage,
+  "plotroom.session-drafts.v1",
+);
 
 export function App() {
   const [placements, setPlacements] = useState<Placements | null>(null);
@@ -225,6 +272,50 @@ export function App() {
     Set<string>
   >(() => new Set());
 
+  // Handoff briefs (§6.3, Batch 3 carry-over), keyed by their source
+  // session so several sessions' briefs never collide in one bag.
+  const [handoffBriefsBySession, setHandoffBriefsBySession] = useState<
+    ReadonlyMap<string, readonly HandoffBriefView[]>
+  >(new Map());
+
+  function refreshHandoffBriefs(sessionId: string): void {
+    void actions.listHandoffBriefs(sessionId).then((response) => {
+      setHandoffBriefsBySession((current) =>
+        new Map(current).set(sessionId, response.briefs),
+      );
+    });
+  }
+
+  // Continue-vs-fresh (§4.3, Batch 3 carry-over): re-fetched whenever the
+  // selected session's own record says it ended and names a command — a
+  // second, lightweight `subscribeSession` just for `commandId`/`end`,
+  // since `ConversationPanel` keeps its own detail state privately.
+  const [selectedSessionDetail, setSelectedSessionDetail] =
+    useState<SessionDetail | null>(null);
+  useEffect(() => {
+    setSelectedSessionDetail(null);
+    if (!selectedSessionId) return;
+    return sessionDataSource.subscribeSession(
+      selectedSessionId,
+      setSelectedSessionDetail,
+    );
+  }, [selectedSessionId]);
+
+  const [continuationPreview, setContinuationPreview] =
+    useState<ContinueVsFreshView | null>(null);
+  useEffect(() => {
+    setContinuationPreview(null);
+    const commandId = selectedSessionDetail?.session.commandId;
+    if (!commandId || selectedSessionDetail?.session.end === null) return;
+    let cancelled = false;
+    void actions.getContinuation(commandId).then((result) => {
+      if (!cancelled) setContinuationPreview(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSessionDetail]);
+
   const initialNote = useMemo(
     () =>
       createNote(
@@ -263,7 +354,78 @@ export function App() {
     };
   }, []);
 
-  const attentionNodeIds = useMemo<readonly string[]>(() => [], []);
+  // "One derivation, many surfaces" (§7): every attention-facing render
+  // below — off-screen markers, node badges, header count, window title,
+  // app badge, system notification — reads this one subscription.
+  const [attentionItems, setAttentionItems] = useState<
+    readonly AttentionItem[]
+  >([]);
+
+  useEffect(() => {
+    return attentionDataSource.subscribe(setAttentionItems);
+  }, []);
+
+  const attentionNodeIds = useMemo<readonly string[]>(
+    () => [...new Set(attentionItems.map((item) => item.target.nodeId))],
+    [attentionItems],
+  );
+
+  // Node state (§7): unifies with `warningsByNodeId`'s own badge mechanism
+  // (`PlotCanvas.tsx`) — one badge per node, naming the count and the
+  // highest-ranked feed wanting attention on it.
+  const attentionByNodeId = useMemo(() => {
+    const map = new Map<string, { count: number; topFeed: string }>();
+    for (const item of attentionItems) {
+      const existing = map.get(item.target.nodeId);
+      if (!existing) {
+        map.set(item.target.nodeId, { count: 1, topFeed: item.feed });
+      } else {
+        map.set(item.target.nodeId, {
+          count: existing.count + 1,
+          topFeed: existing.topFeed,
+        });
+      }
+    }
+    return map;
+  }, [attentionItems]);
+
+  // Header indicator, window title, app badge (§7): three renderings of the
+  // exact same count, derived every time the feed changes.
+  const attentionTotal = attentionCount(attentionItems);
+
+  useEffect(() => {
+    document.title = deriveWindowTitle("PlotRoom", attentionTotal);
+  }, [attentionTotal]);
+
+  useEffect(() => {
+    // Electron only (`apps/desktop/src/preload.ts`); a no-op in a plain
+    // browser tab, which is the whole point of feature-detecting it here
+    // rather than assuming the bridge exists (§12: one renderer, two hosts).
+    window.plotroom?.setBadgeCount(deriveBadgeCount(attentionTotal));
+  }, [attentionTotal]);
+
+  // System notification (§7.3): edge-triggered — only fires for items never
+  // seen before, batched into one call per change. The state ref survives
+  // across renders without re-subscribing to anything.
+  const notificationState = useRef(EMPTY_NOTIFICATION_STATE);
+  useEffect(() => {
+    const notification = decideNotification(
+      attentionItems,
+      notificationState.current,
+    );
+    notificationState.current = nextNotificationEdgeState(
+      notificationState.current,
+      attentionItems,
+    );
+    if (!notification) return;
+    // Electron's renderer grants this without the browser's permission
+    // prompt (§7.3's "renderer permission-less path"); a plain browser tab
+    // still has `Notification` but would prompt — feature-detected either
+    // way so offline/test environments without it never throw.
+    if (typeof Notification !== "undefined") {
+      new Notification(notification.title, { body: notification.body });
+    }
+  }, [attentionItems]);
 
   // Speech bubbles (§5): session sayings/tool-in-flight and the injection
   // ledger are fed live off the same `SessionDataSource` the Conversation
@@ -620,6 +782,72 @@ export function App() {
                     );
                   });
               }}
+              handoffBriefs={
+                handoffBriefsBySession.get(selectedSessionId) ?? []
+              }
+              onRequestHandoffBrief={(sessionId) => {
+                if (!LIVE) {
+                  log("offline mode: requesting a handoff brief was not saved");
+                  return;
+                }
+                void actions.writeHandoffBrief({ sessionId }).then((result) => {
+                  if (!result.ok) {
+                    log(
+                      `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                    );
+                    return;
+                  }
+                  log(`drafted handoff brief ${result.value.brief.id}`);
+                  refreshHandoffBriefs(sessionId);
+                });
+              }}
+              onReviewHandoffBrief={(briefId, text) => {
+                if (!LIVE) {
+                  log(
+                    "offline mode: reviewing the handoff brief was not saved",
+                  );
+                  return;
+                }
+                void actions
+                  .reviewHandoffBrief({
+                    briefId,
+                    ...(text === undefined ? {} : { text }),
+                  })
+                  .then((result) => {
+                    if (!result.ok) {
+                      log(
+                        `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                      );
+                      return;
+                    }
+                    log(`reviewed handoff brief ${briefId}`);
+                    refreshHandoffBriefs(result.value.brief.sourceSessionId);
+                  });
+              }}
+              onSendHandoff={(briefId, workstreamId) => {
+                if (!LIVE) {
+                  log("offline mode: sending the handoff was not saved");
+                  return;
+                }
+                void actions
+                  .sendHandoff({
+                    briefId,
+                    workstreamId,
+                    initiationKey: `handoff-${crypto.randomUUID()}`,
+                  })
+                  .then((result) => {
+                    if (!result.ok) {
+                      log(
+                        `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                      );
+                      return;
+                    }
+                    log(
+                      `sent handoff ${briefId} into workstream ${workstreamId}: session ${result.value.sessionId}`,
+                    );
+                  });
+              }}
+              continuation={continuationPreview}
             />
           ) : (
             <div>select a session node to see its conversation</div>
@@ -665,371 +893,450 @@ export function App() {
         ),
       }),
     );
+    registry.register(
+      definePanel<null>({
+        id: "queue",
+        title: "Queue",
+        initialState: null,
+        render: () => (
+          <QueuePanel dataSource={attentionDataSource} onNavigate={select} />
+        ),
+      }),
+    );
+    registry.register(
+      definePanel<null>({
+        id: "what-changed",
+        title: "What changed",
+        initialState: null,
+        render: () => (
+          <WhatChangedPanel
+            history={FIXTURE_WHAT_CHANGED}
+            workstreamNames={FIXTURE_WORKSTREAM_NAMES}
+            nodeExists={(nodeId) =>
+              graph?.nodes.some((node) => node.id === nodeId) ?? false
+            }
+            onNavigate={select}
+          />
+        ),
+      }),
+    );
+    registry.register(
+      definePanel<null>({
+        id: "fleet",
+        title: "Fleet",
+        initialState: null,
+        render: () => <FleetPanel dataSource={fleetDataSource} />,
+      }),
+    );
+    registry.register(
+      definePanel<null>({
+        id: "timeline",
+        title: "Timeline",
+        initialState: null,
+        render: () =>
+          selectedSessionId ? (
+            <TimelinePanel sessionId={selectedSessionId} http={httpClient} />
+          ) : (
+            <div>select a session node to see its timeline</div>
+          ),
+      }),
+    );
     return registry;
-  }, [initialNote, warnings, select, selectedSessionId, selectedWorkstreamId]);
+  }, [
+    initialNote,
+    warnings,
+    select,
+    selectedSessionId,
+    selectedWorkstreamId,
+    graph,
+    handoffBriefsBySession,
+    continuationPreview,
+  ]);
 
   if (placements === null || graph === null) {
     return null;
   }
 
   return (
-    <div style={{ display: "flex", width: "100vw", height: "100vh" }}>
-      <div style={{ width: 240, borderRight: "1px solid black", padding: 8 }}>
-        <h2>palette (§5)</h2>
-        <PaletteRail entries={graph.paletteEntries} />
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        width: "100vw",
+        height: "100vh",
+      }}
+    >
+      {/* The header indicator (§7): one derivation, rendered here as a plain count. */}
+      <div
+        data-testid="attention-header-count"
+        style={{ borderBottom: "1px solid black", padding: 4 }}
+      >
+        attention: {attentionTotal}
       </div>
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        <div style={{ width: 240, borderRight: "1px solid black", padding: 8 }}>
+          <h2>palette (§5)</h2>
+          <PaletteRail entries={graph.paletteEntries} />
+        </div>
 
-      <div style={{ width: "100%", height: "100%" }}>
-        <CommandPalette
-          items={commandPaletteItems}
-          onSelectNode={select}
-          onRunVerb={(itemId) => {
-            if (itemId === "verb-clear-log") setGestureLog([]);
-            if (itemId === "verb-reset-arrangement") {
-              // §5's only automatic-layout verb: re-derive every position from
-              // the graph's own structure, discarding whatever was stored.
-              const next = deriveInitialArrangement(
-                graph.nodes.map((node) => ({
-                  id: node.id,
-                  ...(node.containerId
-                    ? { containerId: node.containerId }
-                    : {}),
-                })),
-                graph.edges.map((edge) => ({
-                  source: edge.source,
-                  target: edge.target,
-                })),
-                graph.containers.map((container) => ({ id: container.id })),
-              );
+        <div style={{ width: "100%", height: "100%" }}>
+          <CommandPalette
+            items={commandPaletteItems}
+            onSelectNode={select}
+            onRunVerb={(itemId) => {
+              if (itemId === "verb-clear-log") setGestureLog([]);
+              if (itemId === "verb-reset-arrangement") {
+                // §5's only automatic-layout verb: re-derive every position from
+                // the graph's own structure, discarding whatever was stored.
+                const next = deriveInitialArrangement(
+                  graph.nodes.map((node) => ({
+                    id: node.id,
+                    ...(node.containerId
+                      ? { containerId: node.containerId }
+                      : {}),
+                  })),
+                  graph.edges.map((edge) => ({
+                    source: edge.source,
+                    target: edge.target,
+                  })),
+                  graph.containers.map((container) => ({ id: container.id })),
+                );
+                setPlacements(next);
+                void placementStore.save(next);
+                // A fresh `placements` value alone never moves an
+                // already-mounted node; this bump is what actually applies
+                // it, exactly once, to every node currently on the canvas.
+                setArrangementEpoch((epoch) => epoch + 1);
+                log("reset arrangement: re-derived from graph structure");
+              }
+            }}
+          />
+          <PlotCanvas
+            nodes={graph.nodes}
+            edges={graph.edges}
+            containers={graph.containers}
+            arrangementEpoch={arrangementEpoch}
+            bubbleSources={bubbleSources}
+            onAnswerQuestion={(source, option) => {
+              const questionId = source.id.split(":question:").at(-1);
+              if (!questionId) return;
+              void questionDataSource.answer(questionId, option);
+            }}
+            collapsedContainerIds={collapsedContainerIds}
+            onToggleContainer={(containerId) =>
+              setCollapsedContainerIds((current) => {
+                const next = new Set(current);
+                if (next.has(containerId)) {
+                  next.delete(containerId);
+                } else {
+                  next.add(containerId);
+                }
+                return next;
+              })
+            }
+            placements={placements}
+            onPlacementsChange={(next) => {
               setPlacements(next);
               void placementStore.save(next);
-              // A fresh `placements` value alone never moves an
-              // already-mounted node; this bump is what actually applies
-              // it, exactly once, to every node currently on the canvas.
-              setArrangementEpoch((epoch) => epoch + 1);
-              log("reset arrangement: re-derived from graph structure");
-            }
-          }}
-        />
-        <PlotCanvas
-          nodes={graph.nodes}
-          edges={graph.edges}
-          containers={graph.containers}
-          arrangementEpoch={arrangementEpoch}
-          bubbleSources={bubbleSources}
-          onAnswerQuestion={(source, option) => {
-            const questionId = source.id.split(":question:").at(-1);
-            if (!questionId) return;
-            void questionDataSource.answer(questionId, option);
-          }}
-          collapsedContainerIds={collapsedContainerIds}
-          onToggleContainer={(containerId) =>
-            setCollapsedContainerIds((current) => {
-              const next = new Set(current);
-              if (next.has(containerId)) {
-                next.delete(containerId);
-              } else {
-                next.add(containerId);
-              }
-              return next;
-            })
-          }
-          placements={placements}
-          onPlacementsChange={(next) => {
-            setPlacements(next);
-            void placementStore.save(next);
-          }}
-          selectedNodeId={selectedNodeId}
-          onSelectNode={select}
-          attentionNodeIds={attentionNodeIds}
-          warningsByNodeId={warningsByNodeId}
-          onBatchAction={(action, ids) => {
-            log(`batch ${action}: ${ids.join(", ")}`);
-          }}
-          onCreateFromDrag={(sourceId, option) => {
-            log(
-              `create ${option.kind} from ${sourceId} (not yet wired to /api)`,
-            );
-          }}
-          onWireContext={(from, to) => {
-            if (!LIVE) {
-              log(`offline mode: wiring ${from} -> ${to} was not saved`);
-              return;
-            }
-            void actions.addContextEdge({ from, to }).then((result) => {
-              if (!result.ok) {
-                log(
-                  `refused: ${result.refusal.reason} - ${result.refusal.message}`,
-                );
-              }
-            });
-          }}
-          onDropDefinitionOnTicket={(ticketNodeId, definitionId) => {
-            if (!LIVE) {
+            }}
+            selectedNodeId={selectedNodeId}
+            onSelectNode={select}
+            attentionNodeIds={attentionNodeIds}
+            attentionByNodeId={attentionByNodeId}
+            warningsByNodeId={warningsByNodeId}
+            onBatchAction={(action, ids) => {
+              log(`batch ${action}: ${ids.join(", ")}`);
+            }}
+            onCreateFromDrag={(sourceId, option) => {
               log(
-                `offline mode: dropping definition ${definitionId} onto ${ticketNodeId} was not saved`,
+                `create ${option.kind} from ${sourceId} (not yet wired to /api)`,
               );
-              return;
-            }
-            const ticket = graph.nodes.find((node) => node.id === ticketNodeId);
-            if (!ticket?.refId) return;
-            void (async () => {
-              const workstream = await actions.createWorkstream(ticket.refId);
-              if (!workstream.ok) {
-                log(
-                  `refused: ${workstream.refusal.reason} - ${workstream.refusal.message}`,
-                );
+            }}
+            onWireContext={(from, to) => {
+              if (!LIVE) {
+                log(`offline mode: wiring ${from} -> ${to} was not saved`);
                 return;
               }
-              const command = await actions.instantiateCommand({
-                definitionId,
-                workstreamId: workstream.value.workstreamId,
-                context: [ticketNodeId],
-              });
-              if (!command.ok) {
-                log(
-                  `refused: ${command.refusal.reason} - ${command.refusal.message}`,
-                );
-                return;
-              }
-              log(
-                `workstream ${workstream.value.workstreamId} created from ${ticketNodeId}, ` +
-                  `command ${command.value.commandId} wired with an authored context edge`,
-              );
-            })();
-          }}
-          onDropPaletteEntry={(entryId, position) => {
-            if (!LIVE) {
-              log(`offline mode: dropping ${entryId} was not saved`);
-              return;
-            }
-            const entry = graph.paletteEntries.find((e) => e.id === entryId);
-            if (!entry || entry.kind === "command_definition") return;
-            const role = entry.kind === "session" ? "session" : "content";
-            void actions
-              .placeNode({
-                role,
-                refId: entryId,
-                ...(role === "session" ? { running: false } : {}),
-              })
-              .then((result) => {
+              void actions.addContextEdge({ from, to }).then((result) => {
                 if (!result.ok) {
                   log(
                     `refused: ${result.refusal.reason} - ${result.refusal.message}`,
                   );
+                }
+              });
+            }}
+            onDropDefinitionOnTicket={(ticketNodeId, definitionId) => {
+              if (!LIVE) {
+                log(
+                  `offline mode: dropping definition ${definitionId} onto ${ticketNodeId} was not saved`,
+                );
+                return;
+              }
+              const ticket = graph.nodes.find(
+                (node) => node.id === ticketNodeId,
+              );
+              if (!ticket?.refId) return;
+              void (async () => {
+                const workstream = await actions.createWorkstream(ticket.refId);
+                if (!workstream.ok) {
+                  log(
+                    `refused: ${workstream.refusal.reason} - ${workstream.refusal.message}`,
+                  );
                   return;
                 }
-                setPlacements((current) => {
-                  const next = { ...current, [result.value.nodeId]: position };
-                  void placementStore.save(next);
-                  return next;
+                const command = await actions.instantiateCommand({
+                  definitionId,
+                  workstreamId: workstream.value.workstreamId,
+                  context: [ticketNodeId],
                 });
-              });
-          }}
-          runningCommandNodeIds={runsInFlight}
-          onRunCommand={(commandNodeId) => {
-            if (!LIVE) {
-              log(`offline mode: running ${commandNodeId} was not started`);
-              return;
-            }
-            // The gesture-level guard (§4.1, principle 9): a double-click
-            // before the first request settles must not mint a second
-            // initiation key. Checked and applied via one state update, so
-            // two clicks handled in the same tick cannot both read "not yet
-            // in flight".
-            let guardedIn = false;
-            setRunsInFlight((current) => {
-              const guard = beginRun(current, commandNodeId);
-              guardedIn = guard.allowed;
-              return guard.inFlight;
-            });
-            if (!guardedIn) {
-              log(
-                `run already in flight for ${commandNodeId}; ignoring the extra click`,
-              );
-              return;
-            }
-
-            const commandNode = graph.nodes.find(
-              (node) => node.id === commandNodeId,
-            );
-            if (!commandNode?.refId) {
-              setRunsInFlight((current) => endRun(current, commandNodeId));
-              return;
-            }
-            // The client's own idea of "this gesture" (principle 9): a retry
-            // with the same key would get the same run and session back,
-            // never a second one — a fresh key per click is exactly one run
-            // per click.
-            const initiationKey = `run-${crypto.randomUUID()}`;
-            void actions
-              .runCommand({ commandId: commandNode.refId, initiationKey })
-              .then((result) => {
-                setRunsInFlight((current) => endRun(current, commandNodeId));
-                if (!result.ok) {
+                if (!command.ok) {
                   log(
-                    `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                    `refused: ${command.refusal.reason} - ${command.refusal.message}`,
                   );
                   return;
                 }
-                const outcome = result.value;
-                if (outcome.kind === "queued") {
-                  setQueuedRuns((current) => {
-                    const next = new Map(current);
-                    next.set(commandNodeId, {
-                      queueEntryId: outcome.queueEntryId,
-                      position: outcome.position,
-                    });
+                log(
+                  `workstream ${workstream.value.workstreamId} created from ${ticketNodeId}, ` +
+                    `command ${command.value.commandId} wired with an authored context edge`,
+                );
+              })();
+            }}
+            onDropPaletteEntry={(entryId, position) => {
+              if (!LIVE) {
+                log(`offline mode: dropping ${entryId} was not saved`);
+                return;
+              }
+              const entry = graph.paletteEntries.find((e) => e.id === entryId);
+              if (!entry || entry.kind === "command_definition") return;
+              const role = entry.kind === "session" ? "session" : "content";
+              void actions
+                .placeNode({
+                  role,
+                  refId: entryId,
+                  ...(role === "session" ? { running: false } : {}),
+                })
+                .then((result) => {
+                  if (!result.ok) {
+                    log(
+                      `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                    );
+                    return;
+                  }
+                  setPlacements((current) => {
+                    const next = {
+                      ...current,
+                      [result.value.nodeId]: position,
+                    };
+                    void placementStore.save(next);
                     return next;
                   });
-                  log(
-                    `run for ${commandNodeId} queued at position ${outcome.position ?? "?"} (concurrency limit reached)`,
-                  );
-                  return;
-                }
-                log(
-                  `run ${outcome.runId} started; session ${outcome.sessionId}`,
-                );
+                });
+            }}
+            runningCommandNodeIds={runsInFlight}
+            onRunCommand={(commandNodeId) => {
+              if (!LIVE) {
+                log(`offline mode: running ${commandNodeId} was not started`);
+                return;
+              }
+              // The gesture-level guard (§4.1, principle 9): a double-click
+              // before the first request settles must not mint a second
+              // initiation key. Checked and applied via one state update, so
+              // two clicks handled in the same tick cannot both read "not yet
+              // in flight".
+              let guardedIn = false;
+              setRunsInFlight((current) => {
+                const guard = beginRun(current, commandNodeId);
+                guardedIn = guard.allowed;
+                return guard.inFlight;
               });
+              if (!guardedIn) {
+                log(
+                  `run already in flight for ${commandNodeId}; ignoring the extra click`,
+                );
+                return;
+              }
+
+              const commandNode = graph.nodes.find(
+                (node) => node.id === commandNodeId,
+              );
+              if (!commandNode?.refId) {
+                setRunsInFlight((current) => endRun(current, commandNodeId));
+                return;
+              }
+              // The client's own idea of "this gesture" (principle 9): a retry
+              // with the same key would get the same run and session back,
+              // never a second one — a fresh key per click is exactly one run
+              // per click.
+              const initiationKey = `run-${crypto.randomUUID()}`;
+              void actions
+                .runCommand({ commandId: commandNode.refId, initiationKey })
+                .then((result) => {
+                  setRunsInFlight((current) => endRun(current, commandNodeId));
+                  if (!result.ok) {
+                    log(
+                      `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                    );
+                    return;
+                  }
+                  const outcome = result.value;
+                  if (outcome.kind === "queued") {
+                    setQueuedRuns((current) => {
+                      const next = new Map(current);
+                      next.set(commandNodeId, {
+                        queueEntryId: outcome.queueEntryId,
+                        position: outcome.position,
+                      });
+                      return next;
+                    });
+                    log(
+                      `run for ${commandNodeId} queued at position ${outcome.position ?? "?"} (concurrency limit reached)`,
+                    );
+                    return;
+                  }
+                  log(
+                    `run ${outcome.runId} started; session ${outcome.sessionId}`,
+                  );
+                });
+            }}
+          />
+        </div>
+
+        {/* Unstyled side panel: mechanics only (fleet rule 5). */}
+        <div
+          style={{
+            width: 320,
+            borderLeft: "1px solid black",
+            padding: 8,
+            overflow: "auto",
           }}
-        />
-      </div>
-
-      {/* Unstyled side panel: mechanics only (fleet rule 5). */}
-      <div
-        style={{
-          width: 320,
-          borderLeft: "1px solid black",
-          padding: 8,
-          overflow: "auto",
-        }}
-      >
-        <section>
-          <h2>context inputs into the selected command (§3.5)</h2>
-          {selectedNodeId ? (
-            <ContextInputList
-              edges={contextInputs}
-              onReorder={(reordered) => {
-                if (!LIVE) {
-                  log("offline mode: reordering context was not saved");
-                  return;
-                }
-                void actions
-                  .reorderContext(
-                    selectedNodeId,
-                    reordered.map((edge) => edge.id),
-                  )
-                  .then((result) => {
-                    if (!result.ok) {
-                      log(
-                        `refused: ${result.refusal.reason} - ${result.refusal.message}`,
-                      );
-                    }
-                  });
-              }}
-            />
-          ) : (
-            <div>select a command to see its context inputs</div>
-          )}
-        </section>
-
-        <section>
-          <h2>collection (§3.1)</h2>
-          <button
-            type="button"
-            onClick={() => setCollection(expandCollection(collection))}
-          >
-            expand
-          </button>
-          {collection.expanded ? (
-            <ul>
-              {collection.memberIds.map((memberId) => (
-                <li key={memberId}>
-                  {memberId}{" "}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setCollection(pruneMember(collection, memberId))
-                    }
-                  >
-                    prune
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const result = dragOutMember(collection, memberId);
-                      setCollection(result.collection);
-                      if (result.draggedId) {
-                        log(`dragged out ${result.draggedId}`);
+        >
+          <section>
+            <h2>context inputs into the selected command (§3.5)</h2>
+            {selectedNodeId ? (
+              <ContextInputList
+                edges={contextInputs}
+                onReorder={(reordered) => {
+                  if (!LIVE) {
+                    log("offline mode: reordering context was not saved");
+                    return;
+                  }
+                  void actions
+                    .reorderContext(
+                      selectedNodeId,
+                      reordered.map((edge) => edge.id),
+                    )
+                    .then((result) => {
+                      if (!result.ok) {
+                        log(
+                          `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                        );
                       }
-                    }}
-                  >
-                    drag out
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
+                    });
+                }}
+              />
+            ) : (
+              <div>select a command to see its context inputs</div>
+            )}
+          </section>
 
-        <section>
-          <h2>queued runs (§4.1)</h2>
-          {queuedRuns.size === 0 ? (
-            <div>nothing waiting on the concurrency limit</div>
-          ) : (
-            <ul>
-              {[...queuedRuns.entries()].map(([commandNodeId, queued]) => (
-                <li
-                  key={commandNodeId}
-                  data-testid={`queued-run-${commandNodeId}`}
-                >
-                  {commandNodeId}: position {queued.position ?? "?"}{" "}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void actions
-                        .cancelQueuedRun(queued.queueEntryId)
-                        .then((result) => {
-                          setQueuedRuns((current) => {
-                            const next = new Map(current);
-                            next.delete(commandNodeId);
-                            return next;
-                          });
-                          if (!result.ok) {
+          <section>
+            <h2>collection (§3.1)</h2>
+            <button
+              type="button"
+              onClick={() => setCollection(expandCollection(collection))}
+            >
+              expand
+            </button>
+            {collection.expanded ? (
+              <ul>
+                {collection.memberIds.map((memberId) => (
+                  <li key={memberId}>
+                    {memberId}{" "}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCollection(pruneMember(collection, memberId))
+                      }
+                    >
+                      prune
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const result = dragOutMember(collection, memberId);
+                        setCollection(result.collection);
+                        if (result.draggedId) {
+                          log(`dragged out ${result.draggedId}`);
+                        }
+                      }}
+                    >
+                      drag out
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </section>
+
+          <section>
+            <h2>queued runs (§4.1)</h2>
+            {queuedRuns.size === 0 ? (
+              <div>nothing waiting on the concurrency limit</div>
+            ) : (
+              <ul>
+                {[...queuedRuns.entries()].map(([commandNodeId, queued]) => (
+                  <li
+                    key={commandNodeId}
+                    data-testid={`queued-run-${commandNodeId}`}
+                  >
+                    {commandNodeId}: position {queued.position ?? "?"}{" "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void actions
+                          .cancelQueuedRun(queued.queueEntryId)
+                          .then((result) => {
+                            setQueuedRuns((current) => {
+                              const next = new Map(current);
+                              next.delete(commandNodeId);
+                              return next;
+                            });
+                            if (!result.ok) {
+                              log(
+                                `refused to cancel queued run: ${result.refusal.message}`,
+                              );
+                              return;
+                            }
                             log(
-                              `refused to cancel queued run: ${result.refusal.message}`,
+                              result.value.cancelled
+                                ? `cancelled queued run for ${commandNodeId}`
+                                : `queued run for ${commandNodeId} had already started or settled`,
                             );
-                            return;
-                          }
-                          log(
-                            result.value.cancelled
-                              ? `cancelled queued run for ${commandNodeId}`
-                              : `queued run for ${commandNodeId} had already started or settled`,
-                          );
-                        });
-                    }}
-                  >
-                    cancel
-                  </button>
-                </li>
+                          });
+                      }}
+                    >
+                      cancel
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section>
+            <h2>gesture log</h2>
+            <ul>
+              {gestureLog.map((entry, index) => (
+                <li key={index}>{entry}</li>
               ))}
             </ul>
-          )}
-        </section>
+          </section>
+        </div>
 
-        <section>
-          <h2>gesture log</h2>
-          <ul>
-            {gestureLog.map((entry, index) => (
-              <li key={index}>{entry}</li>
-            ))}
-          </ul>
-        </section>
-      </div>
-
-      <div style={{ width: 320, borderLeft: "1px solid black" }}>
-        <h2>dock rail (§11)</h2>
-        <DockRail registry={panelRegistry} />
+        <div style={{ width: 320, borderLeft: "1px solid black" }}>
+          <h2>dock rail (§11)</h2>
+          <DockRail registry={panelRegistry} />
+        </div>
       </div>
     </div>
   );
