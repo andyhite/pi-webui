@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ContainerEdge } from "./collapse.js";
 import {
+  effectiveCollapsedContainers,
   isNodeHidden,
   remapEdgesForCollapse,
   visibleNodeIds,
@@ -40,6 +41,53 @@ describe("visibleNodeIds", () => {
   it("returns everything when nothing is collapsed", () => {
     const ids = ["ws-1", "ticket-1"];
     expect(visibleNodeIds(ids, new Set(), parentOf)).toEqual(ids);
+  });
+});
+
+describe("effectiveCollapsedContainers", () => {
+  const containerIds = ["ws-1", "ws-2"];
+
+  it("returns only the manually collapsed containers when zoom isn't forcing", () => {
+    const result = effectiveCollapsedContainers(
+      containerIds,
+      new Set(["ws-1"]),
+      false,
+    );
+    expect(result).toEqual(new Set(["ws-1"]));
+  });
+
+  it("returns every container when the zoom level forces collapse", () => {
+    const result = effectiveCollapsedContainers(containerIds, new Set(), true);
+    expect(result).toEqual(new Set(["ws-1", "ws-2"]));
+  });
+
+  it("zoom-forced collapse doesn't erase which ones were manually collapsed", () => {
+    // Manual state is the caller's source of truth across zoom changes;
+    // this function only computes the *effective* set for the current
+    // render, so a manual choice made while zoomed out is still visible
+    // once the caller re-derives with collapseAll=false after zooming in.
+    const zoomedOut = effectiveCollapsedContainers(
+      containerIds,
+      new Set(["ws-1"]),
+      true,
+    );
+    expect(zoomedOut).toEqual(new Set(["ws-1", "ws-2"]));
+
+    const zoomedBackIn = effectiveCollapsedContainers(
+      containerIds,
+      new Set(["ws-1"]),
+      false,
+    );
+    expect(zoomedBackIn).toEqual(new Set(["ws-1"]));
+  });
+
+  it("ignores a manually collapsed id that isn't a known container", () => {
+    const result = effectiveCollapsedContainers(
+      containerIds,
+      new Set(["stale-id"]),
+      false,
+    );
+    expect(result).toEqual(new Set());
   });
 });
 

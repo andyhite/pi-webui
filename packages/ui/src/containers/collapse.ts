@@ -14,6 +14,25 @@ export interface ContainerEdge {
 /** Node id → id of the workstream container that contains it (or absent for top-level nodes/containers). */
 export type ParentOf = ReadonlyMap<string, string>;
 
+/**
+ * The manual collapse toggle and the zoom level are two independent forces
+ * that can each demand a container be collapsed (spec §5: "zoomed out: one
+ * card per workstream"; §3.3: "containers collapse and expand" by gesture).
+ * This combines them into the one set every other collapse helper reads:
+ * a container collapses if the human collapsed it, or if `collapseAll` says
+ * the zoom level does it for every container regardless of the manual
+ * toggle. The manual set itself is untouched, so zooming back in restores
+ * exactly what the human had chosen before zooming out.
+ */
+export function effectiveCollapsedContainers(
+  containerIds: readonly string[],
+  manuallyCollapsed: ReadonlySet<string>,
+  collapseAll: boolean,
+): Set<string> {
+  if (collapseAll) return new Set(containerIds);
+  return new Set(containerIds.filter((id) => manuallyCollapsed.has(id)));
+}
+
 /** A node collapses out of view when its container is collapsed. */
 export function isNodeHidden(
   nodeId: string,

@@ -21,4 +21,5 @@ export * from "./context-order/ContextInputList.js";
 export * from "./notes/model.js";
 export * from "./notes/NotePanel.js";
 export * from "./gestures/one-gesture.js";
+export * from "./canvas/tombstones.js";
 export * from "./canvas/PlotCanvas.js";
