@@ -952,6 +952,324 @@ const sessionTools: readonly AgentTool[] = [
   }),
 ];
 
+/* ------------------------------------------- steering in flight (Epic 5.2) */
+
+/**
+ * Injection, questions, broadcast, and batch (§6.5, §6.4, §4.2). Their endpoints
+ * are Track A's to mount over `@plotroom/core`'s planners, so they are `pending`
+ * until they exist — in the vocabulary, and honest about not being reachable.
+ */
+const steeringTools: readonly AgentTool[] = [
+  mutate({
+    name: "session_inject",
+    summary:
+      "Add content to a running session mid-flight: it arrives as a new turn and stays on the graph, wired to the session, attributed to you (§6.5).",
+    gesture: "type into a running session's composer",
+    method: "POST",
+    endpoint: "/api/sessions/:id/inject",
+    availability: "pending",
+    input: {
+      id: id("the running session to steer"),
+      text: {
+        type: "string",
+        required: true,
+        description: "what to say; it becomes a content node on the graph",
+      },
+      injectionId: {
+        type: "string",
+        required: false,
+        description:
+          "the caller's own name for this gesture; the same id returns the same injection rather than a second one (principle 9)",
+      },
+    },
+    // "Injection is a peer gesture: humans inject, and sessions inject into
+    // *other* sessions" — so a session may call this, and the lineage rule is
+    // what keeps "other" true. §6.5 accepts the consequence openly: an
+    // out-of-chain peer may be *asked* to inject where the asker may not, and
+    // both the request and the edge are on the graph, attributed.
+    requires: {
+      reflexivity: "target-session",
+      approval: "outside-policy",
+      targetResolution:
+        "the session named by the id, and nothing else — an injection reaches exactly one session.",
+    },
+  }),
+  mutate({
+    name: "session_ask",
+    summary:
+      "Ask the operator a question with selectable options; the answer comes back structurally. Never carries a timeout (§6.4).",
+    gesture: "a question bubble on the session node",
+    method: "POST",
+    endpoint: "/api/sessions/:id/questions",
+    availability: "pending",
+    input: {
+      id: id("the session asking"),
+      text: { type: "string", required: true, description: "the question" },
+      options: {
+        type: "string[]",
+        required: true,
+        description: "the selectable options; at least one",
+      },
+      escalateAfterSeconds: {
+        type: "number",
+        required: false,
+        description:
+          "how long before the question escalates on the attention surfaces. It NEVER resolves the question: no timed defaults (§6.4, principle 2)",
+      },
+    },
+    // Asking the operator is the one way a session may legitimately expand what
+    // it knows: the human answers (principle 1).
+    requires: { reflexivity: "none" },
+  }),
+  mutate({
+    name: "question_answer",
+    summary:
+      "Answer a question a session asked: pick one of its options. The operator's alone (§6.4).",
+    gesture: "answer inline from the bubble or the queue (§7.1)",
+    method: "POST",
+    endpoint: "/api/questions/:id/answer",
+    availability: "pending",
+    input: {
+      id: id("the question"),
+      optionId: {
+        type: "string",
+        required: true,
+        description: "one of the options the question offered",
+      },
+      text: {
+        type: "string",
+        required: false,
+        description:
+          "free-form text, only where the question declared it acceptable",
+      },
+    },
+    // A session answering a question posed to the user would be principle 1 with
+    // extra steps: the answer is the human's, or it is not an answer.
+    requires: { humanOnly: true },
+  }),
+  mutate({
+    name: "session_broadcast",
+    summary:
+      "Broadcast to every running session sharing a scope of material state. Names a scope, never recipients; carries a mandatory category; bounded per window; charged to your budget chain (§6.5).",
+    gesture: "broadcast to a selection, a workstream, or everything running",
+    method: "POST",
+    endpoint: "/api/broadcasts",
+    availability: "pending",
+    input: {
+      scope: {
+        type: "object",
+        required: true,
+        description:
+          "everyone-in-repository or everyone-in-workspace. A session cannot name recipients; the operator's own broadcast takes a target list instead",
+      },
+      category: {
+        type: "string",
+        required: true,
+        description:
+          "material-state-changed | shared-resource-warning — mandatory, and the only two",
+      },
+      text: { type: "string", required: true, description: "what to say" },
+      broadcastId: {
+        type: "string",
+        required: false,
+        description: "the caller's own name for this gesture (principle 9)",
+      },
+    },
+    // Deliberately reflexivity "none", against the pattern of every other tool
+    // that reaches other sessions. §6.5 states the reason: "the scope rule, not
+    // lineage exclusion, is what closes the collusion channel... (Excluding the
+    // sender's chain would exclude exactly the sessions most likely affected.)"
+    // What bounds this one is the scope evaluator, the declared category, the
+    // rate bound, the spend attribution, and the operator seeing every send.
+    requires: { reflexivity: "none", approval: "outside-policy" },
+  }),
+  mutate({
+    name: "batch_gesture",
+    summary:
+      "One gesture over a multi-selection of sessions: one prompt to many, stop, close, or archive (§4.2).",
+    gesture: "a batch action on a multi-selection",
+    method: "POST",
+    endpoint: "/api/batches",
+    availability: "pending",
+    input: {
+      kind: {
+        type: "string",
+        required: true,
+        description: "inject | stop | close | archive",
+      },
+      sessionIds: {
+        type: "string[]",
+        required: true,
+        description: "the selection",
+      },
+      batchKey: {
+        type: "string",
+        required: true,
+        description:
+          "the caller's own name for this batch; every member's key derives from it, so a replay writes the same rows (principle 9)",
+      },
+      prompt: {
+        type: "string",
+        required: false,
+        description: "required for inject; the one prompt sent to many",
+      },
+    },
+    requires: {
+      reflexivity: "target-session",
+      approval: "outside-policy",
+      targetResolution:
+        "every session named in `sessionIds` — the batch is the single gesture, so the check sees all of its members. A member in the caller's own chain is skipped with a reason rather than failing the batch (`planBatch`).",
+    },
+  }),
+  mutate({
+    name: "stop_scope",
+    summary:
+      "Stop at a scope: one session, a workstream, or everything running. Names how many it will affect first (§6.7).",
+    gesture: "stop, at workstream or fleet scope",
+    method: "POST",
+    endpoint: "/api/stops",
+    availability: "pending",
+    input: {
+      scope: {
+        type: "string",
+        required: true,
+        description: "session | workstream | everything",
+      },
+      sessionId: {
+        type: "string",
+        required: false,
+        description: "for the session scope",
+      },
+      workstreamId: {
+        type: "string",
+        required: false,
+        description: "for the workstream scope",
+      },
+      confirm: {
+        type: "boolean",
+        required: false,
+        description:
+          "required at the widest scope, which confirms before it acts (§6.7)",
+      },
+    },
+    requires: {
+      reflexivity: "target-session",
+      approval: "outside-policy",
+      targetResolution:
+        "every running session the scope resolves to (`resolveStop`). This is what makes the fleet-wide stop unavailable to a session without a second rule: `everything` always includes the caller's own chain, so principle 1 refuses it, while a peer workstream's stop goes through.",
+    },
+  }),
+];
+
+/* --------------------------------------- resume, fork, handoff (Epic 5.4) */
+
+const continuationTools: readonly AgentTool[] = [
+  mutate({
+    name: "session_resume",
+    summary:
+      "Resume an ended session: the same record continues with a new turn (§6.3). Refused when the workspace diverged (§4.3).",
+    gesture: "resume, from the explicit resume-or-fork choice",
+    method: "POST",
+    endpoint: "/api/sessions/:id/resume",
+    availability: "pending",
+    input: {
+      id: id("the session to resume"),
+      firstTurn: {
+        type: "string",
+        required: false,
+        description: "delivered as the resumed session's first turn",
+      },
+      initiationKey: {
+        type: "string",
+        required: true,
+        description:
+          "one gesture, one resumption; a retry returns the same one (principle 9)",
+      },
+    },
+    requires: {
+      reflexivity: "target-session",
+      approval: "outside-policy",
+      targetResolution:
+        "the session named by the id, and nothing else. §4.1's rule is what this enforces: a session may not run, resume, or re-run anything in its own initiation chain.",
+    },
+  }),
+  mutate({
+    name: "session_fork",
+    summary:
+      "Fork a session from a point: a new session with its own workstream and workspace, inheriting the conversation up to there (§6.3).",
+    gesture: "fork from a transcript point",
+    method: "POST",
+    endpoint: "/api/sessions/:id/fork",
+    availability: "pending",
+    input: {
+      id: id("the session to fork from"),
+      turn: {
+        type: "number",
+        required: true,
+        description:
+          "the transcript turn to fork at; the fork inherits everything up to and including it",
+      },
+      initiationKey: {
+        type: "string",
+        required: true,
+        description: "one gesture, one fork (principle 9)",
+      },
+    },
+    requires: {
+      reflexivity: "target-session",
+      approval: "outside-policy",
+      targetResolution:
+        "the session named by the id, and nothing else. NEVER the session the fork is about to create: it is a descendant by construction, and including it would refuse every fork a session makes — the same reasoning as `run_one`.",
+    },
+  }),
+  mutate({
+    name: "handoff_brief_write",
+    summary:
+      "Write the brief for a handoff out of this session. The operator reviews it before it is sent; writing one sends nothing (§6.3).",
+    gesture: "the brief a handoff opens with",
+    method: "POST",
+    endpoint: "/api/sessions/:id/handoff-brief",
+    availability: "pending",
+    input: {
+      id: id("the source session"),
+      text: { type: "string", required: true, description: "the brief" },
+    },
+    // Writing a brief about its own work reaches nothing: the human reviews it,
+    // and `planHandoff` cannot be called with an unreviewed brief at all.
+    requires: { reflexivity: "none" },
+  }),
+  mutate({
+    name: "session_handoff",
+    summary:
+      "Send a reviewed handoff brief: it seeds a new session and stays on the graph as content (§6.3).",
+    gesture: "send, from the handoff brief the operator just edited",
+    method: "POST",
+    endpoint: "/api/handoffs",
+    availability: "pending",
+    input: {
+      briefId: {
+        type: "string",
+        required: true,
+        description: "the reviewed brief",
+      },
+      workstreamId: {
+        type: "string",
+        required: true,
+        description: "where the new session runs",
+      },
+      initiationKey: {
+        type: "string",
+        required: true,
+        description: "one gesture, one handoff (principle 9)",
+      },
+    },
+    // The operator's alone, and not because sending is dangerous: §6.3 says the
+    // user edits the brief before it is sent, so the send *is* the human's act.
+    // A session sending its own brief would be the review not happening.
+    requires: { humanOnly: true },
+  }),
+];
+
 /* ------------------------------------------------------------ whole board */
 
 const boardTools: readonly AgentTool[] = [
@@ -1208,6 +1526,8 @@ export const AGENT_TOOL_CATALOG: readonly AgentTool[] = [
   ...commandTools,
   ...runTools,
   ...sessionTools,
+  ...steeringTools,
+  ...continuationTools,
   ...boardTools,
   ...claimTools,
   ...agencyTools,
