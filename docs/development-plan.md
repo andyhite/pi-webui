@@ -968,6 +968,7 @@ own doc comment states the exact swap point for `GET
 /api/workstreams/:id/diff`._
 
 ### Epic 5.2 — Injection, questions, broadcast (`sessions`)
+
 ### Epic 5.2 — Injection, questions, broadcast (`sessions`) — _domain done (server wiring pending Track A stage 2)_
 
 - [x] Injection as new turn + permanent graph content wired to the session (§6.5, principle 5); queued → delivered states for between-turn delivery — `planInjection` produces the content node, the authored context edge, and the ledger entry; the pi adapter's real between-turn delivery is verified against a live pi
