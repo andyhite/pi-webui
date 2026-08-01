@@ -11,9 +11,12 @@ import type {
   CanvasContainerInput,
   CanvasEdgeInput,
   CanvasNodeInput,
+  ContextEdgeFact,
   ContextInputRow,
+  GraphSnapshot,
   PaletteEntry,
   PaletteTicketEntry,
+  WarningFacts,
   WarningGraphNode,
 } from "@plotroom/ui";
 
@@ -181,6 +184,10 @@ export function toWarningGraphNodes(
   }));
 }
 
+/** The same facts, as the `GraphSnapshot.warningFacts` map the live source builds. */
+export const FIXTURE_WARNING_FACTS_MAP: ReadonlyMap<string, WarningFacts> =
+  new Map(Object.entries(FIXTURE_WARNING_FACTS));
+
 /** Ordered context inputs into `command-implement` (spec §3.5). */
 export const FIXTURE_CONTEXT_INPUTS: readonly ContextInputRow[] = [
   { id: "edge-ticket-command", ordinal: 0, label: "ticket OXY-2982" },
@@ -241,3 +248,29 @@ export const FIXTURE_PALETTE_ENTRIES: readonly PaletteEntry[] = [
   ...FIXTURE_PALETTE_TICKETS,
   ...FIXTURE_PALETTE_OTHER,
 ];
+
+/** The same two context edges as `FIXTURE_CONTEXT_INPUTS`, in `GraphSnapshot` shape. */
+export const FIXTURE_CONTEXT_EDGES: readonly ContextEdgeFact[] = [
+  {
+    id: "edge-ticket-command",
+    from: "ticket-oxy-2982",
+    to: "command-implement",
+    ordinal: 0,
+  },
+  {
+    id: "edge-doc-command",
+    from: "doc-architecture",
+    to: "command-implement",
+    ordinal: 1,
+  },
+];
+
+/** Stage 1/tests/dev-offline: the full fixture graph in live `GraphSnapshot` shape. */
+export const FIXTURE_SNAPSHOT: GraphSnapshot = {
+  nodes: FIXTURE_NODES,
+  edges: FIXTURE_EDGES,
+  containers: FIXTURE_CONTAINERS,
+  warningFacts: FIXTURE_WARNING_FACTS_MAP,
+  paletteEntries: FIXTURE_PALETTE_ENTRIES,
+  contextEdges: FIXTURE_CONTEXT_EDGES,
+};

@@ -112,6 +112,17 @@ describe("createApiActions", () => {
     });
   });
 
+  it("reorderContext posts the new edge order to /api/nodes/:id/context/order", async () => {
+    const post = vi.fn(async () => ({}));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    await actions.reorderContext("n/1", ["e1", "e2"]);
+
+    expect(post).toHaveBeenCalledWith("/api/nodes/n%2F1/context/order", {
+      edgeIds: ["e1", "e2"],
+    });
+  });
+
   it("createNote/editNote hit the notes endpoints", async () => {
     const post = vi.fn(async () => ({ object: { id: "obj1" } }));
     const patch = vi.fn(async () => undefined);

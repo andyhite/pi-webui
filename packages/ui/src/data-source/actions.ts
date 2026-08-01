@@ -91,6 +91,11 @@ export interface GraphActions {
   ): Promise<
     ActionResult<{ readonly commandId: string; readonly nodeId: string }>
   >;
+  /** Drag-reordered context inputs (§3.5): the given order becomes assembly order. */
+  reorderContext(
+    nodeId: string,
+    edgeIds: readonly string[],
+  ): Promise<ActionResult<void>>;
 }
 
 export function createApiActions(http: HttpClient): GraphActions {
@@ -152,7 +157,17 @@ export function createApiActions(http: HttpClient): GraphActions {
         }>("/api/commands", input);
         return { commandId: response.command.id, nodeId: response.node.id };
       }),
+
+    reorderContext: (nodeId, edgeIds) =>
+      asAction(async () => {
+        await http.post(contextOrderPath(nodeId), { edgeIds });
+      }),
   };
+}
+
+/** `/api/nodes/<id>/context/order` — same path-encoding rule as {@link apiPath}. */
+function contextOrderPath(nodeId: string): string {
+  return `/api/nodes/${encodeURIComponent(nodeId)}/context/order`;
 }
 
 /**
