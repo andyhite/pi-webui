@@ -56,6 +56,13 @@ import type { SelectionActionId } from "../selection/multi-select.js";
 import { clusterOffScreenAttention } from "../attention/off-screen.js";
 import type { OffScreenMarker } from "../attention/off-screen.js";
 import {
+  computeBubblePlacements,
+  DEFAULT_GLOBAL_BUBBLE_CAP,
+} from "../bubbles/placement.js";
+import type { ReservedRegion } from "../bubbles/placement.js";
+import { BubbleLayer } from "../bubbles/BubbleLayer.js";
+import type { BubbleSource } from "../bubbles/model.js";
+import {
   CREATE_MENU_OPTIONS,
   legalCreateMenuOptions,
 } from "../legality/create-menu.js";
@@ -198,6 +205,17 @@ export interface PlotCanvasProps {
    * pure `beginRun`/`endRun`) — this only renders it.
    */
   readonly runningCommandNodeIds?: ReadonlySet<string>;
+  /**
+   * Speech bubbles (§5): every source that could show as a bubble on some
+   * node currently on this canvas — the host derives these from its own
+   * streams (`bubbles/derive-sources.ts`, a fixture question source, ...).
+   * Absent or empty: no bubble layer renders at all.
+   */
+  readonly bubbleSources?: readonly BubbleSource[];
+  /** A `question`-kind bubble's option was clicked (§6.4) — the host answers through its `QuestionDataSource`. */
+  readonly onAnswerQuestion?: (source: BubbleSource, option: string) => void;
+  /** "cap how many show at once" (§5) — defaults to `DEFAULT_GLOBAL_BUBBLE_CAP`. */
+  readonly bubbleCap?: number;
 }
 
 /** The drag payload a command-definition drag source sets (host's palette). */
@@ -242,6 +260,10 @@ const FALLBACK_WIDTH = 140;
 const FALLBACK_HEIGHT = 40;
 const CONTAINER_WIDTH = 420;
 const CONTAINER_HEIGHT = 280;
+/** The unstyled `<MiniMap>`'s own default footprint (§5's reserved region). */
+const MINIMAP_WIDTH = 200;
+const MINIMAP_HEIGHT = 150;
+const MINIMAP_MARGIN = 15;
 
 function BoxNodeView({ data, id, selected }: NodeProps<BoxNode>) {
   // Unstyled by design (fleet rule 5): a visible rectangle with a label is
@@ -567,6 +589,9 @@ function CanvasInner({
   warningsByNodeId,
   onRunCommand,
   runningCommandNodeIds,
+  bubbleSources = [],
+  onAnswerQuestion,
+  bubbleCap,
 }: PlotCanvasProps) {
   const { zoom } = useViewport();
   const zoomLevel = zoomLevelForScale(zoom, zoomThresholds);
@@ -1092,6 +1117,75 @@ function CanvasInner({
     return clusterOffScreenAttention(attending, viewportRect);
   }, [attentionNodeIds, nodes, viewport]);
 
+  // Speech bubbles (§5): focus is selection or hover — documented here as
+  // the one place that decision is made, so "unfocused" collapses to a
+  // count everywhere consistently. Hover is tracked only for this; it never
+  // feeds route selection.
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const focusedNodeIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (selectedNodeId) ids.add(selectedNodeId);
+    if (hoveredNodeId) ids.add(hoveredNodeId);
+    return ids;
+  }, [selectedNodeId, hoveredNodeId]);
+
+  // Reserved regions (§5, "never obscure the minimap or controls"): the
+  // unstyled `<MiniMap>` renders bottom-right at xyflow's own default
+  // footprint (200x150, 15px panel margin) — revisit alongside `<Controls>`
+  // once the design package lands and either gets its own chrome.
+  const bubbleReservedRegions = useMemo<ReservedRegion[]>(() => {
+    const box = containerRef.current?.getBoundingClientRect();
+    const width = box?.width ?? 0;
+    const height = box?.height ?? 0;
+    if (width === 0 || height === 0) return [];
+    return [
+      {
+        id: "minimap",
+        x: width - MINIMAP_MARGIN - MINIMAP_WIDTH,
+        y: height - MINIMAP_MARGIN - MINIMAP_HEIGHT,
+        width: MINIMAP_WIDTH,
+        height: MINIMAP_HEIGHT,
+      },
+    ];
+  }, [viewport]);
+
+  // Screen-space extents for every top-level box node currently on screen
+  // (reserved regions above are screen-anchored, so bubbles must place in
+  // the same space). Contained (workstream-child) nodes are a known,
+  // documented gap: xyflow reports their `position` parent-relative, not
+  // absolute, and resolving that is Stage 2 follow-up, not this mechanic.
+  const bubbleNodeExtents = useMemo<NodeExtent[]>(
+    () =>
+      nodes
+        .filter((n): n is BoxNode => n.type === "box" && !n.parentId)
+        .map((n) => ({
+          id: n.id,
+          x: n.position.x * viewport.zoom + viewport.x,
+          y: n.position.y * viewport.zoom + viewport.y,
+          width: (n.measured?.width ?? FALLBACK_WIDTH) * viewport.zoom,
+          height: (n.measured?.height ?? FALLBACK_HEIGHT) * viewport.zoom,
+        })),
+    [nodes, viewport],
+  );
+
+  const bubblePlacements = useMemo(
+    () =>
+      computeBubblePlacements(
+        bubbleNodeExtents,
+        bubbleSources,
+        focusedNodeIds,
+        bubbleReservedRegions,
+        { globalCap: bubbleCap ?? DEFAULT_GLOBAL_BUBBLE_CAP },
+      ),
+    [
+      bubbleNodeExtents,
+      bubbleSources,
+      focusedNodeIds,
+      bubbleReservedRegions,
+      bubbleCap,
+    ],
+  );
+
   // Undo for destructive canvas operations (§5, principle 10): delete
   // node/edge (a workstream container is deleted the same way; a marquee
   // delete of many nodes is "clear region"). xyflow fires one combined
@@ -1213,6 +1307,10 @@ function CanvasInner({
         onPaneClick={() => onSelectNode(null)}
         onSelectionChange={onSelectionChange}
         onDelete={onDelete}
+        onNodeMouseEnter={(_event, node) => setHoveredNodeId(node.id)}
+        onNodeMouseLeave={() =>
+          setHoveredNodeId((current) => (current ? null : current))
+        }
         selectionOnDrag
         multiSelectionKeyCode="Shift"
         fitView
@@ -1232,6 +1330,10 @@ function CanvasInner({
         onAction={(action) => onBatchAction?.(action, selectedIds)}
       />
       <AttentionMarkers markers={attentionMarkers} />
+      <BubbleLayer
+        placements={bubblePlacements}
+        onAnswerQuestion={onAnswerQuestion}
+      />
       {createMenu ? (
         <CreateMenu
           position={createMenu.position}

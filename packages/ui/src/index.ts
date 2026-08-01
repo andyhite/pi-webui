@@ -51,3 +51,8 @@ export * from "./sessions/ConversationPanel.js";
 export * from "./diff/types.js";
 export * from "./diff/tree.js";
 export * from "./diff/DiffPanel.js";
+export * from "./bubbles/model.js";
+export * from "./bubbles/placement.js";
+export * from "./bubbles/derive-sources.js";
+export * from "./bubbles/question-source.js";
+export * from "./bubbles/BubbleLayer.js";
