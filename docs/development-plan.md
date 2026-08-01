@@ -206,9 +206,10 @@ silent 404, and API/WS still work. All of it is covered by unit tests on the
 pure predicates plus a real-server, real-`ws`-client integration suite (43
 tests total). Deferred: settings-backed configuration (env vars are the only
 source until Epic 8.3; `loadServerConfig` takes explicit overrides as that
-store's seam); WS reconnect replay (a client resyncs via a REST snapshot plus
-the `hello` message's `nextSeq`, once Epic 2.2 has a snapshot endpoint to
-offer); a persisted structured-log sink (today: stdout JSON lines only)._
+store's seam); a persisted structured-log sink (today: stdout JSON lines
+only). WS reconnect replay is what `GET /api/snapshot` (Epic 2.2) now
+offers: a client resyncs by connecting to `/ws` first, buffering, fetching
+the snapshot, and applying only what the snapshot's `seq` says it missed._
 
 ### Epic 2.2 — Graph and workstream API (`server`, `graph`) — _done_
 
@@ -243,11 +244,16 @@ shapes the REST reads return and a refused mutation publishes nothing.
 Migration 6 adds `deleted_at` to objects and workstreams and widens the
 workstream attribution trail to cover deletion. Two Epic 1.4 deferrals
 landed alongside: command and run writes are transactional, and a
-soft-deleted command is refused a run until it is restored. Deferred: a
-snapshot endpoint for WS resync (the stream still has no replay); sessions
-and runs have no endpoints yet (Epics 1.5/4.2 own them, and the lineage a
-session-authored refusal reads is written by the store, not by an API);
-approval-gated destruction (§6.6) — an agent may delete today, and
+soft-deleted command is refused a run until it is restored. `GET
+/api/snapshot` landed as a follow-up: one consistent read (workstreams,
+live nodes and edges, live objects, command definitions, live commands, and
+every output placeholder) in the same row shapes the per-entity GETs and the
+WS stream already use, plus the `EventBus`'s already-monotonic `seq` so a
+client that connects to `/ws` first, buffers, then fetches the snapshot can
+drop buffered events with `seq <= snapshot.seq` and apply the rest. Deferred:
+sessions and runs have no endpoints yet (Epics 1.5/4.2 own them, and the
+lineage a session-authored refusal reads is written by the store, not by an
+API); approval-gated destruction (§6.6) — an agent may delete today, and
 recoverability is the answer principle 10 gives._
 
 ### Epic 2.3 — Durability and portability (`server`, `db`)
