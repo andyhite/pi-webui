@@ -111,7 +111,12 @@ export interface ClaimRequest {
   readonly sessionId: SessionId;
   /** Canonicalized here, so the tool layer can pass whatever the agent said. */
   readonly path: string | ClaimPath;
-  readonly leaseSeconds?: number | null;
+  /**
+   * Seconds of inactivity to hold it for. Omitted takes the default lease; there
+   * is deliberately no way to ask for a claim that never expires — "claims are
+   * leases, not locks" (§3.4), and only the operator's root claim is immortal.
+   */
+  readonly leaseSeconds?: number;
   /** Overrides the clock, for replaying a persisted request at its own time. */
   readonly at?: number;
 }
@@ -141,7 +146,8 @@ export interface ClaimGrantRequest {
   readonly to: SessionId;
   /** Must be the operator: only they may grant outside the policy hierarchy. */
   readonly by: Author;
-  readonly leaseSeconds?: number | null;
+  /** Omitted takes the default lease; a session claim is never immortal (§3.4). */
+  readonly leaseSeconds?: number;
   readonly at?: number;
 }
 
@@ -477,6 +483,13 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
     };
   }
 
+  /**
+   * Mint a granted claim. Every claim this makes carries a lease: `undefined`
+   * means unspecified and resolves to the default, and there is no value that
+   * means "never expires" — the only immortal claim is the root one, built by
+   * `open` and by nothing else. A claim granted off the waitlist used to inherit
+   * `null` from an unspecified request and become a lock forever.
+   */
   function makeClaim(
     state: ClaimState,
     input: {
@@ -485,7 +498,7 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
       readonly grantedFromClaimId: ClaimId;
       readonly grantedBy: Author;
       readonly at: number;
-      readonly leaseSeconds?: number | null | undefined;
+      readonly leaseSeconds?: number | undefined;
     },
   ): Claim {
     return {
@@ -497,9 +510,13 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
       grantedBy: input.grantedBy,
       grantedAt: input.at,
       lastActivityAt: input.at,
-      leaseSeconds:
-        input.leaseSeconds === undefined ? defaultLease : input.leaseSeconds,
+      leaseSeconds: input.leaseSeconds ?? defaultLease,
     };
+  }
+
+  /** A wait's unspecified lease (null) is "take the default", never "forever". */
+  function waitLeaseSeconds(wait: ClaimWait): number | undefined {
+    return wait.requestedLeaseSeconds ?? undefined;
   }
 
   function sortedWaits(state: ClaimState): readonly ClaimWait[] {
@@ -581,7 +598,7 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
             grantedFromClaimId: evaluation.authority.id,
             grantedBy: evaluation.authority.holder,
             at,
-            leaseSeconds: wait.requestedLeaseSeconds,
+            leaseSeconds: waitLeaseSeconds(wait),
           });
           current = withoutWait(withClaim(current, claim), wait.id);
           effects.push(
@@ -1161,7 +1178,7 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
       grantedFromClaimId: evaluation.authority.id,
       grantedBy: answer.by,
       at,
-      leaseSeconds: wait.requestedLeaseSeconds,
+      leaseSeconds: waitLeaseSeconds(wait),
     });
     return {
       ok: true,

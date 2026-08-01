@@ -11,6 +11,7 @@ import {
   isHeldBy,
   rootClaimOf,
   violatesGrantExtent,
+  violatesLeasePolicy,
   violatesSingleWriter,
   type Claim,
   type ClaimState,
@@ -201,6 +202,18 @@ function assertInvariants(
       false,
     );
   }
+
+  // §3.4: "claims are leases, not locks" — every claim but the operator's root
+  // one lapses without activity. A claim granted off the waitlist used to inherit
+  // an unspecified lease as "never expires", making it a lock only the operator
+  // could break.
+  expect(
+    violatesLeasePolicy(state).map(
+      (claim) =>
+        `${claim.id} ${claim.path.display} lease=${claim.leaseSeconds}`,
+    ),
+    trail,
+  ).toEqual([]);
 
   // §3.4: "deadlock is detected, not endured" — no reachable state may contain a
   // standing wait-for cycle, however it was reached. Insertion refuses one;

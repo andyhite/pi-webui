@@ -11,6 +11,7 @@ import {
   isHeldBy,
   rootClaimOf,
   violatesGrantExtent,
+  violatesLeasePolicy,
   violatesSingleWriter,
   type Claim,
   type ClaimEffect,
@@ -759,6 +760,86 @@ describe("leases, not locks", () => {
     const opened = manager.open(ws());
     const held = granted(manager, opened.state, A, "src");
     expect(held.claim.leaseSeconds).toBe(DEFAULT_CLAIM_LEASE_SECONDS);
+  });
+
+  it("leases a claim granted off the waitlist, and expires it like any other", () => {
+    // Adversarial repro: an unspecified lease was stored as null on the wait and
+    // passed straight through on promotion, where null means never-expires — so a
+    // claim nobody asked to be permanent became a lock only the operator could
+    // break. Leases, not locks (§3.4).
+    const { manager, state, clock } = setup(600);
+    const held = granted(manager, openWithRootPolicy(manager, state), A, "src");
+    const waiting = ok(
+      manager.request(held.state, { sessionId: B, path: "src" }),
+    );
+    expect(waiting.result.kind).toBe("waiting");
+
+    const ended = ok(manager.endSession(waiting.state, A, clock.tick(10)));
+    const promoted = claimsHeldBy(ended.state, sessionAuthor(B))[0] as Claim;
+    expect(promoted.leaseSeconds).toBe(600);
+    expect(violatesLeasePolicy(ended.state)).toEqual([]);
+
+    const lapsed = ok(manager.expire(ended.state, clock.tick(600)));
+    expect(lapsed.result.expired).toEqual([promoted.id]);
+  });
+
+  it("leases a claim granted by answering an approval", () => {
+    const { manager, state, clock } = setup(600);
+    const held = granted(manager, state, A, "src");
+    const asked = ok(
+      manager.request(held.state, { sessionId: B, path: "src/auth.ts" }),
+    );
+    if (asked.result.kind !== "approval-required") {
+      throw new Error("expected an approval");
+    }
+
+    const answered = ok(
+      manager.answerApproval(asked.state, {
+        waitId: asked.result.wait.id,
+        by: sessionAuthor(A),
+        decision: "grant",
+        at: clock.tick(5),
+      }),
+    );
+    if (answered.result.kind !== "granted") throw new Error("expected a grant");
+    const grantedClaim = answered.result.claim;
+    expect(grantedClaim.leaseSeconds).toBe(600);
+    expect(violatesLeasePolicy(answered.state)).toEqual([]);
+
+    // A's own claim lapses in the same sweep — it has been idle just as long —
+    // so this asserts the new claim is *among* the expired rather than pinning
+    // the whole sweep.
+    const lapsed = ok(manager.expire(answered.state, clock.tick(600)));
+    expect(lapsed.result.expired).toContain(grantedClaim.id);
+    expect(
+      lapsed.state.claims.some((claim) => claim.id === grantedClaim.id),
+    ).toBe(false);
+  });
+
+  it("carries an explicitly requested lease through the waitlist unchanged", () => {
+    const { manager, state, clock } = setup(600);
+    const held = granted(manager, openWithRootPolicy(manager, state), A, "src");
+    const waiting = ok(
+      manager.request(held.state, {
+        sessionId: B,
+        path: "src",
+        leaseSeconds: 60,
+      }),
+    );
+    expect(waiting.result.kind).toBe("waiting");
+
+    const ended = ok(manager.endSession(waiting.state, A, clock.tick(10)));
+    const promoted = claimsHeldBy(ended.state, sessionAuthor(B))[0] as Claim;
+    expect(promoted.leaseSeconds).toBe(60);
+  });
+
+  it("keeps the root claim the only immortal one", () => {
+    const { manager, state } = setup();
+    const held = granted(manager, state, A, "src");
+    expect(violatesLeasePolicy(held.state)).toEqual([]);
+    expect(
+      held.state.claims.filter((claim) => claim.leaseSeconds === null),
+    ).toEqual([rootClaimOf(held.state)]);
   });
 
   it("refuses a write from a session whose lease lapsed, naming who holds it now", () => {

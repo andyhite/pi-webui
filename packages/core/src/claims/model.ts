@@ -43,9 +43,11 @@ export interface Claim {
   /** Renewed by activity; the lease is measured from here (§3.4). */
   readonly lastActivityAt: number;
   /**
-   * Seconds of inactivity after which the lease lapses. Null never expires,
-   * which only the operator's root claim is: a lease on the human's own
-   * authority would expire the ability to grant anything.
+   * Seconds of inactivity after which the lease lapses. Null never expires, and
+   * **only the operator's root claim may be null**: a lease on the human's own
+   * authority would expire the ability to grant anything, while a session claim
+   * with no lease is a lock nobody but the operator can break — which is not
+   * something §3.4 has a concept for. `violatesLeasePolicy` is the assertion.
    */
   readonly leaseSeconds: number | null;
 }
@@ -80,6 +82,12 @@ export interface ClaimWait {
   readonly grantorClaimId: ClaimId | null;
   /** When authorization was settled: by policy at request time, or by an answer. */
   readonly authorizedAt: number | null;
+  /**
+   * The lease the requester asked for, or **null for "unspecified"** — which the
+   * grant resolves to the default lease, exactly as an immediate grant does.
+   * Null here has never meant "never expires": that reading is what let a claim
+   * granted off the waitlist become immortal.
+   */
   readonly requestedLeaseSeconds: number | null;
 }
 
@@ -388,6 +396,18 @@ export function checkGrantExtent(
       },
     },
   };
+}
+
+/**
+ * §3.4: "claims are leases, not locks." Every claim except the operator's root
+ * claim carries one, so a wedged holder always frees its paths eventually and
+ * force-release stays the fast path rather than the only path.
+ */
+export function violatesLeasePolicy(state: ClaimState): readonly Claim[] {
+  return state.claims.filter((claim) => {
+    const isRoot = claim.grantedFromClaimId === null;
+    return isRoot ? claim.leaseSeconds !== null : claim.leaseSeconds === null;
+  });
 }
 
 /** Every claim's extent is inside its granter's. The one invariant that must never break. */
