@@ -18,21 +18,43 @@ import type { AttentionItem } from "./types.js";
 import type { TriageActionInput } from "./types.js";
 
 /**
+ * Ranking only — sorted by the item's own `rank` ascending (assigned
+ * upstream, never recomputed here), tie-broken by `raisedAt` ascending so
+ * two equally-ranked items keep the older one first. No filtering: a
+ * conforming `AttentionDataSource` has already excluded whatever triage
+ * dismissed (see `visibleAttentionItems` below, and the NORMATIVE rule in
+ * `types.ts`'s doc comment — hiding a muted or currently-snoozed item is
+ * the *source's* job, not a surface's). This is what a surface with no
+ * ledger of its own — every surface in this package, today — should call.
+ */
+export function rankAttentionItems(
+  items: readonly AttentionItem[],
+): readonly AttentionItem[] {
+  return items
+    .slice()
+    .sort((a, b) => a.rank - b.rank || a.raisedAt - b.raisedAt);
+}
+
+/**
  * Ranking + visibility, together: "everything wanting a decision" excludes
- * whatever triage has already dismissed. Sorted by the item's own `rank`
- * ascending (assigned upstream — this never recomputes priority, only
- * orders by it), tie-broken by `raisedAt` ascending so two equally-ranked
- * items keep the older one first.
+ * whatever triage has already dismissed. This is the function a conforming
+ * `AttentionDataSource` implementation calls, over *its own* real ledger,
+ * to decide what to emit from `list()`/`subscribe()` —
+ * `createFixtureAttentionDataSource` (`data-source.ts`) is the reference
+ * implementation. It is **not** meant to be called a second time by a
+ * surface against an empty/synthetic ledger — that filters nothing (every
+ * status reads `"active"` with no records to consult) and only pretends to
+ * double-check triage state a surface has no access to. A surface ranks
+ * with `rankAttentionItems` instead and trusts the contract.
  */
 export function visibleAttentionItems(
   items: readonly AttentionItem[],
   ledger: TriageLedger,
   now: number,
 ): readonly AttentionItem[] {
-  return items
-    .filter((item) => triageStatus(ledger.get(item.id), now) === "active")
-    .slice()
-    .sort((a, b) => a.rank - b.rank || a.raisedAt - b.raisedAt);
+  return rankAttentionItems(
+    items.filter((item) => triageStatus(ledger.get(item.id), now) === "active"),
+  );
 }
 
 /**

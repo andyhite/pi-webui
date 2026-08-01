@@ -85,6 +85,8 @@ function feedLabel(feed: AttentionItem["feed"]): string {
       return "a session needs a look";
     case "completion":
       return "a session finished";
+    case "broadcast":
+      return "a session broadcast to other sessions";
   }
 }
 

@@ -28,11 +28,12 @@ function defaultNow(): number {
 }
 
 /**
- * Five realistic rows, one per feed (§7.1), ranked in the order the spec
- * lists the feeds — approvals and questions block a session outright, drift
- * and health are informational-until-acted-on, completions are the lowest
- * urgency. Ranking itself is Track A's derivation; these numbers are the
- * fixture's own stand-in ordering, not a rule this package enforces.
+ * Six realistic rows, one per feed (§7.1, §6.5), ranked in the order the
+ * spec lists the feeds — approvals and questions block a session outright,
+ * drift and health are informational-until-acted-on, completions and
+ * broadcasts are the lowest urgency. Ranking itself is Track A's
+ * derivation; these numbers are the fixture's own stand-in ordering, not a
+ * rule this package enforces.
  */
 export const FIXTURE_ATTENTION_ITEMS: readonly AttentionItem[] = [
   {
@@ -67,7 +68,11 @@ export const FIXTURE_ATTENTION_ITEMS: readonly AttentionItem[] = [
       kind: "question",
       questionId: "q1",
       text: "keep going with the migration?",
-      options: ["yes", "no", "ask again later"],
+      options: [
+        { id: "opt-yes", label: "yes" },
+        { id: "opt-no", label: "no" },
+        { id: "opt-later", label: "ask again later" },
+      ],
     },
     raisedAt: 900,
     snoozeUntil: null,
@@ -117,6 +122,26 @@ export const FIXTURE_ATTENTION_ITEMS: readonly AttentionItem[] = [
     raisedAt: 600,
     snoozeUntil: null,
   },
+  {
+    id: "attn-broadcast-1",
+    feed: "broadcast",
+    target: {
+      nodeId: "session-migrate",
+      workstreamId: "workstream-oxy-2982",
+      sessionId: "session-migrate",
+    },
+    rank: 5,
+    summary:
+      "session-migrate broadcast to 3 sessions: material state changed under you",
+    payload: {
+      kind: "broadcast",
+      broadcastId: "broadcast-1",
+      category: "material-state-changed",
+      recipientCount: 3,
+    },
+    raisedAt: 500,
+    snoozeUntil: null,
+  },
 ];
 
 export function createFixtureAttentionDataSource(
@@ -128,18 +153,26 @@ export function createFixtureAttentionDataSource(
   const listeners = new Set<(items: readonly AttentionItem[]) => void>();
 
   function currentItems(): readonly AttentionItem[] {
-    // Snoozed items report their `snoozeUntil` back to the caller (§7.1) —
-    // it lives in the ledger, not on the static item, so it is folded in
-    // here rather than mutated onto the fixture array — then ranked and
-    // filtered by the exact same reducer a caller could apply by hand
-    // (`queue.ts#visibleAttentionItems`), so a muted item genuinely never
-    // returns and a snoozed one returns only once its time is up (§7.1).
+    // Snoozed items report their `snoozeUntil` back to the caller while
+    // still hidden (§7.1) — it lives in the ledger, not on the static item,
+    // so it is folded in here rather than mutated onto the fixture array.
+    // Only while `now() < snoozedUntil`: once it elapses the record is
+    // stale (`visibleAttentionItems` below is about to let the item back
+    // through), and `snoozeUntil` MUST read `null` again the instant it
+    // returns (`types.ts`'s own contract) — a caller reading a non-null
+    // value here has no way to tell "still hidden" from "just came back".
+    const at = now();
     const withSnooze = items.map((item) => {
       const record = ledger.get(item.id);
-      if (!record || record.verb !== "snooze") return item;
-      return { ...item, snoozeUntil: record.snoozedUntil };
+      const snoozedUntil =
+        record?.verb === "snooze" ? record.snoozedUntil : null;
+      if (snoozedUntil === null || at >= snoozedUntil) return item;
+      return { ...item, snoozeUntil: snoozedUntil };
     });
-    return visibleAttentionItems(withSnooze, ledger, now());
+    // Ranked and filtered by the exact same reducer a caller could apply by
+    // hand (`queue.ts#visibleAttentionItems`), so a muted item genuinely
+    // never returns and a snoozed one returns only once its time is up.
+    return visibleAttentionItems(withSnooze, ledger, at);
   }
 
   function notify(): void {

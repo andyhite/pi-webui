@@ -14,18 +14,34 @@
  * two included, per §7.1's "every feed supports acknowledge, snooze, and
  * mute" — carries the three triage verbs.
  *
+ * **Keyboard bindings** (§7.1, §11 — "move through the queue, answer the
+ * selected item"), all on the listbox itself, none of them undocumented:
+ *
+ *   - `j` / `ArrowDown` — move the highlight to the next row (clamped, not
+ *     wrapping — see `moveQueueSelection`)
+ *   - `k` / `ArrowUp` — move the highlight to the previous row
+ *   - `Enter` — navigate to the highlighted row's target (the same act as
+ *     clicking its own button; the queue is a lens, §5)
+ *   - `1`–`9` — on a highlighted `question` row, answer with the Nth
+ *     option (1-indexed)
+ *   - `a` / `d` — on a highlighted `approval` row, approve / deny
+ *
+ * A full shortcuts overlay (§11: "every binding appears in a shortcuts
+ * overlay") does not exist anywhere in this codebase yet — a pre-existing
+ * gap this panel does not close on its own — so these bindings are
+ * documented here, in code, until that surface is built.
+ *
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
  */
 
 import { useEffect, useState } from "react";
 
-import { moveQueueSelection, visibleAttentionItems } from "./queue.js";
+import { moveQueueSelection, rankAttentionItems } from "./queue.js";
 import type {
   AttentionDataSource,
   AttentionItem,
   TriageActionInput,
 } from "./types.js";
-import { EMPTY_TRIAGE, type TriageLedger } from "@plotroom/core";
 
 export interface QueuePanelProps {
   readonly dataSource: AttentionDataSource;
@@ -50,6 +66,8 @@ function feedBadge(feed: AttentionItem["feed"]): string {
       return "H";
     case "completion":
       return "C";
+    case "broadcast":
+      return "B";
   }
 }
 
@@ -61,13 +79,6 @@ export function QueuePanel({
 }: QueuePanelProps) {
   const [items, setItems] = useState<readonly AttentionItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // A data source is expected to already apply triage before emitting
-  // (`createFixtureAttentionDataSource` does, and a live one will too, per
-  // `types.ts`'s contract) — `visibleAttentionItems` is still run here,
-  // against an always-empty ledger, purely for its ranking half: it
-  // guarantees rank+raisedAt order for *any* conforming source, rather
-  // than trusting every implementation to sort before it emits.
-  const ledger: TriageLedger = EMPTY_TRIAGE;
 
   useEffect(() => {
     const unsubscribe = dataSource.subscribe((next) => {
@@ -81,7 +92,13 @@ export function QueuePanel({
     return unsubscribe;
   }, [dataSource]);
 
-  const ranked = visibleAttentionItems(items, ledger, now());
+  // A data source is expected to already apply triage before emitting
+  // (`createFixtureAttentionDataSource` does, and a live one will too, per
+  // `types.ts`'s NORMATIVE rule: hiding a muted or currently-snoozed item
+  // is the source's job) — this only ranks what it was given, over
+  // `rankAttentionItems`, never re-filters against a ledger it has no real
+  // copy of.
+  const ranked = rankAttentionItems(items);
 
   function move(direction: "next" | "prev"): void {
     setSelectedId((current) => moveQueueSelection(ranked, current, direction));
@@ -100,9 +117,52 @@ export function QueuePanel({
     if (event.key === "j" || event.key === "ArrowDown") {
       event.preventDefault();
       move("next");
-    } else if (event.key === "k" || event.key === "ArrowUp") {
+      return;
+    }
+    if (event.key === "k" || event.key === "ArrowUp") {
       event.preventDefault();
       move("prev");
+      return;
+    }
+
+    const highlighted = ranked.find((item) => item.id === selectedId);
+    if (!highlighted) return;
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      select(highlighted);
+      return;
+    }
+
+    if (highlighted.payload.kind === "question") {
+      const index = Number(event.key) - 1;
+      const option = highlighted.payload.options[index];
+      if (Number.isInteger(index) && index >= 0 && option !== undefined) {
+        event.preventDefault();
+        void dataSource.answerQuestion(
+          highlighted.id,
+          option.id,
+          triageInput(),
+        );
+        return;
+      }
+    }
+
+    if (highlighted.payload.kind === "approval") {
+      if (event.key === "a") {
+        event.preventDefault();
+        void dataSource.decideApproval(
+          highlighted.id,
+          "approve",
+          triageInput(),
+        );
+        return;
+      }
+      if (event.key === "d") {
+        event.preventDefault();
+        void dataSource.decideApproval(highlighted.id, "deny", triageInput());
+        return;
+      }
     }
   }
 
@@ -130,17 +190,17 @@ export function QueuePanel({
             <span>
               {item.payload.options.map((option) => (
                 <button
-                  key={option}
+                  key={option.id}
                   type="button"
                   onClick={() =>
                     void dataSource.answerQuestion(
                       item.id,
-                      option,
+                      option.id,
                       triageInput(),
                     )
                   }
                 >
-                  {option}
+                  {option.label}
                 </button>
               ))}
             </span>

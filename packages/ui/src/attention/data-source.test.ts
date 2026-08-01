@@ -19,6 +19,7 @@ describe("createFixtureAttentionDataSource", () => {
       "drift",
       "health",
       "completion",
+      "broadcast",
     ]);
   });
 
@@ -50,6 +51,10 @@ describe("createFixtureAttentionDataSource", () => {
     now = 100;
     const back = (await source.list()).find((i) => i.id === "attn-health-1");
     expect(back).toBeDefined();
+    // NORMATIVE (`types.ts`): `snoozeUntil` reads `null` again the instant
+    // an item returns — a stale non-null value here would be
+    // indistinguishable from "still hidden".
+    expect(back?.snoozeUntil).toBeNull();
   });
 
   it("answering a question acknowledges it \u2014 it leaves the queue", async () => {
@@ -57,7 +62,7 @@ describe("createFixtureAttentionDataSource", () => {
       FIXTURE_ATTENTION_ITEMS,
       () => 0,
     );
-    await source.answerQuestion("attn-question-1", "yes", {
+    await source.answerQuestion("attn-question-1", "opt-yes", {
       at: 0,
       by: humanAuthor,
     });
@@ -80,6 +85,44 @@ describe("createFixtureAttentionDataSource", () => {
     ).toBeUndefined();
   });
 
+  it("a broadcast row carries {id, category, recipientCount} and answers only to triage", async () => {
+    const source = createFixtureAttentionDataSource(
+      FIXTURE_ATTENTION_ITEMS,
+      () => 0,
+    );
+    const items = await source.list();
+    const broadcast = items.find((i) => i.feed === "broadcast");
+    expect(broadcast?.payload).toEqual({
+      kind: "broadcast",
+      broadcastId: "broadcast-1",
+      category: "material-state-changed",
+      recipientCount: 3,
+    });
+
+    await source.acknowledge(broadcast!.id, { at: 0, by: humanAuthor });
+    expect(
+      (await source.list()).find((i) => i.feed === "broadcast"),
+    ).toBeUndefined();
+  });
+
+  it("a question row's options carry real ids, not just labels", async () => {
+    const source = createFixtureAttentionDataSource(
+      FIXTURE_ATTENTION_ITEMS,
+      () => 0,
+    );
+    const question = (await source.list()).find(
+      (i) => i.id === "attn-question-1",
+    );
+    expect(question?.payload).toMatchObject({
+      kind: "question",
+      options: [
+        { id: "opt-yes", label: "yes" },
+        { id: "opt-no", label: "no" },
+        { id: "opt-later", label: "ask again later" },
+      ],
+    });
+  });
+
   it("notifies subscribers on every triage gesture", async () => {
     const source = createFixtureAttentionDataSource(
       FIXTURE_ATTENTION_ITEMS,
@@ -88,7 +131,7 @@ describe("createFixtureAttentionDataSource", () => {
     const seen: number[] = [];
     const unsubscribe = source.subscribe((items) => seen.push(items.length));
     await source.acknowledge("attn-completion-1", { at: 0, by: humanAuthor });
-    expect(seen).toEqual([5, 4]);
+    expect(seen).toEqual([6, 5]);
     unsubscribe();
   });
 });

@@ -19,7 +19,7 @@ function item(overrides: Partial<AttentionItem> = {}): AttentionItem {
       kind: "question",
       questionId: "q1",
       text: "text",
-      options: ["yes"],
+      options: [{ id: "opt-yes", label: "yes" }],
     },
     raisedAt: 0,
     snoozeUntil: null,

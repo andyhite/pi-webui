@@ -577,7 +577,11 @@ export const FIXTURE_ATTENTION_ITEMS: readonly AttentionItem[] = [
       kind: "question",
       questionId: "q1",
       text: "keep going with the migration?",
-      options: ["yes", "no", "ask again later"],
+      options: [
+        { id: "opt-yes", label: "yes" },
+        { id: "opt-no", label: "no" },
+        { id: "opt-later", label: "ask again later" },
+      ],
     },
     raisedAt: 1_700_000_050,
     snoozeUntil: null,
@@ -625,6 +629,26 @@ export const FIXTURE_ATTENTION_ITEMS: readonly AttentionItem[] = [
     summary: "session #2 finished: updated the contributing guide",
     payload: { kind: "completion", sessionId: "session-ended" },
     raisedAt: 1_699_050_000,
+    snoozeUntil: null,
+  },
+  {
+    id: "attn-broadcast-1",
+    feed: "broadcast",
+    target: {
+      nodeId: "session-running",
+      workstreamId: "workstream-oxy-2982",
+      sessionId: "session-running",
+    },
+    rank: 5,
+    summary:
+      "session #1 broadcast to 2 sessions: material state changed under you",
+    payload: {
+      kind: "broadcast",
+      broadcastId: "broadcast-1",
+      category: "material-state-changed",
+      recipientCount: 2,
+    },
+    raisedAt: 1_699_000_000,
     snoozeUntil: null,
   },
 ];

@@ -10,6 +10,7 @@ import {
   acknowledgeOnAnswer,
   applyQueueTriage,
   moveQueueSelection,
+  rankAttentionItems,
   visibleAttentionItems,
 } from "./queue.js";
 import type { AttentionItem } from "./types.js";
@@ -25,7 +26,10 @@ function item(overrides: Partial<AttentionItem> = {}): AttentionItem {
       kind: "question",
       questionId: "q1",
       text: "text",
-      options: ["yes", "no"],
+      options: [
+        { id: "opt-yes", label: "yes" },
+        { id: "opt-no", label: "no" },
+      ],
     },
     raisedAt: 100,
     snoozeUntil: null,
@@ -33,20 +37,37 @@ function item(overrides: Partial<AttentionItem> = {}): AttentionItem {
   };
 }
 
-describe("visibleAttentionItems", () => {
+describe("rankAttentionItems", () => {
   it("sorts by rank ascending", () => {
     const a = item({ id: "a", rank: 2 });
     const b = item({ id: "b", rank: 0 });
     const c = item({ id: "c", rank: 1 });
-    const result = visibleAttentionItems([a, b, c], EMPTY_TRIAGE, 0);
-    expect(result.map((i) => i.id)).toEqual(["b", "c", "a"]);
+    expect(rankAttentionItems([a, b, c]).map((i) => i.id)).toEqual([
+      "b",
+      "c",
+      "a",
+    ]);
   });
 
   it("tie-breaks equal rank by raisedAt ascending (oldest first)", () => {
     const a = item({ id: "a", rank: 0, raisedAt: 200 });
     const b = item({ id: "b", rank: 0, raisedAt: 100 });
-    const result = visibleAttentionItems([a, b], EMPTY_TRIAGE, 0);
-    expect(result.map((i) => i.id)).toEqual(["b", "a"]);
+    expect(rankAttentionItems([a, b]).map((i) => i.id)).toEqual(["b", "a"]);
+  });
+
+  it("never filters — a surface with no ledger of its own trusts the source already excluded triaged items", () => {
+    const a = item({ id: "a" });
+    expect(rankAttentionItems([a])).toHaveLength(1);
+  });
+});
+
+describe("visibleAttentionItems", () => {
+  it("sorts by rank ascending, like rankAttentionItems", () => {
+    const a = item({ id: "a", rank: 2 });
+    const b = item({ id: "b", rank: 0 });
+    const c = item({ id: "c", rank: 1 });
+    const result = visibleAttentionItems([a, b, c], EMPTY_TRIAGE, 0);
+    expect(result.map((i) => i.id)).toEqual(["b", "c", "a"]);
   });
 
   it("excludes an acknowledged item", () => {
