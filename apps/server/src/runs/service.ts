@@ -637,6 +637,18 @@ export class RunService {
    * that gesture forever (principle 9).
    */
   async recoverFromRestart(message: string): Promise<RestartRecovery> {
+    // A queued run the last process was in the middle of starting cannot still be
+    // starting: the process that was starting it is gone. It goes back to
+    // `queued`, where it will be re-previewed against its recorded contract like
+    // any other admission — a restart is not a reason to run something the
+    // operator did not agree to (§4.1).
+    const requeued = this.deps.stores.queue.reclaimUnstarted();
+    if (requeued.length > 0) {
+      this.deps.logger.warn("re-queued runs a restart interrupted", {
+        entryIds: requeued.map((entry) => entry.id),
+      });
+    }
+
     const stranded = this.deps.stores.runs.releaseUnsettledInitiations();
     if (stranded.length > 0) {
       this.deps.logger.warn("freed initiation keys no attempt can still hold", {

@@ -831,6 +831,123 @@ const runTools: readonly AgentTool[] = [
     "/api/commands/:id/preview",
     { id: ID },
   ),
+  // A read, and the one that makes §4.1's "the run affordance never disables"
+  // implementable: a blocked command has a preview to show — "waiting on: …" plus
+  // the upstream scope that would unblock it — instead of a disabled button.
+  read(
+    "run_scope_preview",
+    "Preview a scoped run: exactly which commands it would execute in dependency order, what history says the scope may cost, and what each blocked command is waiting on (§4.1).",
+    "the run menu's subgraph / what's-missing / re-run-drifted preview",
+    "/api/run-scopes/preview",
+    {
+      scope: {
+        type: "string",
+        required: true,
+        description:
+          "one | subgraph | missing | drifted-workstream | drifted-fleet (§4.1)",
+      },
+      scopeId: {
+        type: "string",
+        required: false,
+        description:
+          "the command or workstream the scope is taken from; omitted only for drifted-fleet",
+      },
+    },
+  ),
+  mutate({
+    name: "run_scope",
+    summary:
+      "Run a scope: this command, its downstream subgraph, the upstream chain that would unblock it, or everything drifted (§4.1).",
+    gesture: "confirming a scoped run from the run menu",
+    method: "POST",
+    endpoint: "/api/run-scopes",
+    input: {
+      scope: {
+        type: "string",
+        required: true,
+        description: "which scope (§4.1)",
+      },
+      scopeId: {
+        type: "string",
+        required: false,
+        description: "the command or workstream the scope is taken from",
+      },
+      initiationKey: {
+        type: "string",
+        required: true,
+        description:
+          "the caller's own name for this gesture; one key covers the whole scope, so a retry cannot produce two batches (principle 9)",
+      },
+      spendCapMicros: {
+        type: "number",
+        required: false,
+        description: "the cap accepted at the scoped preview (§4.1, §8)",
+      },
+    },
+    requires: {
+      reflexivity: "target-session",
+      approval: "outside-policy",
+      targetResolution:
+        "the sessions every command in the resolved scope has already run — the same resolution as `run_one`, applied to each. NEVER the sessions the scope is about to create: they are descendants by construction, and refusing them would refuse a session from fanning work out at all.",
+    },
+  }),
+  read(
+    "run_queue_read",
+    "Read the queue of already-initiated work: what is waiting, its position, and what is asking to be confirmed because its inputs drifted (§4.1).",
+    "the queue of work",
+    "/api/run-queue",
+  ),
+  mutate({
+    name: "run_queue_cancel",
+    summary:
+      "Cancel a queued run before it starts. Refused once it has started — stopping a started run is a stop (§6.7).",
+    gesture: "cancel from the queue of work",
+    method: "DELETE",
+    endpoint: "/api/run-queue/:id",
+    input: { id: id("the queued run's id") },
+    requires: {
+      reflexivity: "target-session",
+      targetResolution:
+        "the sessions the queued command has already run — the same resolution as `run_one`. A queued run has no session of its own yet, which is exactly why cancelling it is cheap.",
+    },
+  }),
+  mutate({
+    name: "run_queue_confirm",
+    summary:
+      "Confirm a queued run whose inputs drifted while it waited, accepting what it would assemble now. The preview is the contract, so nothing runs without this (§4.1).",
+    gesture: "answering the re-ask on a queued run",
+    method: "POST",
+    endpoint: "/api/run-queue/:id/confirm",
+    input: { id: id("the queued run's id") },
+    requires: {
+      reflexivity: "target-session",
+      approval: "outside-policy",
+      targetResolution:
+        "the sessions the queued command has already run — the same resolution as `run_one`, because confirming is agreeing to run it.",
+    },
+  }),
+  read(
+    "run_batch_read",
+    'Read one scoped run and every command in it, settled ones included — which is what a paused batch\'s "address it and resume" is about (§4.1).',
+    "opening a paused batch from the queue of work",
+    "/api/run-batches/:id",
+    { id: id("the batch id") },
+  ),
+  mutate({
+    name: "run_batch_resume",
+    summary:
+      "Resume a batch that paused on a failed or out-of-budget session. An aborted batch never resumes — stopped means stopped (§4.1).",
+    gesture: "resume from the paused batch",
+    method: "POST",
+    endpoint: "/api/run-batches/:id/resume",
+    input: { id: id("the batch id") },
+    requires: {
+      reflexivity: "target-session",
+      approval: "outside-policy",
+      targetResolution:
+        "the sessions every command still in the batch has already run — the same resolution as `run_one`. Resuming is initiating the remainder, so it is checked like initiating it.",
+    },
+  }),
   mutate({
     name: "session_submit",
     summary:

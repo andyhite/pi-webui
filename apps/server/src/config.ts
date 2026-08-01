@@ -45,6 +45,12 @@ export interface ServerConfig {
    * "never" are different answers.
    */
   readonly compactionIntervalSeconds: number;
+  /**
+   * How many sessions may run at once (§4.1's configurable global limit).
+   * Initiation beyond it queues; queuing is admission of already-initiated work,
+   * never a decision about whether it runs.
+   */
+  readonly concurrencyLimit: number;
 }
 
 export interface RuntimeConfig {
@@ -139,6 +145,7 @@ export interface ServerConfigOverrides {
   readonly runtime?: Partial<RuntimeConfig>;
   readonly workspace?: Partial<WorkspaceConfig>;
   readonly compactionIntervalSeconds?: number;
+  readonly concurrencyLimit?: number;
 }
 
 export const DEFAULT_RUNTIME_ADAPTER = "pi-coding-agent";
@@ -149,6 +156,22 @@ export const DEFAULT_RUNTIME_ADAPTER = "pi-coding-agent";
  */
 export const DEFAULT_COMPACTION_INTERVAL_SECONDS = 6 * 60 * 60;
 
+/**
+ * Four concurrent sessions, decided.
+ *
+ * §4.1 says the limit is configurable and says nothing about its value, so this is
+ * a default rather than a rule. Four is chosen so the queue is a path the product
+ * actually takes on an ordinary board rather than an unreachable branch: a fleet
+ * gesture over a handful of commands queues, is visible, and is cancellable on the
+ * first day of use. It is also survivable on one laptop against one provider's
+ * rate limits, which a much higher number is not.
+ *
+ * Zero is refused rather than treated as "unlimited": a limit of none is spelled
+ * by setting it high, and a typo that silently removed the bound would be the one
+ * failure the limit exists to prevent.
+ */
+export const DEFAULT_CONCURRENCY_LIMIT = 4;
+
 function parseSeconds(value: string | undefined, fallback: number): number {
   if (value === undefined || value.trim() === "") return fallback;
   const parsed = Number(value);
@@ -158,6 +181,17 @@ function parseSeconds(value: string | undefined, fallback: number): number {
   if (!Number.isFinite(parsed) || parsed < 0) {
     throw new Error(
       `PLOTROOM_COMPACTION_INTERVAL_SECONDS must be a non-negative number of seconds (got ${value})`,
+    );
+  }
+  return parsed;
+}
+
+function parseConcurrency(value: string | undefined, fallback: number): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(
+      `PLOTROOM_CONCURRENCY_LIMIT must be a whole number of sessions, at least 1 (got ${value})`,
     );
   }
   return parsed;
@@ -229,6 +263,12 @@ export function loadServerConfig(
       parseSeconds(
         env.PLOTROOM_COMPACTION_INTERVAL_SECONDS,
         DEFAULT_COMPACTION_INTERVAL_SECONDS,
+      ),
+    concurrencyLimit:
+      overrides.concurrencyLimit ??
+      parseConcurrency(
+        env.PLOTROOM_CONCURRENCY_LIMIT,
+        DEFAULT_CONCURRENCY_LIMIT,
       ),
     runtime: {
       adapterId:

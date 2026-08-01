@@ -25,11 +25,13 @@ import { logLevelRoutes } from "./routes/log-level.js";
 import { maintenanceRoutes } from "./routes/maintenance.js";
 import { objectRoutes } from "./routes/objects.js";
 import { restorableRoutes } from "./routes/restorable.js";
+import { runQueueRoutes } from "./routes/run-queue.js";
 import { runRoutes } from "./routes/runs.js";
 import { sessionRoutes } from "./routes/sessions.js";
 import { snapshotRoutes } from "./routes/snapshot.js";
 import { spendRoutes } from "./routes/spend.js";
 import { workstreamRoutes } from "./routes/workstreams.js";
+import { RunQueueService } from "./runs/queue.js";
 import { RunService } from "./runs/service.js";
 import { createRuntimeRegistry } from "./runtime/index.js";
 import { createSessionGate } from "./sessions/gate.js";
@@ -55,6 +57,9 @@ export interface AppDependencies {
 export interface AppRuntime {
   readonly hub: SessionHub;
   readonly runs: RunService;
+  /** §4.1's queue, and the subscription that lets it see a slot free. */
+  readonly queue: RunQueueService;
+  readonly stopQueue: () => void;
   /** The scheduled version-compaction sweep (§15-3, Epic 2.3). */
   readonly compaction: CompactionSchedule;
 }
@@ -137,6 +142,19 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     gate,
   });
 
+  // Scoped runs and the concurrency queue (§4.1). It subscribes to the session
+  // stream rather than being called from the run path: a slot frees when a session
+  // ends by any route, and the queue only ever admits work a gesture already
+  // initiated (principle 2).
+  const queue = new RunQueueService({
+    stores,
+    bus,
+    logger,
+    runs,
+    concurrencyLimit: config.concurrencyLimit,
+  });
+  const unsubscribeQueue = queue.subscribe();
+
   app.route("/api", healthRoutes(db));
   app.route("/api", logLevelRoutes(logger));
   app.route("/api", workstreamRoutes(stores));
@@ -144,6 +162,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", graphRoutes(stores));
   app.route("/api", commandRoutes(stores));
   app.route("/api", runRoutes(stores, runs));
+  app.route("/api", runQueueRoutes(queue));
   app.route("/api", sessionRoutes(stores, runs, claims));
   app.route("/api", claimRoutes(claims));
   app.route("/api", spendRoutes(stores));
@@ -209,5 +228,5 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     );
   });
 
-  return { hub, runs, compaction };
+  return { hub, runs, queue, stopQueue: unsubscribeQueue, compaction };
 }

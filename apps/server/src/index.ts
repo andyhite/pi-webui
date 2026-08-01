@@ -75,8 +75,16 @@ export function startServer(config = loadServerConfig()) {
     recovered,
     hub: runtime.hub,
     runs: runtime.runs,
+    queue: runtime.queue,
     close: async () => {
       await recovered;
+
+      // First: the queue stops listening. A shutdown ends every live session, and
+      // a queue still subscribed would read those ends as slots freeing and try to
+      // admit the next run against a database that is closing (§4.1's queue is
+      // admission, and there is nothing to admit into a server that is going
+      // away).
+      runtime.stopQueue();
 
       // A graceful close does not orphan a runtime: every live session is
       // recorded as **interrupted** here and its process terminated, rather than
