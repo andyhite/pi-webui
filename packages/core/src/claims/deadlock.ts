@@ -1,7 +1,14 @@
+import type { Author } from "../author.js";
 import type { SessionId } from "../ids.js";
 import type { ClaimWaitId } from "./ids.js";
 import type { Claim, ClaimState, ClaimWait } from "./model.js";
-import { claimById, claimWaitReason, type ClaimWaitReason } from "./model.js";
+import {
+  authorityFor,
+  blockingClaims,
+  claimById,
+  claimWaitReason,
+  type ClaimWaitReason,
+} from "./model.js";
 import { describePath, type ClaimPath } from "./paths.js";
 
 /**
@@ -35,8 +42,47 @@ export interface WaitEdge {
   readonly reason: ClaimWaitReason;
 }
 
+/**
+ * The graph as the **wait rows say** it is: whatever each wait recorded as its
+ * blockers, last time something synced them.
+ *
+ * This is what detection runs on, because it is what the operator sees — but it is
+ * only as true as the last sync. {@link liveWaitForEdges} is the same graph
+ * recomputed from the claims themselves, and the two agreeing is an invariant
+ * rather than an accident: a divergence means some path added a claim without
+ * resyncing, which hides both a stale waitlist and any cycle that claim closed.
+ */
 export function waitForEdges(state: ClaimState): readonly WaitEdge[] {
   return state.waits.flatMap((wait) => edgesForWait(state, wait));
+}
+
+/**
+ * The graph as the **claims imply** it, ignoring what the wait rows recorded.
+ *
+ * Every blocker is recomputed with the same rules a request uses — who holds
+ * anything at or under the path, and (for an unanswered approval) who the
+ * authority would be now. A cycle here that `waitForEdges` cannot see is not a
+ * milder problem than an ordinary deadlock: the sessions are just as stuck, and
+ * nothing in the product is looking at it.
+ */
+export function liveWaitForEdges(
+  state: ClaimState,
+  asOf?: number,
+): readonly WaitEdge[] {
+  return state.waits.flatMap((wait) => {
+    const holder: Author = { kind: "session", sessionId: wait.sessionId };
+    const blockers = blockingClaims(state, wait.path, holder, asOf);
+    const authority = authorityFor(state, wait.path, {
+      excluding: new Set(blockers.map((claim) => claim.id)),
+      ...(asOf === undefined ? {} : { asOf }),
+    });
+
+    return edgesForWait(state, {
+      ...wait,
+      blockedByClaimIds: blockers.map((claim) => claim.id),
+      grantorClaimId: authority?.id ?? null,
+    });
+  });
 }
 
 export function edgesForWait(

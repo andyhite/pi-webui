@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { humanAuthor, sessionAuthor } from "../author.js";
 import type { SessionId } from "../ids.js";
-import { findAnyWaitCycle, waitForEdges } from "./deadlock.js";
+import {
+  findAnyWaitCycle,
+  liveWaitForEdges,
+  waitForEdges,
+  type WaitEdge,
+} from "./deadlock.js";
 import { createClaimManager, type ClaimManager } from "./manager.js";
 import {
   authorityFor,
@@ -137,7 +142,7 @@ function drive(seed: number, steps: number): Run {
       if (outcome.ok) state = outcome.state;
     }
 
-    assertInvariants(state, manager, log);
+    assertInvariants(state, manager, log, clock());
   }
 
   return { state, manager, steps: log };
@@ -147,6 +152,7 @@ function assertInvariants(
   state: ClaimState,
   manager: ClaimManager,
   log: readonly string[],
+  now: number,
 ): void {
   const trail = log.join(" | ");
 
@@ -169,13 +175,18 @@ function assertInvariants(
 
   // Writability is single-valued: for any path, at most one session is allowed to
   // write it, and it is the holder of the deepest covering claim.
+  //
+  // Both readings are taken `asOf` the same instant, because `checkWrite` is
+  // lapse-aware: a lapsed-but-unswept claim authorizes nothing, so comparing it
+  // against a lapse-blind `authorityFor` would fail on the product being right.
+  // (Seed 23 reaches exactly that state.)
   for (const path of PATHS) {
     const allowed = SESSIONS.filter(
       (sessionId) =>
-        manager.checkWrite(state, sessionAuthor(sessionId), path).allowed,
+        manager.checkWrite(state, sessionAuthor(sessionId), path, now).allowed,
     );
     expect(allowed.length, `${trail} :: ${path}`).toBeLessThanOrEqual(1);
-    const authority = authorityFor(state, claimPath(path));
+    const authority = authorityFor(state, claimPath(path), { asOf: now });
     if (allowed.length === 1) {
       expect(
         isHeldBy(authority as Claim, sessionAuthor(allowed[0] as SessionId)),
@@ -217,14 +228,35 @@ function assertInvariants(
 
   // §3.4: "deadlock is detected, not endured" — no reachable state may contain a
   // standing wait-for cycle, however it was reached. Insertion refuses one;
-  // promotion and approval churn sweep one; this assertion is what says the whole
-  // class cannot come back.
-  const cycle = findAnyWaitCycle(waitForEdges(state));
-  expect(
+  // promotion, approval answers, and every grant sweep one.
+  //
+  // Asserted twice, over both readings of the graph. The **stored** one is what
+  // the product looks at and shows. The **live** one recomputes each wait's
+  // blockers from the claims, and it is the stronger assertion by a wide margin:
+  // a path that adds a claim without resyncing leaves a cycle that only the live
+  // reading can see — which is exactly the defect that reached review, where an
+  // immediate grant made a waiter's blockers stale and hid the loop behind them.
+  const describeCycle = (cycle: readonly WaitEdge[] | null) =>
     cycle?.map((edge) => `${edge.from}->${edge.to} on ${edge.path.display}`) ??
-      null,
-    `${trail} :: standing wait-for cycle`,
+    null;
+
+  expect(
+    describeCycle(findAnyWaitCycle(waitForEdges(state))),
+    `${trail} :: standing wait-for cycle (stored blockers)`,
   ).toBeNull();
+  expect(
+    describeCycle(findAnyWaitCycle(liveWaitForEdges(state))),
+    `${trail} :: standing wait-for cycle (live blockers)`,
+  ).toBeNull();
+
+  // And the two readings agree: a waitlist is visible state (§3.4), so a row that
+  // names fewer blockers than the claims imply is a waitlist lying about who it
+  // waits for, whether or not that happens to close a cycle today.
+  const edgeKey = (edge: WaitEdge) => `${edge.waitId}->${edge.to}`;
+  expect(
+    [...new Set(liveWaitForEdges(state).map(edgeKey))].sort(),
+    `${trail} :: stale wait rows`,
+  ).toEqual([...new Set(waitForEdges(state).map(edgeKey))].sort());
 
   // Policies never outlive their declaring claim, and never exceed its extent.
   for (const policy of state.policies) {
@@ -237,11 +269,22 @@ function assertInvariants(
 }
 
 describe("claim invariants over random operation sequences", () => {
-  // Seeds 5, 50, and 60 are here because they reach the churn-formed wait-for
-  // cycle (`findAnyWaitCycle` catches them with the deadlock sweep removed) —
-  // kept named so the acyclicity invariant demonstrably has teeth rather than
-  // passing vacuously.
-  for (const seed of [1, 5, 7, 42, 50, 60, 1337, 20_250_801]) {
+  // The named seeds are the measured ones, not decorative — each was checked by
+  // reintroducing the defect it catches and watching this suite fail:
+  //
+  // - **13 and 60** reach a standing wait-for cycle with the deadlock sweep
+  //   removed entirely, so they hold the stored-blocker acyclicity assertion to
+  //   account.
+  // - **19, 23, 49** reach a *stale wait row* with only the grant-path sweep
+  //   removed — the defect that reached review, where an immediate grant left a
+  //   waiter's blockers naming the wrong sessions. They are what makes the live-
+  //   blocker half of the invariant more than decoration: the stored reading is
+  //   blind to that state by construction.
+  //
+  // The rest are breadth. (An earlier version of this comment credited seeds 5
+  // and 50; re-measuring against the current driver says otherwise, so it now
+  // names what was actually observed.)
+  for (const seed of [1, 7, 13, 19, 23, 42, 49, 60, 1337, 20_250_801]) {
     it(`holds for seed ${seed}`, () => {
       const run = drive(seed, 250);
       expect(run.steps.length).toBe(250);
