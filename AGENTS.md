@@ -126,16 +126,47 @@ the place the rule is stated.
 reimplement a rule at a call site — the canvas, the API, and agent tools must
 refuse identically (principle 8):
 
-| Rule               | Predicate         | Spec                                                              |
-| ------------------ | ----------------- | ----------------------------------------------------------------- |
-| Legal connections  | `checkConnection` | §3.7 (content → command, content → running session, nothing else) |
-| Command acyclicity | `wouldCycle`      | §3.7 (sessions exempt — injection is bidirectional)               |
-| Reflexivity        | `checkAuthoring`  | principle 1 (no session authors into its own chain)               |
-| Version compaction | `isCompactable`   | §15 invariant 3                                                   |
+| Rule               | Predicate          | Spec                                                              |
+| ------------------ | ------------------ | ----------------------------------------------------------------- |
+| Legal connections  | `checkConnection`  | §3.7 (content → command, content → running session, nothing else) |
+| Command acyclicity | `wouldCycle`       | §3.7 (sessions exempt — injection is bidirectional)               |
+| Reflexivity        | `checkAuthoring`   | principle 1 (no session authors into its own chain)               |
+| Version compaction | `isCompactable`    | §15 invariant 3                                                   |
+| Run retention      | `isRunCompactable` | §4.4 (last N per definition + pinned + window)                    |
 
 Authorship is enforced twice on purpose: the predicate refuses, and the schema
 cannot represent an unattributed context edge (`author_kind NOT NULL` plus a
 CHECK that only provenance edges may be `system`).
+
+**Commands and runs** live in `command_definitions` / `commands` /
+`command_parameter_bindings` / `command_outputs` and `runs` / `run_inputs` /
+`run_outputs` (migration 5). Four §3.5 rules are schema constraints rather
+than conventions, so no call site can get them wrong:
+
+- a `producing` definition cannot exist without an expected outcome, and an
+  `open` one cannot carry one;
+- a `proposed` parameter binding cannot carry a `confirmed_at`, so a derived
+  default is never readable as a confirmed value (`resolveParameters` refuses
+  to produce run configuration while one is outstanding);
+- a bound `command_outputs` row cannot be marked `broken_at` — post-bind the
+  command dependency has evaporated, so only a pre-bind placeholder breaks;
+- `runs.assembled_blob_id` and `runs.config_json` are `NOT NULL` (§15-1), and
+  `run_inputs.version_id` is a real foreign key, so a version a run consumed
+  cannot be deleted while the run exists (§15-3's interplay).
+
+There is deliberately **no `latest` column anywhere**: `RunStore.resolve`
+orders by `runs.ordinal`, so `output@n` is the general address and `latest` is
+one query over it (§15-4). Publish (`command_outputs.published_at`, pre-run,
+on a placeholder) and promote (`ObjectStore.promote`, after the fact, on an
+object) stay two verbs; publishing a bound output is refused.
+
+**Retention policy defaults, decided.** Run history keeps the **last 20 runs
+per command definition**, plus every pinned run and everything it references,
+plus everything inside a **30-day window** — the same window as version
+compaction, so the two rules cannot disagree about how old "old" is
+(`DEFAULT_RUN_RETENTION_POLICY` in `@plotroom/core`). Retention never makes a
+live address stop answering: the run `latest` currently resolves to is not
+compactable at any age.
 
 **Stores take an injectable clock** (`ObjectStore(state, () => seconds)`).
 Retention, drift, and idempotency are untestable against a real clock.
@@ -283,8 +314,8 @@ CONTRIBUTING.md        How to contribute (workflow detail)
 
 Record answers here as they are decided; do not assume.
 
-- Remaining graph schema: workstreams, nodes, edges, commands, runs, sessions
-- Retention policy defaults (N runs per definition; version window currently defaults to 30 days)
+- Remaining graph schema: sessions (Epic 1.5). Workstreams, nodes, edges,
+  commands, and runs are landed — see "Persistence notes".
 - Collection membership model (the `collection` kind has no members yet)
 - Electron packaging/updater tooling (electron-builder vs electron-forge)
 - Plugin distribution and permission-grant UX
