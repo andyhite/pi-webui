@@ -75,6 +75,7 @@ import {
 } from "./tombstones.js";
 import { remotelyDeletedIds, withConfirmed } from "./reconcile.js";
 import { applyArrangementReset } from "./arrangement-reset.js";
+import { computeAbsoluteScreenExtents } from "./node-extents.js";
 
 export interface CanvasNodeInput {
   readonly id: string;
@@ -1149,22 +1150,28 @@ function CanvasInner({
     ];
   }, [viewport]);
 
-  // Screen-space extents for every top-level box node currently on screen
+  // Screen-space extents for every *visible* box node currently on screen
   // (reserved regions above are screen-anchored, so bubbles must place in
-  // the same space). Contained (workstream-child) nodes are a known,
-  // documented gap: xyflow reports their `position` parent-relative, not
-  // absolute, and resolving that is Stage 2 follow-up, not this mechanic.
+  // the same space) — contained (workstream-child) nodes included, resolved
+  // to their absolute position by `computeAbsoluteScreenExtents` (containers
+  // here are always top-level, so a child's absolute position is exactly
+  // its parent's position plus its own).
   const bubbleNodeExtents = useMemo<NodeExtent[]>(
     () =>
-      nodes
-        .filter((n): n is BoxNode => n.type === "box" && !n.parentId)
-        .map((n) => ({
-          id: n.id,
-          x: n.position.x * viewport.zoom + viewport.x,
-          y: n.position.y * viewport.zoom + viewport.y,
-          width: (n.measured?.width ?? FALLBACK_WIDTH) * viewport.zoom,
-          height: (n.measured?.height ?? FALLBACK_HEIGHT) * viewport.zoom,
-        })),
+      computeAbsoluteScreenExtents(
+        nodes
+          .filter((n): n is BoxNode => n.type === "box")
+          .map((n) => ({
+            id: n.id,
+            x: n.position.x,
+            y: n.position.y,
+            width: n.measured?.width ?? FALLBACK_WIDTH,
+            height: n.measured?.height ?? FALLBACK_HEIGHT,
+            parentId: n.parentId,
+            hidden: n.hidden,
+          })),
+        viewport,
+      ),
     [nodes, viewport],
   );
 

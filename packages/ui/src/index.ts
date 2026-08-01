@@ -26,6 +26,7 @@ export * from "./notes/model.js";
 export * from "./notes/NotePanel.js";
 export * from "./gestures/one-gesture.js";
 export * from "./canvas/tombstones.js";
+export * from "./canvas/node-extents.js";
 export * from "./canvas/PlotCanvas.js";
 export * from "./warnings/derive.js";
 export * from "./warnings/GraphWarningsPanel.js";
