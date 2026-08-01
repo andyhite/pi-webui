@@ -299,15 +299,47 @@ run the renderer in._
 - [ ] Idempotent initiation: one gesture → one session/run, across retries and reconnects (principle 9)
 - [ ] Run history capture at run time (exercises §15-1/§15-4 written in Phase 1)
 
-### Epic 4.3 — Workspaces (`workspaces`)
+### Epic 4.3 — Workspaces (`workspaces`) — _done (domain + git kind)_
 
-- [ ] Workspace kind abstraction: boundary guaranteed by product, mechanism per kind (§3.4) — git kind first
-- [ ] Git provisioning: branch from configurable template; existing branches taken as-is from remote; provision at first run, not workstream creation (§3.4, §3.5)
-- [ ] Readiness: declared per-repo setup step gates runs; not-ready blocks with visible reason; setup output inspectable; failures reported (§3.4)
-- [ ] Live status (branch, uncommitted, ahead/behind) reflecting terminal-made changes too; divergence detection for continuation gating (§3.4, §4.3)
-- [ ] Discovery: scan configured search paths; discovered ≠ placed (§3.4, principle 6); create/attach/remove/force-remove; protected primary checkout + default branch
-- [ ] Provisioning cost awareness: shared caches where possible, cost reported (§3.4)
-- [ ] Host-auth invariant: workspace git operations use the host machine's own git/SSH config; app credentials are never used for workspace git and never written into workspace git config or remotes; clone-from-PR fails honestly when the host cannot authenticate (§3.4, §9.3) — enforced with a test, not a convention
+- [x] Workspace kind abstraction: boundary guaranteed by product, mechanism per kind (§3.4) — git kind first
+- [x] Git provisioning: branch from configurable template; existing branches taken as-is from remote; provision at first run, not workstream creation (§3.4, §3.5)
+- [x] Readiness: declared per-repo setup step gates runs; not-ready blocks with visible reason; setup output inspectable; failures reported (§3.4)
+- [x] Live status (branch, uncommitted, ahead/behind) reflecting terminal-made changes too; divergence detection for continuation gating (§3.4, §4.3)
+- [x] Discovery: scan configured search paths; discovered ≠ placed (§3.4, principle 6); create/attach/remove/force-remove; protected primary checkout + default branch
+- [x] Provisioning cost awareness: shared caches where possible, cost reported (§3.4)
+- [x] Host-auth invariant: workspace git operations use the host machine's own git/SSH config; app credentials are never used for workspace git and never written into workspace git config or remotes; clone-from-PR fails honestly when the host cannot authenticate (§3.4, §9.3) — enforced with a test, not a convention
+
+_Landed as `@plotroom/core`'s `workspaces/` subtree, split along §3.4's own
+sentence: the boundary is the product's (`checkWorkspaceBoundary`,
+`checkRootOwnership`, `checkReady`, `checkRemoval`, `deriveDivergence` /
+`checkContinuation`) and asks no kind anything; `kind.ts` is the mechanism
+contract and `git/` is the first implementation of it. Status, fingerprints,
+and provisioning results are per-root lists and kind configuration is a JSON
+record the kind validates itself, so a multi-root kind (§13) and a
+plugin-supplied one behind a worker boundary (§10.1) fit without a new concept.
+Provisioning is an operation the run path calls — creating a workspace record
+provisions nothing — and prefers `git worktree` over the primary checkout,
+falling back to a clone against a shared mirror cache; cost reports strategy,
+cache hit, elapsed, and disk (null when unmeasurable, never zero).
+
+The host-auth invariant is mechanism, not convention: `runGit` takes no
+environment argument and builds the child's from a host allowlist, credential
+vocabulary is confined to `git/host-auth.ts` (asserted by scanning the layer's
+own declarations), credentialed remote URLs are refused inbound, the
+provisioned workspace's `--local` config is read back and checked outbound, and
+a clone the host cannot authenticate ends as `host_auth` with git's own reason
+and no second attempt. `git.integration.test.ts` runs the real binary against
+temp repositories — no network — and asserts what lands on disk.
+
+Deferred, honestly: nothing is persisted (the workspace record is the state
+shape Track A's Phase-2 schema will store); the run path does not call
+`provision()` yet — that wiring lands with Epic 4.2; `commits-added` forces
+fresh conservatively because attributing a commit to a holder needs Epic 4.4's
+claims, which is also what will narrow hand-edit divergence from "reported" to
+"per path a session read"; setup declarations are resolved from values handed
+in, with no reader for the in-repository file yet; discovery walks with a
+directory-listing seam and no watch; and clone-from-a-PR-card is the same
+`clone` path with a UI that does not exist until §9.4._
 
 ### Epic 4.4 — Path claims (`claims`)
 
