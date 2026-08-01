@@ -29,6 +29,7 @@ import { runQueueRoutes } from "./routes/run-queue.js";
 import { runRoutes } from "./routes/runs.js";
 import { sessionRoutes } from "./routes/sessions.js";
 import { snapshotRoutes } from "./routes/snapshot.js";
+import { steeringRoutes } from "./routes/steering.js";
 import { spendRoutes } from "./routes/spend.js";
 import { workspaceRoutes } from "./routes/workspaces.js";
 import { workstreamRoutes } from "./routes/workstreams.js";
@@ -36,6 +37,7 @@ import { RunQueueService } from "./runs/queue.js";
 import { RunService } from "./runs/service.js";
 import { createRuntimeRegistry } from "./runtime/index.js";
 import { createSessionGate } from "./sessions/gate.js";
+import { SteeringService } from "./sessions/steering.js";
 import { SessionHub } from "./sessions/hub.js";
 import { serveRenderer } from "./static/serve.js";
 import { nodeCommandExec } from "./workspaces/exec.js";
@@ -61,6 +63,9 @@ export interface AppRuntime {
   /** §4.1's queue, and the subscription that lets it see a slot free. */
   readonly queue: RunQueueService;
   readonly stopQueue: () => void;
+  /** §6.5's steering, and the subscription that charges induced spend. */
+  readonly steering: SteeringService;
+  readonly stopSteering: () => void;
   /** The scheduled version-compaction sweep (§15-3, Epic 2.3). */
   readonly compaction: CompactionSchedule;
 }
@@ -143,6 +148,28 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     gate,
   });
 
+  // Steering in flight (§6.5, §6.4, §4.2, §6.7). Constructed after the run service
+  // because a batch stop and a scoped stop go through the same stop verb the run
+  // path owns — one way to end a session, however the gesture was scoped.
+  const steering = new SteeringService({ stores, bus, logger, hub, runs });
+  // Broadcast-induced spend is charged from the session stream, like the queue's
+  // admission: the observation that a recipient spent something is already
+  // published, and one vocabulary beats a second notification path (§6.5).
+  const unsubscribeSteering = steering.subscribe();
+
+  // A runtime-raised question is the operator's to answer (§6.4), so the driver
+  // hands it here to be raised rather than through the permission gate, which
+  // would have denied it. Wired as a hook so the run path does not learn about
+  // questions and the question path does not learn about runs.
+  runs.onQuestion((input) => {
+    steering.raise({
+      sessionId: input.sessionId,
+      text: input.request.text,
+      options: input.request.options,
+      requestId: input.requestId,
+    });
+  });
+
   // Scoped runs and the concurrency queue (§4.1). It subscribes to the session
   // stream rather than being called from the run path: a slot frees when a session
   // ends by any route, and the queue only ever admits work a gesture already
@@ -167,6 +194,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", sessionRoutes(stores, runs, claims));
   app.route("/api", claimRoutes(claims));
   app.route("/api", spendRoutes(stores));
+  app.route("/api", steeringRoutes(stores, steering));
   app.route(
     "/api",
     // The diff read (§11). Read-only git through the same host-allowlisted seam
@@ -238,5 +266,13 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     );
   });
 
-  return { hub, runs, queue, stopQueue: unsubscribeQueue, compaction };
+  return {
+    hub,
+    runs,
+    queue,
+    stopQueue: unsubscribeQueue,
+    steering,
+    stopSteering: unsubscribeSteering,
+    compaction,
+  };
 }

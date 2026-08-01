@@ -111,6 +111,13 @@ export function checkRunGesture(
     readonly actor: Author;
     readonly tool: string;
     readonly commandIds: readonly string[];
+    /**
+     * Sessions the gesture reaches directly — a stop's resolved scope, a batch's
+     * selection, an injection's target. Resolved as themselves rather than through
+     * a command, which is what every one of those tools declares in
+     * `requires.targetResolution`.
+     */
+    readonly sessionIds?: readonly string[];
   },
 ): void {
   if (input.actor.kind !== "session") return;
@@ -121,11 +128,18 @@ export function checkRunGesture(
     targets: createToolTargetIndex(stores),
   };
 
-  for (const commandId of input.commandIds) {
+  const targets: readonly { kind: "command" | "session"; id: string }[] = [
+    ...input.commandIds.map((id) => ({ kind: "command" as const, id })),
+    ...(input.sessionIds ?? []).map((id) => ({ kind: "session" as const, id })),
+  ];
+
+  for (const target of targets) {
     const check = checkToolCall(context, {
       tool: input.tool,
-      input: { commandId },
-      target: { kind: "command", id: commandId },
+      input: {
+        [target.kind === "command" ? "commandId" : "sessionId"]: target.id,
+      },
+      target,
     });
 
     if (!check.allowed) {

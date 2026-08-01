@@ -17,6 +17,8 @@ import {
   type ConditionEvaluation,
   type Run,
   type RunCost,
+  type RuntimeRequest,
+  type RuntimeRequestId,
   type RuntimeSessionHandle,
   type SessionEnd,
   type SessionId,
@@ -157,7 +159,32 @@ export interface RunServiceDeps {
 }
 
 export class RunService {
+  /**
+   * What to do with a runtime-raised question (§6.4). Set by the app after the
+   * steering service exists; a question raised before anything registered is
+   * logged rather than dropped silently, because a question nobody sees is the
+   * invisible stall §6.4 exists to prevent.
+   */
+  #onQuestion:
+    | ((input: {
+        readonly sessionId: string;
+        readonly requestId: RuntimeRequestId;
+        readonly request: Extract<RuntimeRequest, { kind: "question" }>;
+      }) => void)
+    | null = null;
+
   constructor(private readonly deps: RunServiceDeps) {}
+
+  /** Register the question sink. One registration; the last one wins. */
+  onQuestion(
+    sink: (input: {
+      readonly sessionId: string;
+      readonly requestId: RuntimeRequestId;
+      readonly request: Extract<RuntimeRequest, { kind: "question" }>;
+    }) => void,
+  ): void {
+    this.#onQuestion = sink;
+  }
 
   /* -------------------------------------------------------------- preview */
 
@@ -767,6 +794,16 @@ export class RunService {
             });
           },
           completionEvidence: (id) => this.completionEvidence(id),
+          onQuestion: (question) => {
+            if (this.#onQuestion === null) {
+              this.deps.logger.error(
+                "a runtime asked a question with nothing to receive it",
+                { sessionId: question.sessionId },
+              );
+              return;
+            }
+            this.#onQuestion(question);
+          },
           onEnded: async ({ sessionId: id }) => {
             await this.endRunFor(this.deps.stores.sessions.get(id));
             this.deps.hub.detach(id);

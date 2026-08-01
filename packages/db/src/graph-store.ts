@@ -78,6 +78,11 @@ export interface NodeRemoval {
 }
 
 export interface PlaceNodeInput {
+  /**
+   * The caller's own id, where the caller has one — steering plans them, so a
+   * retried gesture writes the same node rather than a second one (principle 9).
+   */
+  readonly nodeId?: string;
   readonly role: NodeRole;
   /** The object, command, or session this node stands for. */
   readonly refId: string;
@@ -86,6 +91,11 @@ export interface PlaceNodeInput {
 }
 
 export interface ContextEdgeInput {
+  /**
+   * The caller's own id, where the caller has one — steering plans them, so a
+   * retried gesture writes the same edge rather than a second one (principle 9).
+   */
+  readonly edgeId?: string;
   readonly from: string;
   readonly to: string;
   readonly author: Author;
@@ -142,7 +152,7 @@ export class GraphStore {
       }
     }
 
-    const id = newNodeId();
+    const id = input.nodeId ?? newNodeId();
 
     this.state.db
       .insert(nodes)
@@ -331,7 +341,7 @@ export class GraphStore {
       });
     }
 
-    const id = newEdgeId();
+    const id = input.edgeId ?? newEdgeId();
 
     this.state.db
       .insert(edges)

@@ -1140,4 +1140,173 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX run_queue_command_idx ON run_queue (command_id);
     `,
   },
+  {
+    id: 16,
+    name: "steering",
+    sql: `
+      -- Structured questions (§6.4). The record, not the runtime's dialog: a
+      -- question outlives the tool call it blocks, because "unpicked options
+      -- remain visible" and a surface that had to ask the runtime what was asked
+      -- would have nothing to show once the call settled.
+      --
+      -- There is deliberately NO default, fallback, or on-timeout column. §6.4's
+      -- prohibition is structural in @plotroom/core (a timed default is a type
+      -- error there); a column for one here would be the place it came back.
+      CREATE TABLE session_questions (
+        id                 TEXT PRIMARY KEY,
+        session_id         TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        -- The blocked runtime request, so answering settles the call rather than a
+        -- copy of it. NULL when the question arrived over HTTP instead.
+        request_id         TEXT,
+        text               TEXT NOT NULL,
+        -- The options whole, in order: ids and labels both, because an answer
+        -- names the id and a runtime answers with the label.
+        options_json       TEXT NOT NULL,
+        free_form          TEXT NOT NULL CHECK (free_form IN ('none', 'allowed')),
+        -- Escalation only. The one literal core allows is 'escalate-attention',
+        -- and nothing here can say otherwise.
+        attention_json     TEXT,
+        asked_at           INTEGER NOT NULL,
+        answer_option_id   TEXT,
+        answer_text        TEXT,
+        -- Who answered. Human-only by §6.4, and the CHECK says so rather than
+        -- leaving it to the route: a session answering a question posed to the
+        -- operator would be principle 1 with extra steps.
+        answer_by_kind     TEXT CHECK (answer_by_kind = 'human'),
+        answered_at        INTEGER,
+        CHECK (
+          (answer_option_id IS NULL     AND answer_by_kind IS NULL
+                                        AND answered_at IS NULL) OR
+          (answer_option_id IS NOT NULL AND answer_by_kind IS NOT NULL
+                                        AND answered_at IS NOT NULL)
+        ),
+        -- Free-form text without an answer is text nobody typed.
+        CHECK (answer_text IS NULL OR answer_option_id IS NOT NULL)
+      );
+
+      CREATE INDEX session_questions_session_idx
+        ON session_questions (session_id, asked_at);
+      -- One question per blocked request: a second would settle the same call twice.
+      CREATE UNIQUE INDEX session_questions_request_idx
+        ON session_questions (request_id)
+        WHERE request_id IS NOT NULL;
+
+      -- Broadcast (§6.5). One content object for the whole send and one row per
+      -- recipient, because "the same content, once" is what makes it a broadcast
+      -- rather than n injections that happen to read alike.
+      CREATE TABLE broadcasts (
+        id                TEXT PRIMARY KEY,
+        origin            TEXT NOT NULL CHECK (origin IN ('human', 'session')),
+        sender_session_id TEXT REFERENCES sessions (id) ON DELETE SET NULL,
+        -- Mandatory on the session path, absent on the operator's: the category is
+        -- what stops a session broadcast masquerading as task context.
+        category          TEXT CHECK (category IN
+                            ('material-state-changed', 'shared-resource-warning')),
+        -- The scope a session declared, or the target list the operator chose.
+        -- Exactly one of them, because they are two different kinds of thing.
+        scope_json        TEXT,
+        target_json       TEXT,
+        author_kind       TEXT NOT NULL CHECK (author_kind IN ('human', 'session')),
+        author_session    TEXT,
+        text              TEXT NOT NULL,
+        object_id         TEXT NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+        node_id           TEXT NOT NULL REFERENCES nodes (id) ON DELETE CASCADE,
+        at                INTEGER NOT NULL,
+        CHECK (
+          (origin = 'session' AND sender_session_id IS NOT NULL
+                              AND category IS NOT NULL
+                              AND scope_json IS NOT NULL
+                              AND target_json IS NULL) OR
+          (origin = 'human'   AND category IS NULL
+                              AND scope_json IS NULL
+                              AND target_json IS NOT NULL)
+        ),
+        CHECK (
+          (author_kind = 'session' AND author_session IS NOT NULL) OR
+          (author_kind = 'human'   AND author_session IS NULL)
+        )
+      );
+
+      CREATE INDEX broadcasts_sender_idx ON broadcasts (sender_session_id, at);
+
+      -- Who received it, and the injection each receipt became. This is also the
+      -- per-workstream activity §7.3 asks for: the workstream is on the row, so
+      -- "what happened in this workstream while I was away" is a query rather
+      -- than a second table that could disagree with this one.
+      CREATE TABLE broadcast_recipients (
+        broadcast_id  TEXT NOT NULL REFERENCES broadcasts (id) ON DELETE CASCADE,
+        session_id    TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        workstream_id TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        injection_id  TEXT NOT NULL,
+        -- What this recipient had spent when the broadcast reached it, and what has
+        -- since been charged to the sender's chain for the turn it induced (§6.5,
+        -- principle 2). The baseline is here rather than in memory because a
+        -- restart between delivery and the induced turn must not lose the charge —
+        -- and because "the sender caused it" is a fact about money, which does not
+        -- belong in a process.
+        baseline_cost_micros INTEGER NOT NULL DEFAULT 0,
+        -- NULL until the induced turn has been observed and charged. Charged once:
+        -- a recipient's own later work is not the sender's fault.
+        induced_micros       INTEGER,
+        PRIMARY KEY (broadcast_id, session_id)
+      );
+
+      CREATE INDEX broadcast_recipients_workstream_idx
+        ON broadcast_recipients (workstream_id);
+
+      -- The rate window (§6.5): "bounded per window, per sender". Its own table
+      -- rather than a count on the sender, because the bound is over a window and
+      -- a counter cannot answer "how many in the last hour" after a restart.
+      CREATE TABLE broadcast_sends (
+        id                TEXT PRIMARY KEY,
+        sender_session_id TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        at                INTEGER NOT NULL
+      );
+
+      CREATE INDEX broadcast_sends_sender_idx
+        ON broadcast_sends (sender_session_id, at);
+
+      -- Handoff briefs (§6.3). Two states in one table, because the transition is
+      -- the whole point: a brief is drafted, then a human reviews it, and only a
+      -- reviewed one may be sent. The CHECK is that rule at rest — core makes
+      -- sending an unreviewed brief a type error, and this makes a reviewed brief
+      -- with no reviewer unrepresentable.
+      CREATE TABLE handoff_briefs (
+        id                 TEXT PRIMARY KEY,
+        source_session_id  TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        -- The text as it stands: the draft until reviewed, the reviewed words after.
+        text               TEXT NOT NULL,
+        origin             TEXT NOT NULL CHECK (origin IN ('session-written', 'derived')),
+        -- Who wrote the draft. NULL for a derived brief: the product extracted it
+        -- from the log and nobody wrote it, which is not the same as a session
+        -- having written it and is why this is nullable rather than defaulted.
+        drafted_by_kind    TEXT CHECK (drafted_by_kind IN ('human', 'session')),
+        drafted_by_session TEXT,
+        drafted_at         INTEGER NOT NULL,
+        -- The reviewer is the operator: reviewHandoffBrief refuses a session.
+        reviewed_by_kind   TEXT CHECK (reviewed_by_kind = 'human'),
+        reviewed_at        INTEGER,
+        -- The draft as the session wrote it, kept when the human rewrote it, plus
+        -- whether they did. Worth knowing, and unrecoverable if not kept.
+        draft_text         TEXT,
+        edited             INTEGER,
+        sent_at            INTEGER,
+        CHECK (
+          (drafted_by_kind = 'session' AND drafted_by_session IS NOT NULL) OR
+          (drafted_by_kind IS NOT 'session' AND drafted_by_session IS NULL)
+        ),
+        CHECK (
+          (reviewed_by_kind IS NULL     AND reviewed_at IS NULL
+                                        AND draft_text IS NULL AND edited IS NULL) OR
+          (reviewed_by_kind IS NOT NULL AND reviewed_at IS NOT NULL
+                                        AND draft_text IS NOT NULL AND edited IS NOT NULL)
+        ),
+        -- Sending an unreviewed brief is what §6.3 forbids; unrepresentable here.
+        CHECK (sent_at IS NULL OR reviewed_at IS NOT NULL)
+      );
+
+      CREATE INDEX handoff_briefs_session_idx
+        ON handoff_briefs (source_session_id, drafted_at);
+    `,
+  },
 ];

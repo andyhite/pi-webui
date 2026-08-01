@@ -1018,6 +1018,151 @@ export const runQueue = sqliteTable(
   ],
 );
 
+/**
+ * Structured questions at rest (§6.4, migration 16).
+ *
+ * There is deliberately no default/fallback/on-timeout column: §6.4's prohibition
+ * is structural in `@plotroom/core`, and a column for one here is where it would
+ * come back.
+ */
+export const sessionQuestions = sqliteTable(
+  "session_questions",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    /** The blocked runtime request; null when the question arrived over HTTP. */
+    requestId: text("request_id"),
+    text: text("text").notNull(),
+    optionsJson: text("options_json").notNull(),
+    freeForm: text("free_form", { enum: ["none", "allowed"] }).notNull(),
+    /** Escalation only — never resolution (§6.4, principle 2). */
+    attentionJson: text("attention_json"),
+    askedAt: integer("asked_at").notNull(),
+    answerOptionId: text("answer_option_id"),
+    answerText: text("answer_text"),
+    answerByKind: text("answer_by_kind", { enum: ["human"] }),
+    answeredAt: integer("answered_at"),
+  },
+  (table) => [
+    index("session_questions_session_idx").on(table.sessionId, table.askedAt),
+    uniqueIndex("session_questions_request_idx")
+      .on(table.requestId)
+      .where(sql`${table.requestId} IS NOT NULL`),
+  ],
+);
+
+/** One broadcast: one content object, whatever the number of recipients (§6.5). */
+export const broadcasts = sqliteTable(
+  "broadcasts",
+  {
+    id: text("id").primaryKey(),
+    origin: text("origin", { enum: ["human", "session"] }).notNull(),
+    senderSessionId: text("sender_session_id").references(() => sessions.id, {
+      onDelete: "set null",
+    }),
+    category: text("category", {
+      enum: ["material-state-changed", "shared-resource-warning"],
+    }),
+    /** A session declares a scope; the operator names a target. Never both. */
+    scopeJson: text("scope_json"),
+    targetJson: text("target_json"),
+    authorKind: text("author_kind", { enum: ["human", "session"] }).notNull(),
+    authorSession: text("author_session"),
+    text: text("text").notNull(),
+    objectId: text("object_id")
+      .notNull()
+      .references(() => objects.id, { onDelete: "cascade" }),
+    nodeId: text("node_id")
+      .notNull()
+      .references(() => nodes.id, { onDelete: "cascade" }),
+    at: integer("at").notNull(),
+  },
+  (table) => [
+    index("broadcasts_sender_idx").on(table.senderSessionId, table.at),
+  ],
+);
+
+/**
+ * Who received one, and the injection each receipt became. Also §7.3's
+ * per-workstream activity: the workstream is on the row, so the history is a
+ * query rather than a second table that could disagree with this one.
+ */
+export const broadcastRecipients = sqliteTable(
+  "broadcast_recipients",
+  {
+    broadcastId: text("broadcast_id")
+      .notNull()
+      .references(() => broadcasts.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    workstreamId: text("workstream_id")
+      .notNull()
+      .references(() => workstreams.id, { onDelete: "cascade" }),
+    injectionId: text("injection_id").notNull(),
+    /** What this recipient had spent when the broadcast reached it (§6.5). */
+    baselineCostMicros: integer("baseline_cost_micros").notNull().default(0),
+    /** Null until the induced turn was observed and charged; charged once. */
+    inducedMicros: integer("induced_micros"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.broadcastId, table.sessionId] }),
+    index("broadcast_recipients_workstream_idx").on(table.workstreamId),
+  ],
+);
+
+/** The per-sender rate window (§6.5): a count cannot answer "in the last hour". */
+export const broadcastSends = sqliteTable(
+  "broadcast_sends",
+  {
+    id: text("id").primaryKey(),
+    senderSessionId: text("sender_session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    at: integer("at").notNull(),
+  },
+  (table) => [
+    index("broadcast_sends_sender_idx").on(table.senderSessionId, table.at),
+  ],
+);
+
+/**
+ * Handoff briefs (§6.3), drafted and reviewed in one table because the
+ * transition is the point: only a reviewed brief may be sent, which core makes a
+ * type error and the schema makes unrepresentable.
+ */
+export const handoffBriefs = sqliteTable(
+  "handoff_briefs",
+  {
+    id: text("id").primaryKey(),
+    sourceSessionId: text("source_session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    text: text("text").notNull(),
+    origin: text("origin", {
+      enum: ["session-written", "derived"],
+    }).notNull(),
+    /** Null for a derived brief: the product extracted it and nobody wrote it. */
+    draftedByKind: text("drafted_by_kind", { enum: ["human", "session"] }),
+    draftedBySession: text("drafted_by_session"),
+    draftedAt: integer("drafted_at").notNull(),
+    reviewedByKind: text("reviewed_by_kind", { enum: ["human"] }),
+    reviewedAt: integer("reviewed_at"),
+    /** The draft as written, kept when the human rewrote it, and whether they did. */
+    draftText: text("draft_text"),
+    edited: integer("edited", { mode: "boolean" }),
+    sentAt: integer("sent_at"),
+  },
+  (table) => [
+    index("handoff_briefs_session_idx").on(
+      table.sourceSessionId,
+      table.draftedAt,
+    ),
+  ],
+);
+
 export type NodeRow = typeof nodes.$inferSelect;
 export type WorkstreamRow = typeof workstreams.$inferSelect;
 export type WorkstreamEventRow = typeof workstreamEvents.$inferSelect;
@@ -1051,3 +1196,8 @@ export type PathReadRow = typeof pathReads.$inferSelect;
 export type SpendAttributionRow = typeof spendAttributions.$inferSelect;
 export type RunBatchRow = typeof runBatches.$inferSelect;
 export type RunQueueRow = typeof runQueue.$inferSelect;
+export type SessionQuestionRow = typeof sessionQuestions.$inferSelect;
+export type BroadcastRow = typeof broadcasts.$inferSelect;
+export type BroadcastRecipientRow = typeof broadcastRecipients.$inferSelect;
+export type BroadcastSendRow = typeof broadcastSends.$inferSelect;
+export type HandoffBriefRow = typeof handoffBriefs.$inferSelect;

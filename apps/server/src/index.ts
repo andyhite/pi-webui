@@ -97,6 +97,7 @@ export function startServer(config = loadServerConfig()) {
       // admission, and there is nothing to admit into a server that is going
       // away).
       runtime.stopQueue();
+      runtime.stopSteering();
 
       // A graceful close does not orphan a runtime: every live session is
       // recorded as **interrupted** here and its process terminated, rather than

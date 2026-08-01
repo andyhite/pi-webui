@@ -47,6 +47,9 @@ import {
  *         // A declared side effect: what a real agent's tool call would leave
  *         // behind, so a world condition has something true to observe.
  *         { "effect": { "kind": "write-file", "path": "out.txt", "content": "done" } },
+ *         // A structured question (§6.4): raised, and the act stops until the
+ *         // operator answers. No timer resolves it, ever.
+ *         { "ask": { "text": "ship it?", "options": ["yes", "no"] } },
  *         // Stands in for the submission tool Epic 4.5 gives a real session.
  *         // It ends the act: the session is waiting for PlotRoom's answer.
  *         { "submit": {} },
@@ -225,6 +228,23 @@ const effect = z.discriminatedUnion("kind", [
 
 export type ScriptedEffect = z.infer<typeof effect>;
 
+/**
+ * A declared structured question (§6.4).
+ *
+ * The scripted equivalent of pi's `plotroom_ask`: it raises the same
+ * `request-raised` observation with `kind: "question"`, so the question reaches
+ * the same store, the same event, and the same operator answer path a real
+ * runtime's does. The act **ends here** — the session is blocked on the answer,
+ * which is what a question is, and no timer resolves it (principle 2). The answer
+ * arrives as `respond`, which resolves the pending request and plays on.
+ */
+const question = z.object({
+  text: z.string().min(1),
+  options: z.array(z.string().min(1)).min(1),
+});
+
+export type ScriptedQuestion = z.infer<typeof question>;
+
 const submission = z.object({
   /** What the session says it produced; PlotRoom checks the conditions itself. */
   outputs: z
@@ -267,15 +287,21 @@ const step = z
     observation: scriptedObservation.optional(),
     effect: effect.optional(),
     submit: submission.optional(),
+    ask: question.optional(),
     delay: delay.optional(),
   })
   .refine(
     (value) =>
-      [value.observation, value.effect, value.submit, value.delay].filter(
-        (one) => one !== undefined,
-      ).length === 1,
+      [
+        value.observation,
+        value.effect,
+        value.submit,
+        value.ask,
+        value.delay,
+      ].filter((one) => one !== undefined).length === 1,
     {
-      message: "a step is exactly one of observation, effect, submit, or delay",
+      message:
+        "a step is exactly one of observation, effect, submit, ask, or delay",
     },
   );
 
@@ -497,6 +523,24 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
           continue;
         }
 
+        if (step.ask !== undefined) {
+          // The question is raised and the act stops: a session that asked is
+          // waiting, and playing on would be the script answering its own
+          // question. The operator's answer arrives as `respond`, which resolves
+          // this and lets the next act run.
+          const answer = await this.#requestQuestion(step.ask);
+          if (this.#stopped) return;
+          this.#queue.push({
+            kind: "output-delta",
+            text:
+              answer.kind === "answer"
+                ? `the operator chose: ${answer.value}`
+                : "nobody answered",
+            at: this.#now(),
+          });
+          continue;
+        }
+
         if (step.effect !== undefined) {
           // Gated, not assumed. The write raises a `tool-permission` request and
           // waits for PlotRoom's answer; a denial leaves the disk untouched and
@@ -566,6 +610,33 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
           kind: "tool-permission",
           toolName: SCRIPTED_WRITE_TOOL,
           input: { path: declared.path },
+        },
+        at: this.#now(),
+      });
+    });
+  }
+
+  /**
+   * Raise a structured question and wait for PlotRoom's answer.
+   *
+   * Unbounded, like the write gate's wait and for the same reason: §6.4 forbids a
+   * timed default, so a timeout here would be the runtime answering its own
+   * question when nobody replied fast enough. A stop settles it as a denial, so
+   * nothing hangs past the session's own end.
+   */
+  #requestQuestion(declared: ScriptedQuestion): Promise<RequestOutcome> {
+    const requestId =
+      `ask-${this.#pending.size + 1}-${this.#actIndex}` as RuntimeRequestId;
+
+    return new Promise<RequestOutcome>((resolve) => {
+      this.#pending.set(requestId, resolve);
+      this.#queue.push({
+        kind: "request-raised",
+        requestId,
+        request: {
+          kind: "question",
+          text: declared.text,
+          options: declared.options,
         },
         at: this.#now(),
       });

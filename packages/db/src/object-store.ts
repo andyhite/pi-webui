@@ -26,6 +26,15 @@ import {
 } from "./schema.js";
 
 export interface WriteObjectInput {
+  /**
+   * The caller's own id, where the caller has one.
+   *
+   * Steering plans them (`planInjection`, `planSessionBroadcast`): "ids are the
+   * caller's throughout, so a retried gesture writes the same rows" (principle 9).
+   * Omitted, one is generated as before — a read from an integration has no id of
+   * its own to offer.
+   */
+  readonly objectId?: string;
   readonly kind: ObjectKind;
   readonly title: string;
   readonly renderings: Renderings;
@@ -95,7 +104,15 @@ export class ObjectStore {
 
     if (existing) return this.appendTo(existing.id, input, contentHash);
 
-    const objectId = newObjectId();
+    // A caller-supplied id that already exists is the same gesture arriving twice,
+    // not a collision: it appends to what is there, which for identical content
+    // writes no version at all (§3.2).
+    if (input.objectId !== undefined) {
+      const supplied = this.get(input.objectId);
+      if (supplied) return this.appendTo(supplied.id, input, contentHash);
+    }
+
+    const objectId = input.objectId ?? newObjectId();
 
     this.state.db
       .insert(objects)

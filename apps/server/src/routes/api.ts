@@ -1,10 +1,12 @@
 import { systemClock, type Author, type Clock } from "@plotroom/core";
 import {
+  BroadcastStore,
   ClaimStore,
   CommandStore,
   GraphStore,
   Maintenance,
   ObjectStore,
+  QuestionStore,
   RunQueueStore,
   RunStore,
   SessionStore,
@@ -41,6 +43,10 @@ export interface ApiStores {
   readonly sessions: SessionStore;
   /** Path claims at rest; every rule over them is `@plotroom/core`'s (§3.4). */
   readonly claims: ClaimStore;
+  /** Structured questions (§6.4): the record outlives the call it blocks. */
+  readonly questions: QuestionStore;
+  /** Broadcasts, their rate window, and handoff briefs (§6.5, §6.3). */
+  readonly broadcasts: BroadcastStore;
   /** Spend attributed up the initiating chain (§3.6, principle 2). */
   readonly spend: SpendStore;
   readonly workspaces: WorkspaceStore;
@@ -65,6 +71,8 @@ export function createStores(
     queue: new RunQueueStore(db, clock),
     sessions: new SessionStore(db, clock),
     claims: new ClaimStore(db, clock),
+    questions: new QuestionStore(db, clock),
+    broadcasts: new BroadcastStore(db, clock),
     spend: new SpendStore(db, clock),
     // The workspace record's own vocabulary is milliseconds (§3.4), so its
     // clock is the same instant at a different resolution, never a second

@@ -195,9 +195,10 @@ export function applyEvent(state: BoardState, event: DomainEvent): BoardState {
       return next;
     // These advance `seq` and nothing else. A version, an observation, and a
     // transcript publication have their own live seams; claims, the run queue,
-    // and spend attribution have their own surfaces (§3.4's claims panel,
-    // §4.1's queue, §8's fleet panel), and nothing about a node's label or
-    // running state is derived from any of them.
+    // spend attribution, questions, and broadcasts have their own surfaces
+    // (§3.4's claims panel, §4.1's queue, §8's fleet panel, §6.4's bubbles,
+    // §7.1's queue), and nothing about a node's label or running state is
+    // derived from any of them.
     case "version":
     case "session_observation":
     case "session_transcript":
@@ -207,6 +208,8 @@ export function applyEvent(state: BoardState, event: DomainEvent): BoardState {
     case "run_batch":
     case "run_queue_entry":
     case "session_spend":
+    case "session_question":
+    case "broadcast":
       return next;
   }
 }

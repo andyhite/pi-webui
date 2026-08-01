@@ -48,6 +48,12 @@ import type {
   WorkstreamId,
 } from "./ids.js";
 import type { PlotObject } from "./objects.js";
+import type {
+  BroadcastActivityEntry,
+  BroadcastAttention,
+  QuestionOption,
+  SessionQuestion,
+} from "./sessions/index.js";
 import type { QueuedRun, Run, RunBatch } from "./runs.js";
 import type {
   RuntimeObservation,
@@ -86,6 +92,19 @@ export const EVENT_ENTITIES = [
   "run_queue_entry",
   /** Spend attributed up an initiating chain (§3.6, principle 2). */
   "session_spend",
+  /**
+   * A structured question and its answer (§6.4). Its own entity rather than a
+   * session update, because a question outlives the tool call it blocks and the
+   * unpicked options stay visible after it is answered.
+   */
+  "session_question",
+  /**
+   * A broadcast (§6.5). Two shapes on one entity, matching the two surfaces §6.5
+   * names: the attention row the operator sees, and the per-workstream activity
+   * entry (§7.3). Both come from `@plotroom/core`, so the queue and the history
+   * cannot describe the same broadcast differently.
+   */
+  "broadcast",
 ] as const;
 
 export type EventEntity = (typeof EVENT_ENTITIES)[number];
@@ -337,6 +356,35 @@ export type DomainEventBody =
       readonly attributedMicros: number;
       /** How many sessions contributed, own work included. */
       readonly sources: number;
+    }
+  /**
+   * A question raised or answered (§6.4). The whole record travels, options
+   * included, because "unpicked options remain visible" is a property of what a
+   * surface is given rather than something it fetches separately.
+   *
+   * `verb` is "created" for a raise and "updated" for an answer; there is no
+   * "deleted", because a question that was asked stays asked.
+   */
+  | {
+      readonly entity: "session_question";
+      readonly verb: "created" | "updated";
+      readonly question: SessionQuestion;
+      /** Derived: what nobody picked, which stays on the card (§6.4). */
+      readonly pathsNotTaken: readonly QuestionOption[];
+    }
+  /**
+   * A session-originated broadcast, for the queue (§6.5: "an agent telling twelve
+   * other agents something is exactly the class of event worth knowing
+   * happened"). Null `attention` on the operator's own broadcast: their gesture
+   * does not need reporting back to them.
+   */
+  | {
+      readonly entity: "broadcast";
+      readonly verb: "created";
+      readonly broadcastId: string;
+      readonly attention: BroadcastAttention | null;
+      /** One entry per recipient workstream (§7.3). */
+      readonly activity: readonly BroadcastActivityEntry[];
     };
 
 /** One message on the state-change stream: envelope plus a typed body. */

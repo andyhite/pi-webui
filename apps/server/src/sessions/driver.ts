@@ -57,6 +57,16 @@ export interface SessionDriverHooks {
    * for itself would be principle 3 written twice.
    */
   completionEvidence(sessionId: string): CompletionEvidence;
+  /**
+   * A runtime raised a structured question (§6.4). Raised, never answered here:
+   * the operator answers, and the blocked call stays blocked until they do.
+   * Optional only so a test can drive the pump without a question store.
+   */
+  onQuestion?(input: {
+    readonly sessionId: string;
+    readonly requestId: RuntimeRequestId;
+    readonly request: Extract<RuntimeRequest, { kind: "question" }>;
+  }): void;
   /** A session's stream ended. The run must stop being "running" too. */
   onEnded(input: {
     readonly sessionId: string;
@@ -163,12 +173,26 @@ export function driveSession(
             break;
 
           case "request-raised":
+            if (observation.request.kind === "question") {
+              // §6.4: a question is the **human's** to answer, so it is raised and
+              // left open rather than answered by anything here. Routing it through
+              // the permission gate would have denied it — the gate's own words are
+              // "this gate answers tool permissions; a question is answered by a
+              // human" — which would have turned every structured question a runtime
+              // asked into an instant refusal. The blocked call stays blocked until
+              // the operator answers, which is exactly what §6.4 describes and what
+              // principle 2 requires: no timer resolves it.
+              deps.hooks.onQuestion?.({
+                sessionId,
+                requestId: observation.requestId,
+                request: observation.request,
+              });
+              break;
+            }
+
             // §3.4's enforcement point: a write is answered from claims before
             // the tool runs, and an unbounded one raises an approval instead of
-            // being allowed because nothing recognized it. A question is the
-            // human's to answer (§6.4) and the gate says so rather than
-            // silently allowing — which is why this is not conditional on the
-            // request's kind.
+            // being allowed because nothing recognized it.
             await answerRequest(deps, {
               sessionId,
               handle: input.handle,

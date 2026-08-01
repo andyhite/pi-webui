@@ -1093,9 +1093,11 @@ const sessionTools: readonly AgentTool[] = [
 /* ------------------------------------------- steering in flight (Epic 5.2) */
 
 /**
- * Injection, questions, broadcast, and batch (§6.5, §6.4, §4.2). Their endpoints
- * are Track A's to mount over `@plotroom/core`'s planners, so they are `pending`
- * until they exist — in the vocabulary, and honest about not being reachable.
+ * Injection, questions, broadcast, and batch (§6.5, §6.4, §4.2).
+ *
+ * Live since Batch 3's stage 2: `apps/server/src/routes/steering.ts` mounts them
+ * over these planners, and the human-only one is enforced by the request's actor
+ * as well as by the flag below — a flag describes, and the route is the gate.
  */
 const steeringTools: readonly AgentTool[] = [
   mutate({
@@ -1105,7 +1107,7 @@ const steeringTools: readonly AgentTool[] = [
     gesture: "type into a running session's composer",
     method: "POST",
     endpoint: "/api/sessions/:id/inject",
-    availability: "pending",
+
     input: {
       id: id("the running session to steer"),
       text: {
@@ -1132,6 +1134,13 @@ const steeringTools: readonly AgentTool[] = [
         "the session named by the id, and nothing else — an injection reaches exactly one session.",
     },
   }),
+  read(
+    "session_injections_read",
+    "Read a session's injection ledger: what was queued, what was delivered, and what was refused (§6.5).",
+    "the composer's queued-versus-delivered state",
+    "/api/sessions/:id/injections",
+    { id: ID },
+  ),
   mutate({
     name: "session_ask",
     summary:
@@ -1139,7 +1148,7 @@ const steeringTools: readonly AgentTool[] = [
     gesture: "a question bubble on the session node",
     method: "POST",
     endpoint: "/api/sessions/:id/questions",
-    availability: "pending",
+
     input: {
       id: id("the session asking"),
       text: { type: "string", required: true, description: "the question" },
@@ -1166,7 +1175,7 @@ const steeringTools: readonly AgentTool[] = [
     gesture: "answer inline from the bubble or the queue (§7.1)",
     method: "POST",
     endpoint: "/api/questions/:id/answer",
-    availability: "pending",
+
     input: {
       id: id("the question"),
       optionId: {
@@ -1185,6 +1194,13 @@ const steeringTools: readonly AgentTool[] = [
     // extra steps: the answer is the human's, or it is not an answer.
     requires: { humanOnly: true },
   }),
+  read(
+    "session_questions_read",
+    "Read a session's questions, answered or not, with the options nobody picked still on them (§6.4).",
+    "the question bubbles on a session node (§5)",
+    "/api/sessions/:id/questions",
+    { id: ID },
+  ),
   mutate({
     name: "session_broadcast",
     summary:
@@ -1192,7 +1208,7 @@ const steeringTools: readonly AgentTool[] = [
     gesture: "broadcast to a selection, a workstream, or everything running",
     method: "POST",
     endpoint: "/api/broadcasts",
-    availability: "pending",
+
     input: {
       scope: {
         type: "object",
@@ -1221,6 +1237,12 @@ const steeringTools: readonly AgentTool[] = [
     // rate bound, the spend attribution, and the operator seeing every send.
     requires: { reflexivity: "none", approval: "outside-policy" },
   }),
+  read(
+    "broadcast_world_read",
+    "Read which sessions are running, where, and in which repository and workspace — the scopes a broadcast can name (§6.5).",
+    "the scope picker on the broadcast composer",
+    "/api/broadcast-world",
+  ),
   mutate({
     name: "batch_gesture",
     summary:
@@ -1228,7 +1250,7 @@ const steeringTools: readonly AgentTool[] = [
     gesture: "a batch action on a multi-selection",
     method: "POST",
     endpoint: "/api/batches",
-    availability: "pending",
+
     input: {
       kind: {
         type: "string",
@@ -1259,6 +1281,29 @@ const steeringTools: readonly AgentTool[] = [
         "every session named in `sessionIds` — the batch is the single gesture, so the check sees all of its members. A member in the caller's own chain is skipped with a reason rather than failing the batch (`planBatch`).",
     },
   }),
+  read(
+    "stop_preview",
+    "What a stop would cover: how many sessions, whether the gesture is enabled at all, and whether it confirms (§6.7).",
+    "the stop button's own count and enabled state",
+    "/api/stops/preview",
+    {
+      scope: {
+        type: "string",
+        required: true,
+        description: "session | workstream | everything",
+      },
+      sessionId: {
+        type: "string",
+        required: false,
+        description: "for the session scope",
+      },
+      workstreamId: {
+        type: "string",
+        required: false,
+        description: "for the workstream scope",
+      },
+    },
+  ),
   mutate({
     name: "stop_scope",
     summary:
@@ -1266,7 +1311,7 @@ const steeringTools: readonly AgentTool[] = [
     gesture: "stop, at workstream or fleet scope",
     method: "POST",
     endpoint: "/api/stops",
-    availability: "pending",
+
     input: {
       scope: {
         type: "string",
