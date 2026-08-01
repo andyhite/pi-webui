@@ -191,6 +191,39 @@ describe("the attention derivation", () => {
     expect(returned?.snoozeUntil).toBeNull();
   });
 
+  it("hides an acknowledged item until its own fact moves, then asks again", () => {
+    const ledger = applyTriage(
+      EMPTY_TRIAGE,
+      "health:idle:sess-1",
+      "acknowledge",
+      {
+        at: 1000,
+        by: humanAuthor,
+      },
+    );
+
+    const acknowledged = attentionItems(
+      deriveAttention(sources(), { now: 2000, triage: ledger }),
+    );
+    expect(acknowledged.some((item) => item.id === "health:idle:sess-1")).toBe(
+      false,
+    );
+
+    // The session went quiet again *after* the acknowledgement: a new
+    // occurrence, and acknowledge is a baseline rather than a permanent
+    // dismissal — that is what mute is for (§4.5).
+    const again = attentionItems(
+      deriveAttention(
+        {
+          ...sources(),
+          health: [{ ...idleAlert, since: 1500 }],
+        },
+        { now: 2000, triage: ledger },
+      ),
+    );
+    expect(again.some((item) => item.id === "health:idle:sess-1")).toBe(true);
+  });
+
   it("ranks an end that wants a decision above drift, and a proven one below", () => {
     const failed = deriveAttention(
       {

@@ -233,6 +233,36 @@ describe("triage (§4.5), whose job is hiding", () => {
     expect(past.status).toBe(400);
   });
 
+  it("acknowledges a drift-free row and leaves it acknowledged", async () => {
+    const harness = await boot(repository());
+    await askingSession(harness);
+    const id = str(await itemOfFeed(harness, "question"), "id");
+
+    await harness.ok(`/attention/${id}/acknowledge`, {
+      method: "POST",
+      body: {},
+    });
+
+    // A question that has not changed stays acknowledged: what makes an
+    // acknowledgement expire is the fact behind it moving (§4.5), and a question
+    // asked once is asked once.
+    expect((await items(harness)).some((item) => at(item, "id") === id)).toBe(
+      false,
+    );
+  });
+
+  it("refuses a return time on anything but a snooze", async () => {
+    const harness = await boot(repository());
+    await askingSession(harness);
+    const id = str(await itemOfFeed(harness, "question"), "id");
+
+    const refused = await harness.call(`/attention/${id}/mute`, {
+      method: "POST",
+      body: { snoozedUntil: Math.floor(Date.now() / 1000) + 60 },
+    });
+    expect(refused.status).toBe(400);
+  });
+
   it("undoes a mute, because a mute you regret is recoverable", async () => {
     const harness = await boot(repository());
     await askingSession(harness);

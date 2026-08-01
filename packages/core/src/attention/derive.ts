@@ -128,6 +128,14 @@ export function deriveAttention(
  * only while `now` is genuinely before it. The instant it elapses the item comes
  * back with `snoozeUntil: null`, because a stale value there is indistinguishable
  * from still being hidden.
+ *
+ * **An acknowledgement covers the occurrence it was made about, and no later
+ * one.** §4.5's acknowledge is "seen; the consumer's baseline advances" — a
+ * baseline, not a permanent dismissal, which is what `mute` is for. So a row
+ * whose underlying fact has moved since it was acknowledged (`raisedAt` past the
+ * acknowledgement) asks again: the ticket changed a second time, the session went
+ * quiet again after working. Without this, acknowledging would be muting under
+ * another name, and the difference between the two verbs is the whole of §4.5.
  */
 export function visibleAttention(
   derived: readonly DerivedAttentionItem[],
@@ -138,8 +146,11 @@ export function visibleAttention(
 
   return derived
     .filter((entry) => {
-      const status = triageStatus(ledger?.get(entry.item.id), now);
-      return isVisible(status);
+      const record = ledger?.get(entry.item.id);
+      if (record?.verb === "acknowledge" && entry.item.raisedAt > record.at) {
+        return true;
+      }
+      return isVisible(triageStatus(record, now));
     })
     .map((entry) => {
       const record = ledger?.get(entry.item.id);
