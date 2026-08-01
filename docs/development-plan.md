@@ -884,14 +884,69 @@ own doc comment states the exact swap point for `GET
 /api/workstreams/:id/diff`._
 
 ### Epic 5.2 — Injection, questions, broadcast (`sessions`)
+### Epic 5.2 — Injection, questions, broadcast (`sessions`) — _domain done (server wiring pending Track A stage 2)_
 
-- [ ] Injection as new turn + permanent graph content wired to the session (§6.5, principle 5); queued → delivered states for between-turn delivery
-- [ ] Session-to-session injection with attribution (peer gesture, lineage rule applies)
-- [ ] Transcript checkpoint gesture (human and agent) feeding the Epic 1.5 checkpoint rule (§3.6)
-- [ ] Structured questions: options as bubbles on the node, answered inline, result returned structurally, unpicked options remain visible; **no timed defaults** (§6.4, principle 2)
-- [ ] Human broadcast (selection / workstream / everything running) (§6.5)
-- [ ] Session broadcast: scope-of-material-state only, mandatory declared category, rate-bounded per window, induced spend charged to sender's budget chain, operator-visible (§6.5)
-- [ ] Batch gestures: one prompt to many, stop/close/archive on a multi-selection; preset prompts (§4.2)
+- [x] Injection as new turn + permanent graph content wired to the session (§6.5, principle 5); queued → delivered states for between-turn delivery — `planInjection` produces the content node, the authored context edge, and the ledger entry; the pi adapter's real between-turn delivery is verified against a live pi
+- [x] Session-to-session injection with attribution (peer gesture, lineage rule applies) — the same plan with a session author, refused into its own chain by `checkInjection`
+- [x] Transcript checkpoint gesture (human and agent) feeding the Epic 1.5 checkpoint rule (§3.6) — `checkpointEvent` / `previewCheckpoint`; the endpoint and the `session_checkpoint` tool were already live
+- [x] Structured questions: options as bubbles on the node, answered inline, result returned structurally, unpicked options remain visible; **no timed defaults** (§6.4, principle 2) — `questions.ts`, with the prohibition enforced structurally (a timed default is a type error, asserted); `plotroom_ask` is the pi-side tool
+- [x] Human broadcast (selection / workstream / everything running) (§6.5) — `planHumanBroadcast`, unconstrained by construction
+- [x] Session broadcast: scope-of-material-state only, mandatory declared category, rate-bounded per window, induced spend charged to sender's budget chain, operator-visible (§6.5) — `planSessionBroadcast` plus `attributeBroadcastSpend`, `broadcastAttention`, `broadcastActivity`
+- [x] Batch gestures: one prompt to many, stop/close/archive on a multi-selection; preset prompts (§4.2) — `planBatch`'s envelope, with per-member keys derived from the batch key
+- [ ] Endpoints, stores, and events for all of the above — Track A's stage 2; the tools are `pending` in the catalog until they exist
+
+_Landed as new modules in `@plotroom/core`'s `sessions/` subtree — `injection.ts`
+(extended), `questions.ts`, `broadcast.ts`, `batch.ts`, `stop.ts` — plus the pi
+adapter's real between-turn injection and `plotroom_ask`._
+
+**The shapes worth knowing.** Injection is three writes, not one: `planInjection`
+returns the content object, the node, and the **context edge carrying the
+injector as its author**, because "steering is authoring" (§6.5, §15-2) — a plan
+that leaves no paper trail is not representable. `planSessionBroadcast` applies
+every §6.5 constraint in one place, and `SessionBroadcastScope` has **no variant
+that lists sessions**, so "a chosen list" is inexpressible on the session path;
+the declared category rides on the content node's own title, so a broadcast
+cannot masquerade as task context where a reader would find it. A session
+broadcast **deliberately does not check lineage** — §6.5 says the scope rule is
+what closes the collusion channel, and "excluding the sender's chain would
+exclude exactly the sessions most likely affected" — and a test asserts a parent
+in scope receives it. `planBatch` is partial by design: a member that cannot take
+the gesture is skipped with a reason rather than failing the twelve, and every
+member's idempotency key derives from the batch key so a half-failed batch is
+replayable (principle 9).
+
+**No timed defaults, enforced structurally.** §6.4's prohibition is a type-level
+impossibility rather than a runtime refusal: `SessionQuestion` has no default,
+fallback, or on-timeout field; `QuestionAttention.onElapsed` is the single
+literal `"escalate-attention"`, so `"answer"` and `"proceed"` do not typecheck;
+and an answer requires an `Author`, which has no system variant, so "answered by
+the timer" cannot be written down. `questions.test.ts` asserts all three as
+`@ts-expect-error` cases — if any becomes expressible, the unused directive fails
+the build. The generated `plotroom_ask` extension passes no `timeout` to pi's
+dialog (pi supports one), and a test asserts the source string contains no timer
+of any kind; a dismissed question returns an **error** to the model, never one of
+the options nobody picked.
+
+**Two decided defaults, recorded here rather than inferred:** a session may send
+**3 broadcasts per hour** (`DEFAULT_SESSION_BROADCAST_POLICY` — enough for an
+emergency and its correction, few enough to be useless as a channel; the
+operator's own broadcasts are unbounded), and continuation needs **20% of the
+model's window free** (`DEFAULT_CONTINUE_HEADROOM_FRACTION`, a fraction so it
+scales with the model rather than being tuned per model).
+
+**The pi adapter's injection was wrong, and a live spike is what proved it.** pi's
+standalone `steer` command queues a message _without triggering a turn_, so an
+injection into a live-but-idle session sat in the queue indefinitely — "queued"
+forever, the exact failure §6.5 exists to prevent. `inject()` now sends `prompt`
+with `streamingBehavior: "steer"`, which queues mid-turn and prompts when idle.
+Delivery detection gained a second phase to match: an injection is delivered when
+it **leaves a queue pi was seen holding it in**, or at the next `turn-started`
+when pi never queued it at all, because pi emits `queue_update` for follow-up
+changes too and the old one-phase diff would have reported delivery before the
+turn existed. `steering.spike.test.ts` (`PLOTROOM_PI_SPIKE=1`, hermetic and
+skipped by default) runs a real pi against a mock provider and shows the
+difference in pi's own events: the bare `steer` produces no request to the model,
+the injection does.
 
 ### Epic 5.3 — Speech bubbles on canvas (`canvas`) — _mechanics landed Batch 3 (Weeks 11–14), fixture-fed where noted below_
 
@@ -968,13 +1023,99 @@ contained node's position lands at parent.position + child.position; it
 fails if a type filter is reintroduced anywhere in that pipeline. The gap
 is closed now, where the first pass only closed it on paper._
 
-### Epic 5.4 — Resume, fork, handoff (`sessions`)
+### Epic 5.4 — Resume, fork, handoff (`sessions`) — _domain done (server wiring pending Track A stage 2)_
 
-- [ ] Explicit resume-vs-fork choice, never implicit on typing (§6.3)
-- [ ] Fork from any point → own workstream + workspace; outside-world touchpoints marked (fed by §9.2 reversibility declarations) for fork cleanliness (§6.3, §6.6)
-- [ ] Handoff: source-written brief, human-edited before send (§6.3)
-- [ ] Continue-vs-fresh on re-run: side-by-side cost preview; window-fit gate; divergence forces fresh (§4.3)
-- [ ] Stop at three scopes with counts and widest-scope confirm (§6.7)
+- [x] Explicit resume-vs-fork choice, never implicit on typing (§6.3) — `dispositionOfTypedInput` returns `choice-required` for an ended session, and `SessionContinuation` has no third variant
+- [x] Fork from any point → own workstream + workspace; outside-world touchpoints marked (fed by §9.2 reversibility declarations) for fork cleanliness (§6.3, §6.6) — `planSessionFork` plus `outside-world.ts`; the pi adapter's real fork is verified against a live pi
+- [x] Handoff: source-written brief, human-edited before send (§6.3) — `draftHandoffBrief` → `reviewHandoffBrief` → `planHandoff`, where sending an unreviewed brief is a type error
+- [x] Continue-vs-fresh on re-run: side-by-side cost preview; window-fit gate; divergence forces fresh (§4.3) — `compareContinueVsFresh`, which describes the option it refused as well as the one it allows
+- [x] Stop at three scopes with counts and widest-scope confirm (§6.7) — `resolveStop`
+- [ ] Endpoints and UI for all of the above — Track A's stage 2 and Track B's panels
+
+_Landed as `continuation.ts`, `handoff.ts`, `outside-world.ts`, and additions to
+`fork.ts`, plus the pi adapter's real fork._
+
+**Typing is not a continuation.** §6.3's "never an implicit consequence of typing
+into it" is `dispositionOfTypedInput`: a live session takes text as an injection,
+and an ended one has **no disposition at all** until somebody names resume or
+fork. `SessionContinuation` is those two variants and nothing else.
+
+**Handoff's order is a type, not a checklist.** `planHandoff` accepts a
+`ReviewedHandoffBrief`, and the only producer of one is `reviewHandoffBrief`,
+which refuses a session author — so "the user edits before sending" cannot be
+skipped, and a test asserts that passing a draft is a compile error. A brief the
+session never wrote can be _derived_ from the log (`deriveHandoffBrief`), labelled
+as derived and paraphrasing nothing, because there is no model in `core`; §13's
+summarised continuation stays a recorded intention.
+
+**Fork cleanliness comes from declarations, and says when it cannot be sure.**
+§6.6 names the source of truth ("the same declarations are what mark where a
+session touched the outside world... so fork-cleanliness comes from the source of
+truth rather than a heuristic"), so `ToolWorldDeclaration` is `local` or
+`outside-world` with a reversibility — and an **undeclared** tool is a third,
+visible state that costs `certain` rather than being read as harmless. A declared
+write that merely _started_ counts as a touch, because a merge that returned an
+error may still have merged and "we are not sure" must never render as "clean".
+
+**Continue-vs-fresh compares tokens, not invented money.** `estimateRunCost`
+prices per _definition_, so both modes inherit the same range and scaling it by a
+token ratio would invent precision; the comparison therefore states
+`basis: "input-tokens"` and carries each mode's own estimate with its basis
+beside it. Continuing a live session is the cheap path; continuing a completed one
+brings `historyTokens` back, which is how fresh ends up cheaper. Both gates
+collect rather than short-circuit, and the refused option is still fully
+described — a preview that hides what it rejected cannot be argued with.
+
+**pi's fork arithmetic was off by one turn, and the spike caught that too.** pi
+forks _from_ a user message, so its new branch begins there; PlotRoom forks
+_inclusively_ (§6.3: "inherits the conversation up to that point"). The entry to
+fork from is therefore the one that opens turn `n + 1`, and at the tip there is no
+command to send at all — `pi --fork <ref>` has already produced a session holding
+the whole conversation (`resolvePiForkTarget` returns `inherited`). Two other real
+defects went with it: a fork an extension cancelled answers `success: true` and
+says so only in `data.cancelled`, which the old code read as success; and an
+unreachable point now falls back to a **seeded** session from PlotRoom's own
+transcript (`PiForkUnavailable` → `start({ seedTranscript })`) instead of throwing,
+with the half-forked process aborted first. The live spike proves the prefix: a
+fork at turn 1 of a two-turn session sends the model turn 1 and not turn 2.
+
+**Contract for Track A (stage 2).** Everything below is a pure function in
+`@plotroom/core`; the server owns persistence, transport, and events.
+
+| Gesture           | Endpoint (catalog `pending`)                                 | Core call                                                  | Effects to persist                                                                                                                                                                                                                                           |
+| ----------------- | ------------------------------------------------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Inject            | `POST /api/sessions/:id/inject`                              | `planInjection`                                            | object + version (note), node, **context edge with `author`**, `session_injections` row via `SessionStore.queueInjection` (origin `steering`), then `handle.inject()` → `markDelivered` on the observed `injection-delivered` (the driver already does this) |
+| Ask               | `POST /api/sessions/:id/questions`                           | `raiseQuestion`                                            | question record (`SessionQuestion`); a runtime-raised one arrives as `request-raised` and is keyed by `requestId`                                                                                                                                            |
+| Answer            | `POST /api/questions/:id/answer`                             | `answerQuestion` + `questionOutcome`                       | answer on the record, then `handle.respond(requestId, outcome)`; `encodeQuestionAnswer` is the structural payload                                                                                                                                            |
+| Broadcast         | `POST /api/broadcasts`                                       | `planHumanBroadcast` / `planSessionBroadcast`              | one content object + node, **one context edge per recipient**, one ledger row per recipient, one `BroadcastSend` for the rate window, `attributeBroadcastSpend` rows as recipients spend                                                                     |
+| Batch             | `POST /api/batches`                                          | `planBatch`                                                | the member gestures, each keyed by `memberKey`; report `skipped` back verbatim                                                                                                                                                                               |
+| Stop              | `POST /api/stops`                                            | `resolveStop`                                              | refuse an unconfirmed `everything`; `count` and `enabled` are the button's own state                                                                                                                                                                         |
+| Resume            | `POST /api/sessions/:id/resume`                              | `planResume`                                               | `adapter.resume(runtime.ref, ...)`, then `firstTurn` as a normal injection if present                                                                                                                                                                        |
+| Fork              | `POST /api/sessions/:id/fork`                                | `planSessionFork` (+ `planFork` inside it)                 | new workstream, new workspace, new session, `session_forked_from` provenance; `adapter.fork` for `mode: "native"`, `adapter.start({ seedTranscript })` for `mode: "seeded"`                                                                                  |
+| Handoff           | `POST /api/sessions/:id/handoff-brief`, `POST /api/handoffs` | `draftHandoffBrief` / `reviewHandoffBrief` / `planHandoff` | brief record, then content + node + **context edge authored by the reviewer** + `session_handoff` provenance                                                                                                                                                 |
+| Continue-vs-fresh | in `GET /api/commands/:id/preview`                           | `compareContinueVsFresh`                                   | nothing; render both options, `forcedFresh`, and each `blocks[]` reason                                                                                                                                                                                      |
+
+What Track A must supply that core deliberately does not own: `BroadcastMember`
+rows (the graph and workspace records know which repository and workspace a
+session stands in — `RepositoryId` exists in `workspaces/ids.ts` and is unused
+until this), the `ToolWorldDeclaration` map (integration write actions declare it
+per §9.2; until Phase 7 there are none, so cleanliness reports `certain: false`
+wherever a session called an undeclared tool), `ToolTargetIndex` resolutions for
+the six new lineage-checked tools (each states its required resolution in
+`requires.targetResolution`), and two additions to the event vocabulary:
+`BroadcastAttention` for the queue and `BroadcastActivityEntry` per recipient
+workstream (§7.3). Ids are the caller's throughout, so a retried gesture writes
+the same rows.
+
+Deferred, honestly: nothing here is persisted or reachable — the endpoints are
+`pending` in the catalog and its test fails the moment one appears without a tool
+(or a tool stays `pending` after its endpoint lands); questions have no store, so
+`SessionQuestion` is a shape until Track A gives it a table; the rate-limit window
+is a query over sends Track A records; and the pi fork mapping assumes pi's k-th
+forkable user message opens PlotRoom's k-th turn — true for how PlotRoom drives pi
+(one user message per turn, injections included) and now demonstrated by the
+spike, but a pi release that changes what `get_fork_messages` lists would break it
+quietly, so that spike is the thing to run against a new pi.
 
 ### Epic 5.5 — Scoped runs and the queue of work (`runs`)
 
