@@ -1657,12 +1657,130 @@ epic's:_
 - [ ] Fleet panel: today's total, biggest spender, running vs concurrency limit (§8, §11)
 - [ ] Session timeline panel: temporal turns/tool-calls view, works for finished sessions (§8, §11)
 
-### Epic 6.3 — Approvals (`approvals`)
+### Epic 6.3 — Approvals (`approvals`) — _domain landed; server and surfaces pending_
 
-- [ ] Approval raise/answer flow, on every attention surface, answerable without opening the session (§6.6)
-- [ ] Pre-grants per session / per workstream (§6.6)
-- [ ] Irreversibility pierces pre-grants: irreversible integration writes always ask (§6.6, §9.2)
-- [ ] Agent-requested destruction of authored state routes through approvals; recoverable regardless (§6.6, principle 10)
+- [x] Approval raise/answer semantics: the record outlives the call it blocks, approve-once or deny **with a reason returned to the session structurally** (§6.6) — `approvals/approval.ts`
+- [x] One payload every attention surface renders, answerable without opening the session (§6.6, §7.1) — `approvalAttention`; the queue rendering it is Track B's (below)
+- [x] Pre-grants per session / per workstream (§6.6) — `approvals/pre-grants.ts`, deny-wins precedence, `humanOnly` enforced
+- [x] Irreversibility pierces pre-grants: irreversible integration writes always ask (§6.6, §9.2) — structural: an irreversible ask has no pre-grantable form
+- [x] Agent-requested destruction of authored state routes through approvals; recoverable regardless (§6.6, principle 10) — `decideDestruction` over catalog metadata
+- [ ] Endpoints, stores, events, and the gate/claim-wait wiring — Track A's stage 2, against the contract below
+- [ ] The queue row that answers one in place, and the other four surfaces (§7, §7.1) — Track B's Epic 6.1, over `ApprovalAttention`
+
+_Landed as `@plotroom/core`'s `sessions/approvals/` subtree plus the write gate's
+second axis. **One record, one evaluator.** Approvals already existed in two shapes
+before this epic — a claim wait no policy covered (§3.4, `claimWaitReason`
+returning `"approval"`) and a write-gate raise for a write extent nothing declared
+— and they are the same event to the operator, so they are one vocabulary
+(`ApprovalAsk`, four kinds) rather than two feeds that happen to look alike. Every
+raise path goes through `decideApproval`; a second evaluator would be the one that
+forgot §6.6's piercing rule._
+
+**Irreversibility pierces pre-grants, structurally.** `evaluatePreGrants` does not
+take an `ApprovalAsk`. It takes a `PreGrantableAsk`, whose only constructor is
+`preGrantable`, which returns `null` for an irreversible ask — so a coverage verdict
+for a merge is not refused at runtime, it cannot be written down.
+`pre-grants.test.ts` asserts that with `@ts-expect-error` (live: core's
+`tsconfig.tests.json` typechecks tests, and the guard was proven by regression —
+making the call legal fails the build with `TS2578`). `WriteReversibility` gained a
+third value, `"unknown"`, collapsed to irreversible by `isIrreversibleWrite`
+(principle 7): a two-valued type forced a plugin author who genuinely could not tell
+to pick, and the pick would have been the value that interrupts nobody.
+
+**The gate's hole this closed.** `decideToolPermission` used to answer `allow`
+immediately for a write intent of `none`. An outside-world write writes no workspace
+path, so `github_merge_pr` was allowed outright — §6.6's rule could not be a branch
+of the claim check, because the claim check never ran. The gate now builds the ask
+from **both** axes (write extent from `WriteIntent`, world effect from
+`ToolWorldDeclaration`) before it decides anything. And a pre-grant answers only
+whether an approval is needed: the claim manager is still asked about every path,
+because a pre-grant that pierced a claim would be a second writer on one path
+(principle 4).
+
+**One decision stated rather than left to a reader.** An **absent** world
+declaration does not raise. A tool nobody declared costs certainty about fork
+cleanliness (§6.3, already reported as `unknown`) and is still bounded by its write
+extent — an unbounded one raises on its own — but reading "undeclared" as
+"irreversible" would raise an approval for every file read, and an operator
+approving a hundred reads an hour is reading none of them. §6.6's rule is written
+about _declared_ write actions, and `"unknown"` is what a declaration says when it
+cannot tell.
+
+**Two answers, and no third.** Approve-once or deny-with-a-reason. There is
+deliberately no "always allow": a durable grant is a `PreGrant`, the operator's own
+gesture with its own record, and folding it into an answer would have been a back
+door through the piercing rule — "approve always" on a merge is exactly the covering
+pre-grant the type system refuses. A denial **must** carry a reason
+(`deny_needs_reason`), because deny is feedback: `encodeApprovalAnswer` returns
+`disposition: "not-this-way"` and nothing marks the session failed.
+
+**Destruction class is catalog metadata.** `requires.destroys` on the six tools that
+remove authored state, pinned in both directions against `approval: "always"` by
+`destruction.test.ts` — so a new destructive verb joins the class by declaring one
+field, and a `DELETE` that hands capability back (`claim_yield`,
+`run_queue_cancel`, the two withdrawals) is provably not in it. A destruction ask is
+_reversible_ and therefore pre-grantable, which is not a loophole: every one is a
+soft delete with an inverse, so the piercing rule has nothing to pierce. It still
+always asks absent a pre-grant. `checkDeletion` stays the store's last line — a
+call site that forgot to route through `decideDestruction` fails closed.
+
+**Contract for Track A (stage 2).** The domain decides; the server persists and
+exposes. Nothing below needs a new rule invented:
+
+- **Store shape.** `approvals`: id, session_id, workstream_id, kind
+  (`tool-permission|claim|destruction|integration-write`), `ask_json` (the whole
+  `ApprovalAsk` — the record must answer "what was asked" after the call settled),
+  request_id, call_id, raised_at, answered_at, answered_by (author kind + session
+  id, `NOT NULL` once answered), decision, deny_reason, pierced_pre_grant_id +
+  pierced_description. `pre_grants`: id, scope_kind + session_id/workstream_id,
+  effect, kinds_json, tool_pattern, extents_json, granted_by, granted_at,
+  withdrawn_at. Two CHECKs make illegal states unrepresentable, in the shape
+  migration 11 established: a `deny` answer with no reason, and a `granted_by` that
+  is not human. Retire rather than delete a withdrawn pre-grant — a withdrawal and a
+  never-granted rule are different facts.
+- **Endpoints.** `GET /api/approvals` (unanswered by default, `?sessionId=`),
+  `POST /api/approvals/:id/answer` `{decision, reason?}` (operator-only; a session
+  answering is refused by actor, not by the tool catalog's flag),
+  `GET|POST /api/pre-grants`, `DELETE /api/pre-grants/:id`. The two agent-facing
+  tools are `approval_inspect` (read what you are blocked on) and nothing else —
+  answering and granting are both `humanOnly`, so the catalog gains one `pending`
+  read tool and two operator-only mutations, exactly as the claim tools did.
+- **Events.** Two entities on the one stream: `approval`
+  (`created` on a raise, `updated` on an answer, no `deleted` — an approval that was
+  asked stays asked) carrying the whole record plus `approvalAttention(...)`, and
+  `pre_grant` (`created`, `deleted` with a reason). **`packages/core/src/events.ts`
+  was deliberately not edited by this track** — Track A owns it this batch for
+  budgets — so the two `DomainEventBody` variants are A's line item, and the payload
+  types they carry already exist and are exported.
+- **Gate integration points.** `createSessionGate` passes three new fields into
+  `decideToolPermission`: `world` (the adapter's `ToolWorldDeclarations`, still
+  `NO_TOOL_WORLD_DECLARATIONS` until Phase 7 declares any), `preGrants` (the
+  session's plus its workstream's, live rows), and `workstreamId` (it already reads
+  the session for it). Then: `decision.raisesApproval` → raise from `decision.ask`
+  and `decision.piercedPreGrant`; `decision.coveredBy` → **log the silent allow**
+  (§6.6 says pre-granted work proceeds, and an unlogged capability is one nobody can
+  audit); an answered approval settles the blocked request with
+  `approvalOutcome(...)`, and `approvedCallIds` is how the answer reaches the next
+  decision for the same call. The claim path gains one line too: a wait whose
+  `claimWaitReason` is `"approval"` raises one of these with `claimAsk(...)`, so the
+  queue shows one kind of row instead of two.
+
+**Alignment with Track B (Epic 6.1).** `ApprovalAttention` is the payload, and it is
+built in core for the reason `BroadcastAttention` is: five surfaces wording one
+approval five ways is worse than no approval feed. It carries what answering needs —
+`sentence` (already redacted, so it is safe on an outbound route, §7.3),
+`irreversible`, `piercedPreGrant`, and `answers`, which is the two options with
+`requiresReason` on the denial, so the queue renders the same buttons the panel does.
+It returns `null` once answered: the feed ranks what is still asking. `isAnswered`
+stays `questions.ts`'s name and approvals use `isApprovalAnswered`, because a surface
+importing both from `@plotroom/core` must not have to know which one it got.
+
+_Deferred, honestly: pre-grants match on **tool patterns, kinds, and write extents
+only** — not on paths. Paths are claims' business (§3.4) and a pre-grant that also
+scoped paths would be a second path-authority to keep in agreement. "A command to
+run", which §6.6 lists among the things a session may request, has no ask builder
+yet: the run path's own lineage and budget checks (§4.1) are what refuse it today,
+and routing it through here is Epic 6.2's boundary rather than this one's._
 
 ### Epic 6.4 — Run comparison and cross-run outcomes (`runs`)
 
@@ -1686,6 +1804,26 @@ epic's:_
 - [ ] Contract versioning with refusal/warning; install/enable/disable/remove without restart; plugin health surface (§10.2)
 - [ ] Enforced: plugins cannot author intent — tools act as the calling session (§10.2, principle 1)
 - [ ] Distribution: in-box, from directory, from configured source (§10.2) — record permission-grant UX decision in AGENTS.md
+
+_**A draft of the contract surface landed in Batch 4 (Track C), and nothing here is
+ticked for it** — drafting is not the epic, and a checked box would say the contract
+exists. It is `packages/plugin-sdk/src/draft/` (exported as `draft.*`, one runtime
+value, a status string) plus [`plugin-contract-draft.md`](plugin-contract-draft.md).
+`CONTRACT_VERSION` is still `0` and the host still speaks only load/ping/dispose:
+nothing is wired and nothing is frozen._
+
+_Why early: every §10.1 contribution point already has a **native implementation**,
+and Epic 7.3 ports the in-box four onto the public contract. A contract drawn without
+reading those implementations fails at the port — at the end of Phase 7, when the
+shape is hardest to change. Each draft interface therefore names its native
+counterpart (write actions ← write-intents + reversibility; workspace kinds ← core's
+`workspaces/`; condition checks ← the world-condition registry), so the freeze is a
+reconciliation. Three gaps are recorded in the doc rather than papered over:
+`DraftCardView` is the weakest shape (§10.1's "in-canvas interactive surfaces" needs
+a real renderer contribution to test it), the versioning **rule** is not drafted (only
+a number to compare), and the lifecycle verbs are host-side and out of scope for a
+contribution contract. The permission-grant UX stays an **open operator decision**,
+with the five questions that need answers written down where they can be answered._
 
 ### Epic 7.2 — Integration substrate (`integrations`)
 
