@@ -67,6 +67,7 @@ import {
   withoutTombstoned,
 } from "./tombstones.js";
 import { remotelyDeletedIds, withConfirmed } from "./reconcile.js";
+import { applyArrangementReset } from "./arrangement-reset.js";
 
 export interface CanvasNodeInput {
   readonly id: string;
@@ -123,6 +124,19 @@ export interface PlotCanvasProps {
   readonly placements: Placements;
   /** Called with every node's position whenever an arrangement settles. */
   readonly onPlacementsChange: (placements: Placements) => void;
+  /**
+   * A one-shot signal for "reset arrangement" (§5's only automatic-layout
+   * verb): bump this (e.g. an incrementing counter) *after* the host has
+   * already written fresh `placements` for every node, and every currently
+   * mounted node jumps to its new placement exactly once. This is
+   * deliberately not a react-to-`placements`-changed effect — durable
+   * placement means an already-mounted node's position must otherwise never
+   * move just because `placements` changed underneath it (a live snapshot
+   * updating some other node's stored spot, say); only a genuine bump of
+   * this counter re-applies positions to nodes already on the canvas.
+   * Omitted or unchanged: nothing resets.
+   */
+  readonly arrangementEpoch?: number;
   readonly selectedNodeId: string | null;
   /** The one navigation primitive; null clears the selection. */
   readonly onSelectNode: (nodeId: string | null) => void;
@@ -505,6 +519,7 @@ function CanvasInner({
   onToggleContainer,
   placements,
   onPlacementsChange,
+  arrangementEpoch = 0,
   selectedNodeId,
   onSelectNode,
   attentionNodeIds = [],
@@ -623,6 +638,31 @@ function CanvasInner({
     useNodesState<CanvasNode>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const { getNodes, screenToFlowPosition } = useReactFlow<CanvasNode>();
+
+  // "Reset arrangement" (Batch 2 Stage 1 review finding B1 — distinct from
+  // the tombstone "B1" below, an earlier Batch 1 finding): a plain ref,
+  // updated every render, so the one-shot effect below always reads the
+  // *latest* `effectivePlacements`
+  // without depending on it — depending on it would fire the reset on every
+  // placements change, exactly the react-to-placements-changed effect this
+  // must not be. `arrangementEpoch`'s own change is the only thing allowed
+  // to trigger a reset.
+  const latestPlacementsRef = useRef(effectivePlacements);
+  latestPlacementsRef.current = effectivePlacements;
+
+  // The last `arrangementEpoch` this canvas has already applied, so the
+  // effect below only fires on a genuine bump — never on mount (the ref's
+  // initial value matches the first render's prop) and never twice for the
+  // same bump (StrictMode's double-invoke included, since the ref is
+  // updated synchronously inside the effect body, before anything async).
+  const appliedArrangementEpoch = useRef(arrangementEpoch);
+  useEffect(() => {
+    if (arrangementEpoch === appliedArrangementEpoch.current) return;
+    appliedArrangementEpoch.current = arrangementEpoch;
+    setNodes((current) =>
+      applyArrangementReset(current, latestPlacementsRef.current),
+    );
+  }, [arrangementEpoch, setNodes]);
 
   // Tombstones (principle 10, B1 fix): a Backspace/Delete gesture only
   // mutates this internal xyflow state — the host is never told, so the

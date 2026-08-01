@@ -105,6 +105,12 @@ const now = () => Date.now();
 
 export function App() {
   const [placements, setPlacements] = useState<Placements | null>(null);
+  // A one-shot bump for PlotCanvas's `arrangementEpoch` prop: writing fresh
+  // `placements` alone never moves an already-mounted node (durable
+  // placement means nothing may react to `placements` changing on its own,
+  // spec §5) — "reset arrangement" also bumps this counter so the canvas
+  // applies the fresh positions to nodes already on screen, exactly once.
+  const [arrangementEpoch, setArrangementEpoch] = useState(0);
   const { selectedNodeId, select } = useSelectionRoute();
 
   // Fixture-fed lookup (Stage 1): a session node's id is the session's own
@@ -329,6 +335,10 @@ export function App() {
               );
               setPlacements(next);
               void placementStore.save(next);
+              // A fresh `placements` value alone never moves an
+              // already-mounted node; this bump is what actually applies
+              // it, exactly once, to every node currently on the canvas.
+              setArrangementEpoch((epoch) => epoch + 1);
               log("reset arrangement: re-derived from graph structure");
             }
           }}
@@ -337,6 +347,7 @@ export function App() {
           nodes={graph.nodes}
           edges={graph.edges}
           containers={graph.containers}
+          arrangementEpoch={arrangementEpoch}
           collapsedContainerIds={collapsedContainerIds}
           onToggleContainer={(containerId) =>
             setCollapsedContainerIds((current) => {

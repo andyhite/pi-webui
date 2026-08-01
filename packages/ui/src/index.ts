@@ -18,6 +18,7 @@ export * from "./legality/create-menu.js";
 export * from "./undo/stack.js";
 export * from "./placement/derive.js";
 export * from "./canvas/reconcile.js";
+export * from "./canvas/arrangement-reset.js";
 export * from "./context-order/reorder.js";
 export * from "./context-order/ContextInputList.js";
 export * from "./notes/model.js";
