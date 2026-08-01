@@ -983,10 +983,16 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
             at,
             leaseSeconds: input.leaseSeconds,
           });
+          // Every new claim goes through `promoteWaiters`, whoever granted it: a
+          // claim is what other waits are blocked *by*, so appearing without a
+          // sweep leaves their `blockedByClaimIds` stale (a visibility break) and
+          // any cycle it just closed undetected. This branch used to skip it while
+          // the operator's grant did not — an asymmetry with no reason behind it.
+          const promoted = promoteWaiters(withClaim(state, claim), at);
           return {
             ok: true,
-            state: withClaim(state, claim),
-            effects: [{ kind: "claim-granted", claim }],
+            state: promoted.state,
+            effects: [{ kind: "claim-granted", claim }, ...promoted.effects],
             result: { kind: "granted", claim },
           };
         }
@@ -1226,12 +1232,20 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
       at,
       leaseSeconds: waitLeaseSeconds(wait),
     });
+    // Same rule as every other grant: the new claim is something other waits are
+    // blocked by, so their blocker sets are resynced and any cycle it closed is
+    // swept before this returns.
+    const promoted = promoteWaiters(
+      withoutWait(withClaim(state, claim), wait.id),
+      at,
+    );
     return {
       ok: true,
-      state: withoutWait(withClaim(state, claim), wait.id),
+      state: promoted.state,
       effects: [
         { kind: "claim-granted", claim },
         { kind: "wait-removed", waitId: wait.id, reason: "granted" },
+        ...promoted.effects,
       ],
       result: { kind: "granted", claim },
     };

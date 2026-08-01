@@ -132,6 +132,125 @@ describe("wait-for cycles", () => {
     expect(closing.refusal.reason).toBe("would_deadlock");
   });
 
+  it("refuses the newest wait when an immediate grant closes the cycle", () => {
+    // Adversarial repro (the grant-path variant): nothing is promoted and nothing
+    // is released here — a session simply takes a free path, and that claim is
+    // what another waiter was implicitly blocked by. The immediate-grant branch
+    // skipped the sweep while the operator's grant did not, so the cycle stood
+    // live *and* the waiter's stored blockers were stale, which hid it from the
+    // claims panel as well as from detection.
+    const { manager, state, clock } = setup();
+    let current = hold(manager, state, C, "src/api");
+    current = hold(manager, current, B, "docs");
+
+    // B queues for `src`, blocked by C's claim inside it.
+    const bWaits = must(
+      manager.request(current, {
+        sessionId: B,
+        path: "src",
+        at: clock.tick(1),
+      }),
+    );
+    expect(bWaits.result.kind).toBe("waiting");
+    // A queues for `docs`, which B holds: A -> B.
+    const aWaits = must(
+      manager.request(bWaits.state, {
+        sessionId: A,
+        path: "docs",
+        at: clock.tick(1),
+      }),
+    );
+    expect(aWaits.result.kind).toBe("waiting");
+    expect(findAnyWaitCycle(waitForEdges(aWaits.state))).toBeNull();
+
+    // A now takes `src/ui` — free, policy-allowed, granted at once. It sits inside
+    // `src`, so B is now waiting on A too, closing B -> A -> B.
+    const granted = must(
+      manager.request(aWaits.state, {
+        sessionId: A,
+        path: "src/ui",
+        at: clock.tick(1),
+      }),
+    );
+    expect(granted.result.kind).toBe("granted");
+
+    // Detected, and detected from the *stored* rows — which is only possible
+    // because the grant resynced them.
+    expect(findAnyWaitCycle(waitForEdges(granted.state))).toBeNull();
+    const refused = granted.effects.filter(
+      (effect) => effect.kind === "deadlock-refused",
+    );
+    expect(refused).toHaveLength(1);
+    const [only] = refused;
+    if (only?.kind !== "deadlock-refused")
+      throw new Error("expected a refusal");
+    // A's own wait is the newest in the loop, so A's is the one refused.
+    expect(only.wait.sessionId).toBe(A);
+    expect(only.message).toContain("yield one of those");
+
+    // B keeps its place, and its stored blockers now name every live blocker
+    // rather than only the one that existed when it queued.
+    const bWait = granted.state.waits.find((wait) => wait.sessionId === B);
+    expect(bWait).toBeDefined();
+    const blockingHolders = (bWait?.blockedByClaimIds ?? []).map((claimId) => {
+      const claim = granted.state.claims.find(
+        (candidate) => candidate.id === claimId,
+      );
+      return claim?.holder.kind === "session" ? claim.holder.sessionId : "?";
+    });
+    expect(new Set(blockingHolders)).toEqual(new Set([A, C]));
+  });
+
+  it("resyncs stored blockers when an approval answer grants a claim", () => {
+    // The same asymmetry lived in `answerApproval`'s direct-grant branch.
+    const clock = testClock();
+    const manager = createClaimManager({ clock, ids: countingClaimIds() });
+    const opened = manager.open(ws());
+    // C holds `src`, so a request inside it needs C's answer; B queues for `src`
+    // itself, blocked by C.
+    const current = must(
+      manager.grant(opened.state, { path: "src", to: C, by: humanAuthor }),
+    ).state;
+    const bWaits = must(
+      manager.request(current, {
+        sessionId: B,
+        path: "src",
+        at: clock.tick(1),
+      }),
+    );
+    const asked = must(
+      manager.request(bWaits.state, {
+        sessionId: A,
+        path: "src/ui",
+        at: clock.tick(1),
+      }),
+    );
+    if (asked.result.kind !== "approval-required") {
+      throw new Error("expected an approval");
+    }
+
+    const answered = must(
+      manager.answerApproval(asked.state, {
+        waitId: asked.result.wait.id,
+        by: sessionAuthor(C),
+        decision: "grant",
+        at: clock.tick(1),
+      }),
+    );
+    expect(answered.result.kind).toBe("granted");
+
+    // B was waiting on `src` before A held part of it; the answer's grant is what
+    // makes A a blocker, and B's row says so.
+    const bWait = answered.state.waits.find((wait) => wait.sessionId === B);
+    const holders = (bWait?.blockedByClaimIds ?? []).map((claimId) => {
+      const claim = answered.state.claims.find(
+        (candidate) => candidate.id === claimId,
+      );
+      return claim?.holder.kind === "session" ? claim.holder.sessionId : "?";
+    });
+    expect(new Set(holders)).toEqual(new Set([A, C]));
+  });
+
   it("refuses the newest wait when promotion churn closes the cycle", () => {
     // Adversarial repro: no request closes this loop, a *promotion* does. Cycle
     // detection ran only at insertion, so both waits stood forever — B waiting
