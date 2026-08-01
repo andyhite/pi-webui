@@ -9,6 +9,8 @@
  * shipped default, with a `TODO` naming exactly what Track A should add.
  */
 
+import { isQueuedRunStartable, type QueuedRunState } from "@plotroom/core";
+
 import type { HttpClient } from "../transport/http.js";
 import {
   DEFAULT_CONCURRENCY_LIMIT_FALLBACK,
@@ -83,7 +85,7 @@ export function createApiFleetDataSource(
       );
 
       const queue = await http.get<{
-        readonly queued: readonly unknown[];
+        readonly queued: readonly { readonly state: QueuedRunState }[];
       }>("/api/run-queue");
 
       return deriveFleetSummary({
@@ -91,7 +93,17 @@ export function createApiFleetDataSource(
         spend,
         nowSeconds: now(),
         concurrencyLimit,
-        queuedCount: queue.queued.length,
+        // `GET /api/run-queue`'s `queued` array is "everything a queue
+        // surface shows: waiting, in flight, and re-asking"
+        // (`apps/server/src/runs/queue.ts#open`'s own doc comment) —
+        // `starting`/`running`/`needs_reask`/`paused` entries hold a
+        // concurrency slot or are mid-flight, not admitted-but-waiting.
+        // `isQueuedRunStartable` is `@plotroom/core`'s own predicate for
+        // "still queued" (principle 8: the same rule the drain loop and
+        // the cancel verb use, never reimplemented here).
+        queuedCount: queue.queued.filter((entry) =>
+          isQueuedRunStartable(entry.state),
+        ).length,
       });
     },
   };
