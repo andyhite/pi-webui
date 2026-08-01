@@ -135,7 +135,19 @@ export function parsePiEvent(line: string): PiEvent {
 /* ------------------------------------------------------------------ commands */
 
 export type PiCommand =
-  | { readonly type: "prompt"; readonly id: string; readonly message: string }
+  | {
+      readonly type: "prompt";
+      readonly id: string;
+      readonly message: string;
+      /**
+       * Absent for a session's first prompt. `"steer"` for every injection: pi
+       * refuses a bare prompt while it is streaming, and its standalone `steer`
+       * command queues *without triggering a turn* when it is idle — so a prompt
+       * carrying this field is the only shape that actually delivers in both
+       * states (§6.5; verified against pi 0.83.0's `AgentSession.prompt`).
+       */
+      readonly streamingBehavior?: "steer" | "followUp";
+    }
   | { readonly type: "steer"; readonly id: string; readonly message: string }
   | { readonly type: "abort"; readonly id: string }
   | { readonly type: "get_session_stats"; readonly id: string }

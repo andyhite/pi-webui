@@ -21,10 +21,17 @@ import {
   composeSeededPrompt,
   createPiAdapter,
   PI_CAPABILITIES,
+  PiForkUnavailable,
+  resolvePiForkTarget,
   type PiRpcTransport,
 } from "./adapter.js";
+import { PI_ASK_TOOL_EXTENSION, PI_ASK_TOOL_NAME } from "./ask-tool.js";
 import { diffDeliveredInjections } from "./observations.js";
-import { PI_APPROVAL_TITLE_PREFIX } from "./permission-gate.js";
+import {
+  parseGateRequest,
+  PI_APPROVAL_TITLE_PREFIX,
+  PI_QUESTION_TITLE_PREFIX,
+} from "./permission-gate.js";
 import { splitJsonLines } from "./protocol.js";
 
 const NOW = 1_700_000_000_000;
@@ -312,8 +319,13 @@ describe("injection is a ledger: queued → delivered (§6.5)", () => {
 
     const receipt = await handle.inject({ id: "inj-1", text: "use pnpm" });
     expect(receipt).toEqual({ id: "inj-1", queuedAt: NOW });
-    expect(transport.commandsOfType("steer")).toMatchObject([
-      { message: "use pnpm" },
+    // A prompt carrying `streamingBehavior: "steer"`, never the bare `steer`
+    // command: pi's standalone steer queues without triggering a turn, so an
+    // injection into a live-but-idle session would never be delivered (§6.5).
+    expect(transport.commandsOfType("steer")).toEqual([]);
+    expect(transport.commandsOfType("prompt")).toMatchObject([
+      { message: "fix the drift flags" },
+      { message: "use pnpm", streamingBehavior: "steer" },
     ]);
 
     let ledger = queueInjection(EMPTY_INJECTIONS, {
@@ -343,24 +355,79 @@ describe("injection is a ledger: queued → delivered (§6.5)", () => {
     transport.end();
   });
 
-  it("recognizes delivery by what left pi's queue", () => {
+  it("recognizes delivery by what left pi's queue, once it was seen in it", () => {
     const pending = [
       { id: "a", text: "first" },
       { id: "b", text: "second" },
     ];
 
-    expect(diffDeliveredInjections(pending, ["first", "second"])).toEqual({
+    // First sighting: both held, nothing delivered.
+    const held = diffDeliveredInjections(pending, ["first", "second"]);
+    expect(held).toEqual({
       delivered: [],
-      remaining: pending,
+      remaining: [
+        { id: "a", text: "first", held: true },
+        { id: "b", text: "second", held: true },
+      ],
     });
-    expect(diffDeliveredInjections(pending, ["second"])).toEqual({
+
+    expect(diffDeliveredInjections(held.remaining, ["second"])).toEqual({
       delivered: ["a"],
-      remaining: [{ id: "b", text: "second" }],
+      remaining: [{ id: "b", text: "second", held: true }],
     });
-    expect(diffDeliveredInjections(pending, [])).toEqual({
+    expect(diffDeliveredInjections(held.remaining, [])).toEqual({
       delivered: ["a", "b"],
       remaining: [],
     });
+  });
+
+  it("does not call an injection delivered that pi was never seen holding", () => {
+    // pi consumed it immediately (it was idle), so it is absent from `steering`
+    // from the first update onwards. Reporting delivery here would report it
+    // before the turn it became had started.
+    const pending = [{ id: "a", text: "first" }];
+    expect(diffDeliveredInjections(pending, [])).toEqual({
+      delivered: [],
+      remaining: [{ id: "a", text: "first", held: false }],
+    });
+  });
+
+  it("delivers an immediately-consumed injection at the turn it became", async () => {
+    const transport = new FakeTransport();
+    const handle = await adapterWith(transport).start(startConfig);
+
+    await handle.inject({ id: "inj-idle", text: "look at docs/ instead" });
+    // pi was idle: no steering queue entry, just a turn.
+    transport.emit({ type: "queue_update", steering: [] });
+    transport.emit({ type: "turn_start" });
+
+    const observations = await take(handle, 2);
+    expect(observations.map((observation) => observation.kind)).toEqual([
+      "turn-started",
+      "injection-delivered",
+    ]);
+    expect(observations[1]).toMatchObject({ injectionId: "inj-idle" });
+
+    transport.end();
+  });
+
+  it("delivers a queued injection only once, at the boundary it left the queue", async () => {
+    const transport = new FakeTransport();
+    const handle = await adapterWith(transport).start(startConfig);
+
+    await handle.inject({ id: "inj-held", text: "stop grepping" });
+    transport.emit({ type: "queue_update", steering: ["stop grepping"] });
+    // A turn starting while pi still holds it is not delivery.
+    transport.emit({ type: "turn_start" });
+    transport.emit({ type: "queue_update", steering: [] });
+
+    const observations = await take(handle, 2);
+    expect(observations.map((observation) => observation.kind)).toEqual([
+      "turn-started",
+      "injection-delivered",
+    ]);
+
+    transport.end();
   });
 });
 
@@ -483,3 +550,177 @@ describe("JSONL framing", () => {
 function never(): never {
   throw new Error("expected a ledger entry");
 }
+
+describe("fork from a point maps onto pi's own surface (§6.3)", () => {
+  const messages = [
+    { entryId: "e1", text: "turn one prompt" },
+    { entryId: "e2", text: "turn two prompt" },
+    { entryId: "e3", text: "turn three prompt" },
+  ];
+
+  it("forks from the message that opens the NEXT turn, because PlotRoom forks inclusively", () => {
+    // A fork at turn 2 keeps turns 1 and 2, so pi's branch begins at the user
+    // message that opened turn 3.
+    expect(resolvePiForkTarget(messages, { turn: 2 })).toEqual({
+      kind: "rewound",
+      entryId: "e3",
+    });
+    expect(resolvePiForkTarget(messages, { turn: 1 })).toEqual({
+      kind: "rewound",
+      entryId: "e2",
+    });
+  });
+
+  it("needs no command at the tip: `pi --fork` already inherited everything", () => {
+    expect(resolvePiForkTarget(messages, { turn: 3 })).toEqual({
+      kind: "inherited",
+    });
+  });
+
+  it("refuses a point past what pi lists rather than clamping to the nearest", () => {
+    expect(resolvePiForkTarget(messages, { turn: 4 })).toMatchObject({
+      kind: "unavailable",
+    });
+    expect(resolvePiForkTarget(messages, { turn: 0 })).toMatchObject({
+      kind: "unavailable",
+    });
+    expect(resolvePiForkTarget([], { turn: 1 })).toMatchObject({
+      kind: "unavailable",
+    });
+  });
+
+  it("sends the fork command for an interior point", async () => {
+    const transport = new FakeTransport();
+    transport.responses = { get_fork_messages: { messages } };
+
+    const handle = await adapterWith(transport).fork(
+      "pi-session-1",
+      { turn: 1 },
+      { ...startConfig, prompt: "carry on from there" },
+    );
+
+    expect(transport.commandsOfType("fork")).toMatchObject([{ entryId: "e2" }]);
+    expect(transport.commandsOfType("prompt")).toMatchObject([
+      { message: "carry on from there" },
+    ]);
+    expect(handle.ref).toBe("pi-session-1");
+
+    transport.end();
+  });
+
+  it("sends no fork command at the tip", async () => {
+    const transport = new FakeTransport();
+    transport.responses = { get_fork_messages: { messages } };
+
+    await adapterWith(transport).fork("pi-session-1", { turn: 3 }, startConfig);
+
+    expect(transport.commandsOfType("fork")).toEqual([]);
+    expect(transport.commandsOfType("prompt")).toHaveLength(1);
+
+    transport.end();
+  });
+
+  it("treats a cancelled fork as a fork that did not happen", async () => {
+    const transport = new FakeTransport();
+    transport.responses = {
+      get_fork_messages: { messages },
+      // pi answers success: true and says so only in `data.cancelled`.
+      fork: { text: "turn two prompt", cancelled: true },
+    };
+
+    // With no seed to fall back to, the refusal surfaces rather than producing a
+    // session that inherited nothing while claiming a native fork.
+    await expect(
+      adapterWith(transport).fork("pi-session-1", { turn: 1 }, startConfig),
+    ).rejects.toThrow(PiForkUnavailable);
+
+    transport.end();
+  });
+
+  it("falls back to a seeded session when pi cannot reach the point", async () => {
+    const transports: FakeTransport[] = [];
+    const adapter = createPiAdapter({
+      connect: async () => {
+        const transport = new FakeTransport();
+        transport.responses = { get_fork_messages: { messages } };
+        transports.push(transport);
+        return transport;
+      },
+      now: () => NOW,
+    });
+
+    const handle = await adapter.fork(
+      "pi-session-1",
+      // Past what pi lists: the native route is gone.
+      { turn: 9 },
+      {
+        ...startConfig,
+        prompt: "keep going",
+        seedTranscript: "user: turn one prompt",
+      },
+    );
+
+    // Two processes: the half-forked one, aborted, and a fresh seeded one.
+    expect(transports).toHaveLength(2);
+    const seeded = transports[1] as FakeTransport;
+    const prompts = seeded.commandsOfType("prompt");
+    expect(prompts).toHaveLength(1);
+    expect(String(prompts[0]?.message)).toContain("# Inherited transcript");
+    expect(String(prompts[0]?.message)).toContain("keep going");
+    expect(seeded.commandsOfType("fork")).toEqual([]);
+
+    await handle.stop("abort");
+  });
+});
+
+describe("plotroom_ask carries no timer (§6.4, §14, principle 2)", () => {
+  it("asks through PlotRoom's question channel", () => {
+    expect(PI_ASK_TOOL_EXTENSION).toContain(`name: "${PI_ASK_TOOL_NAME}"`);
+    expect(PI_ASK_TOOL_EXTENSION).toContain("ctx.ui.select(");
+    expect(PI_ASK_TOOL_EXTENSION).toContain(PI_QUESTION_TITLE_PREFIX);
+    // The answer goes back structurally, with what was declined named too (§6.4).
+    expect(PI_ASK_TOOL_EXTENSION).toContain("pathsNotTaken");
+  });
+
+  it("contains no timeout of any kind", () => {
+    // pi's dialogs accept `{ timeout }` and auto-resolve when it expires. Using
+    // it would be a timed default, which §14 forbids outright. This assertion is
+    // the enforcement: the generated source cannot acquire one quietly.
+    for (const timer of [
+      "timeout",
+      "setTimeout",
+      "AbortSignal",
+      "setInterval",
+    ]) {
+      expect(PI_ASK_TOOL_EXTENSION).not.toContain(timer);
+    }
+  });
+
+  it("returns an error, never a choice, when the question is dismissed", () => {
+    expect(PI_ASK_TOOL_EXTENSION).toContain("Nothing was chosen for you.");
+    expect(PI_ASK_TOOL_EXTENSION).toContain("answer: null");
+  });
+
+  it("refuses to ask when there is nobody to answer", () => {
+    expect(PI_ASK_TOOL_EXTENSION).toContain("!ctx.hasUI");
+  });
+
+  it("is recognised as a question when it reaches PlotRoom", () => {
+    const parsed = parseGateRequest({
+      type: "extension_ui_request",
+      id: "req-1",
+      method: "select",
+      title: `${PI_QUESTION_TITLE_PREFIX}rebuild or add a column?`,
+      options: ["rebuild the table", "add a column"],
+    });
+
+    expect(parsed).toEqual({
+      requestId: "req-1",
+      request: {
+        kind: "question",
+        text: "rebuild or add a column?",
+        options: ["rebuild the table", "add a column"],
+      },
+    });
+  });
+});

@@ -179,6 +179,19 @@ export function createPiAdapter(
       );
     },
 
+    /**
+     * Fork natively, and fall back to seeding rather than to a lie (§6.3,
+     * decision 0001).
+     *
+     * `pi --fork <ref>` produces a new native session holding the source's
+     * conversation; `forkAt` then rewinds it to the requested point. When pi
+     * cannot reach that point — the entry is gone, an extension cancelled the
+     * fork, the point is past what pi lists — the honest answer is a *seeded*
+     * session built from PlotRoom's own transcript, which the caller has already
+     * supplied as `config.seedTranscript` (`planFork`). The half-forked session is
+     * closed first: leaving it running would leave a native session nothing is
+     * driving.
+     */
     async fork(ref, point: TranscriptPoint, config: RuntimeStartConfig) {
       const handle = await open(
         {
@@ -191,7 +204,30 @@ export function createPiAdapter(
         null,
       );
 
-      await handle.forkAt(point);
+      try {
+        await handle.forkAt(point);
+      } catch (error) {
+        if (
+          !(error instanceof PiForkUnavailable) ||
+          config.seedTranscript === undefined
+        ) {
+          await handle.stop("abort");
+          throw error;
+        }
+        await handle.stop("abort");
+        // A seeded fork, launched as what it is: a fresh pi session whose first
+        // prompt carries the labelled transcript prefix (`composeSeededPrompt`).
+        return open(
+          {
+            mode: "start",
+            launch: config.launch,
+            workspacePath: config.workspacePath,
+            extensionPaths,
+          },
+          composeSeededPrompt(config),
+        );
+      }
+
       await handle.prompt(composeSeededPrompt(config));
       return handle;
     },
@@ -207,6 +243,89 @@ interface PiResponse {
 interface ForkMessage {
   readonly entryId: string;
   readonly text: string;
+}
+
+/**
+ * How pi reached a fork point. `"inherited"` means the launch already did it:
+ * `pi --fork <ref>` copies the whole source session into a new one, which *is* a
+ * fork from the tip. `"rewound"` means a `fork` command moved the new session's
+ * branch back to an earlier point.
+ */
+export type PiForkMode = "inherited" | "rewound";
+
+export type PiForkTarget =
+  | { readonly kind: "rewound"; readonly entryId: string }
+  | { readonly kind: "inherited" }
+  | { readonly kind: "unavailable"; readonly reason: string };
+
+/**
+ * Map a PlotRoom transcript point onto pi's fork surface (§6.3).
+ *
+ * Two facts have to meet here, and getting the arithmetic wrong silently loses a
+ * turn of inherited context:
+ *
+ * - **PlotRoom** forks *inclusively*: "a fork from any point inherits the
+ *   conversation up to that point" (§6.3), so a fork at turn `n` keeps turns
+ *   1..n — `transcriptPrefix` in `fork.ts` is the same rule.
+ * - **pi** forks *from* a user message: the new branch begins at that message,
+ *   so forking from the message that opened turn `n` would drop turn `n` itself.
+ *
+ * So the entry to fork from is the one that opens turn `n + 1`, and when `n` is
+ * the last turn there is no such message — nothing needs sending at all, because
+ * `pi --fork <ref>` has already produced a new session holding the whole
+ * conversation. That is why the tip case is `inherited` rather than a command.
+ *
+ * The assumption this rests on, stated because it is an assumption: pi's k-th
+ * forkable user message opens PlotRoom's k-th turn. That holds while every turn
+ * begins with one user message, which is how PlotRoom drives pi (one prompt per
+ * turn, injections included — each delivered injection is a user message that
+ * starts a turn). A point past the end of that list is `unavailable` rather than
+ * clamped, because a fork that silently inherits a different prefix than the one
+ * the operator picked is worse than a seeded fallback (principle 7).
+ */
+export function resolvePiForkTarget(
+  messages: readonly ForkMessage[],
+  point: TranscriptPoint,
+): PiForkTarget {
+  if (point.turn < 1) {
+    return {
+      kind: "unavailable",
+      reason: `turn ${point.turn} is not a turn`,
+    };
+  }
+  if (point.turn > messages.length) {
+    return {
+      kind: "unavailable",
+      reason: `pi lists ${messages.length} forkable message${
+        messages.length === 1 ? "" : "s"
+      }, so it cannot fork at turn ${point.turn}`,
+    };
+  }
+  if (point.turn === messages.length) return { kind: "inherited" };
+
+  const next = messages[point.turn] as ForkMessage;
+  return { kind: "rewound", entryId: next.entryId };
+}
+
+/**
+ * A native fork pi could not perform. Thrown rather than papered over so the
+ * caller can seed a fresh session from PlotRoom's own transcript instead — the
+ * emulation decision 0001 describes, taken deliberately and recorded as seeded.
+ */
+export class PiForkUnavailable extends Error {
+  readonly turn: number;
+
+  constructor(point: TranscriptPoint, reason: string) {
+    super(`pi cannot fork at turn ${point.turn}: ${reason}`);
+    this.name = "PiForkUnavailable";
+    this.turn = point.turn;
+  }
+}
+
+/** pi reports an extension-cancelled fork as `success: true, data.cancelled`. */
+function wasCancelled(data: unknown): boolean {
+  if (typeof data !== "object" || data === null) return false;
+  return (data as { cancelled?: unknown }).cancelled === true;
 }
 
 class PiSessionHandle implements RuntimeSessionHandle {
@@ -251,14 +370,31 @@ class PiSessionHandle implements RuntimeSessionHandle {
     }
   }
 
+  /**
+   * Inject between turns (§6.5) — which, for pi, is one command and not two.
+   *
+   * pi offers three ways to hand a live session input, and exactly one of them
+   * arrives in both states the session can be in:
+   *
+   * - a bare `prompt` **fails** while pi is streaming ("Agent is already
+   *   processing. Specify streamingBehavior...");
+   * - the standalone `steer` command queues the message and triggers nothing, so
+   *   an injection into a live-but-idle session sits in the queue indefinitely —
+   *   "queued" forever, which is the exact failure §6.5 exists to prevent;
+   * - `prompt` carrying `streamingBehavior: "steer"` queues mid-turn and prompts
+   *   when idle (pi 0.83.0 consults the field only while streaming).
+   *
+   * So PlotRoom always sends the third. Resolving still means queue acceptance
+   * and nothing more: consumption arrives later as an observation, and which of
+   * the two paths it took is visible there — a queued injection is seen in pi's
+   * steering queue first, an immediate one is delivered at the turn it became.
+   */
   async inject(input: InjectedInput): Promise<InjectionReceipt> {
-    // Resolves on queue acceptance, not on consumption: pi answers `steer`
-    // once the message is in its queue, and delivery arrives later as an
-    // observation (§6.5).
     const response = await this.#send({
-      type: "steer",
+      type: "prompt",
       id: this.#nextId(),
       message: input.text,
+      streamingBehavior: "steer",
     });
     if (!response.success) {
       throw new Error(response.error ?? "pi refused the injection");
@@ -298,28 +434,41 @@ class PiSessionHandle implements RuntimeSessionHandle {
   }
 
   /** Move pi's active branch to the fork point before continuing (§6.3). */
-  async forkAt(point: TranscriptPoint): Promise<void> {
+  async forkAt(point: TranscriptPoint): Promise<PiForkMode> {
     const listed = await this.#send({
       type: "get_fork_messages",
       id: this.#nextId(),
     });
-    const messages = readForkMessages(listed.data);
-    // pi forks from a user message, which is where a PlotRoom turn begins.
-    const entry = messages[point.turn - 1];
-    if (!entry) {
-      throw new Error(
-        `pi cannot fork at turn ${point.turn}; seed a new session from the transcript instead`,
-      );
-    }
+    const target = resolvePiForkTarget(readForkMessages(listed.data), point);
 
-    const forked = await this.#send({
+    if (target.kind === "unavailable") {
+      throw new PiForkUnavailable(point, target.reason);
+    }
+    // The launch already inherited everything; sending a command here would fork
+    // a fork.
+    if (target.kind === "inherited") return "inherited";
+
+    const response = await this.#send({
       type: "fork",
       id: this.#nextId(),
-      entryId: entry.entryId,
+      entryId: target.entryId,
     });
-    if (!forked.success) {
-      throw new Error(forked.error ?? "pi refused the fork");
+
+    if (!response.success) {
+      throw new PiForkUnavailable(
+        point,
+        response.error ?? "pi refused the fork",
+      );
     }
+    // pi answers `success: true` for a fork an extension cancelled, saying so
+    // only in `data.cancelled`. Reading `success` alone would produce a session
+    // that inherited nothing while reporting a native fork — the one failure a
+    // seeded fallback exists to avoid (principle 7).
+    if (wasCancelled(response.data)) {
+      throw new PiForkUnavailable(point, "a pi extension cancelled the fork");
+    }
+
+    return "rewound";
   }
 
   #nextId(): string {
