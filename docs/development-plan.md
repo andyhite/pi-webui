@@ -927,6 +927,30 @@ fed by a fixture ledger since Epic 5.2's injection endpoint has not landed).
 Both are ready to be joined by a live source without changing shape — the
 same swap `createApiSessionDataSource` already did for its own fixture._
 
+_**Post-landing review fixes** (same window): a node inside a workstream
+container — the normal case for a session or command once a workstream
+exists, not an edge case — rendered no bubble at all, not even a collapsed
+count, because the extent computation only ever looked at top-level nodes
+and xyflow reports a contained node's position parent-relative rather than
+absolute. `canvas/node-extents.ts` (pure, tested) now resolves every
+visible node's absolute position first — a workstream frame is always
+top-level in this canvas (§3.3), so a child's absolute position is exactly
+its parent's position plus its own — and a source matching no node extent
+at all folds into one deterministic `UNATTACHED_BUBBLE_NODE_ID` badge
+rather than vanishing (principle 12). Three smaller fixes landed
+alongside: the minimap's reserved region is now fed by a
+ResizeObserver-backed container size instead of a memo that only
+recomputed on pan/zoom, so a window resize with the viewport otherwise
+unchanged no longer leaves it stale; every bubble timestamp is epoch
+seconds throughout (`BubbleSource.updatedAt`'s doc comment states the
+rule) — `SessionBubbleInput.now` (silently milliseconds) is renamed to
+`nowSeconds`, and the command-prompt bubble no longer hardcodes `0`, both
+of which previously broke the global cap's recency ordering under cap
+pressure; and a rendered bubble's height is capped (scroll, not clip) to
+exactly the rect `placement.ts` collision-checked, so DOM text wrapping
+taller than the `measureLines` estimate can no longer spill into a region
+the engine proved clear._
+
 ### Epic 5.4 — Resume, fork, handoff (`sessions`)
 
 - [ ] Explicit resume-vs-fork choice, never implicit on typing (§6.3)
