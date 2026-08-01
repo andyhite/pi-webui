@@ -75,10 +75,19 @@ export function spawnServer(
 
   return {
     pid,
-    kill: () => {
-      expectedShutdown = true;
-      child.kill();
-    },
+    kill: () =>
+      new Promise<void>((resolve) => {
+        expectedShutdown = true;
+        // Already exited (e.g. it crashed before this was called) — no
+        // second "exit" event is coming, so resolve directly rather than
+        // waiting on one that will never fire.
+        if (child.exitCode !== null || child.signalCode !== null) {
+          resolve();
+          return;
+        }
+        child.once("exit", () => resolve());
+        child.kill();
+      }),
   };
 }
 

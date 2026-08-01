@@ -14,7 +14,8 @@ export type HealthProbe = () => Promise<boolean>;
 
 export interface SpawnedProcess {
   readonly pid: number;
-  kill(): void;
+  /** Resolves once the process has actually exited — never before. */
+  kill(): Promise<void>;
 }
 
 export type SpawnFn = () => SpawnedProcess;
@@ -37,7 +38,11 @@ export type SpawnOrAttachResult =
 
 export interface SpawnOrAttachHandle {
   readonly result: SpawnOrAttachResult;
-  /** Kills only the process this call spawned; a no-op when attached. */
+  /**
+   * Kills only the process this call spawned; a no-op when attached.
+   * Fire-and-forget — shutdown does not block on the process actually
+   * exiting.
+   */
   stop(): void;
 }
 
@@ -71,13 +76,15 @@ export async function spawnOrAttach(
     };
   }
 
-  // Re-probe once before giving up: a concurrent launch (another instance,
-  // or someone starting the server by hand) may have finished becoming
-  // healthy in the beat between the deadline and now. If so, prefer it and
-  // kill the spawn attempt that lost the race, rather than leaving two
-  // server processes running for one instance.
+  // Our own spawn attempt failed to become healthy in time — give up on it
+  // and wait for it to actually exit *before* asking again. Only once our
+  // child is confirmed gone can a healthy re-probe mean anything other than
+  // "our own process, answering a beat late": with the child dead, nothing
+  // is left on that port but a genuinely different process (a concurrent
+  // launch, or someone starting the server by hand), so attaching to it is
+  // correct — never attaching to the corpse of what this call just killed.
+  await child.kill();
   const healthyAfterAll = await deps.probe();
-  child.kill();
   if (healthyAfterAll) {
     return { result: { mode: "attached" }, stop: () => {} };
   }
