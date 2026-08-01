@@ -269,7 +269,6 @@ export function App() {
               }
               dataSource={sessionDataSource}
               draftsStore={sessionDraftsStore}
-              now={now}
               onSend={(sessionId, text) =>
                 log(`send to ${sessionId} (no-op against fixtures): ${text}`)
               }

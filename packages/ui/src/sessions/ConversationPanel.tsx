@@ -20,12 +20,13 @@ import type {
   SessionId,
   SessionStatus,
   Transcript,
+  TranscriptExport,
 } from "@plotroom/core";
 import { restoreReleased } from "@plotroom/core";
 
 import type { SessionDataSource } from "./data-source.js";
 import type { SessionDraftsStore } from "./drafts.js";
-import { exportTranscriptAsync } from "./export.js";
+import { exportIncompleteMessage, exportTranscriptAsync } from "./export.js";
 import { buildTranscriptView } from "./transcript-view.js";
 import type { TranscriptViewItem } from "./transcript-view.js";
 
@@ -34,7 +35,6 @@ export interface ConversationPanelProps {
   readonly status: SessionStatus;
   readonly dataSource: SessionDataSource;
   readonly draftsStore: SessionDraftsStore;
-  readonly now: () => number;
   /** No-op against fixtures until Stage 2 wires a live session (§6.5+). */
   readonly onSend?: (sessionId: SessionId, text: string) => void;
   /** Placeholder hook: wiring a message as context is Epic 3.5/5.2 territory. */
@@ -71,7 +71,6 @@ export function ConversationPanel({
   status,
   dataSource,
   draftsStore,
-  now,
   onSend,
   onWireAsContext,
   copyToClipboard = defaultCopyToClipboard,
@@ -82,7 +81,14 @@ export function ConversationPanel({
   });
   const [draft, setDraft] = useState("");
   const [history, setHistory] = useState<readonly string[]>([]);
-  const [exportResult, setExportResult] = useState<string | null>(null);
+  // The whole export result, not just its document: §6.1's completeness
+  // contract ("an export of a released transcript is complete") is a fact
+  // about the export, and discarding `complete`/`unavailable` here would
+  // paper over exactly the failure path principle 12 says must be reported,
+  // never silently swallowed.
+  const [exportResult, setExportResult] = useState<TranscriptExport | null>(
+    null,
+  );
   const [loadedBack, setLoadedBack] = useState<ReadonlyMap<string, string>>(
     new Map(),
   );
@@ -149,7 +155,7 @@ export function ConversationPanel({
     const result = await exportTranscriptAsync(transcript, (marker, callId) =>
       dataSource.loadReleasedContent(session.id, callId, marker),
     );
-    setExportResult(result.document);
+    setExportResult(result);
   }
 
   return (
@@ -238,7 +244,14 @@ export function ConversationPanel({
           export
         </button>
         {exportResult !== null ? (
-          <pre data-testid="export-document">{exportResult}</pre>
+          <div>
+            <pre data-testid="export-document">{exportResult.document}</pre>
+            {!exportResult.complete ? (
+              <div data-testid="export-incomplete">
+                {exportIncompleteMessage(exportResult.unavailable)}
+              </div>
+            ) : null}
+          </div>
         ) : null}
       </div>
 
@@ -261,8 +274,6 @@ export function ConversationPanel({
           send
         </button>
       </div>
-
-      <div>{now()}</div>
     </div>
   );
 }

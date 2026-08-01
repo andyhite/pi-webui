@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Transcript } from "@plotroom/core";
 
-import { exportTranscriptAsync } from "./export.js";
+import { exportIncompleteMessage, exportTranscriptAsync } from "./export.js";
 
 function transcriptWithReleased(): Transcript {
   return {
@@ -63,5 +63,40 @@ describe("exportTranscriptAsync", () => {
     const result = await exportTranscriptAsync(transcript, async () => null);
     expect(result.complete).toBe(true);
     expect(result.document).toContain("hi");
+  });
+
+  it("never drops the whole export down to just its document (§6.1, principle 12)", async () => {
+    // The Conversation panel must keep `complete`/`unavailable` alongside
+    // `document`, not just the string — exercised here at the data level
+    // the panel's state is built from.
+    const result = await exportTranscriptAsync(
+      transcriptWithReleased(),
+      async () => null,
+    );
+    expect(result).toEqual({
+      document: expect.any(String),
+      complete: false,
+      unavailable: ["call-1"],
+    });
+  });
+});
+
+describe("exportIncompleteMessage", () => {
+  it("names every call id an incomplete export could not reload", () => {
+    expect(exportIncompleteMessage(["call-1"])).toBe(
+      "export incomplete: could not reload call-1",
+    );
+  });
+
+  it("lists multiple unreloadable call ids", () => {
+    expect(exportIncompleteMessage(["call-1", "call-2"])).toBe(
+      "export incomplete: could not reload call-1, call-2",
+    );
+  });
+
+  it("still returns a sane message for an empty list", () => {
+    expect(exportIncompleteMessage([])).toBe(
+      "export incomplete: could not reload ",
+    );
   });
 });

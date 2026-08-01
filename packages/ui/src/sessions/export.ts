@@ -36,3 +36,17 @@ export async function exportTranscriptAsync(
     (_marker, callId) => byCallId.get(callId) ?? null,
   );
 }
+
+/**
+ * The message the Conversation panel renders beside an incomplete export
+ * (§6.1, principle 12: the failure path is reported, never papered over by
+ * keeping only `result.document`). Pure so the rendering decision is
+ * testable without mounting anything — this package has no jsdom/component-
+ * test infra, so the logic a render would otherwise embed inline lives here
+ * instead.
+ */
+export function exportIncompleteMessage(
+  unavailable: readonly string[],
+): string {
+  return `export incomplete: could not reload ${unavailable.join(", ")}`;
+}
