@@ -273,10 +273,31 @@ export function App() {
   // Structured questions have their own live source (`questionDataSource`
   // above); offline/fixture mode falls back to `FIXTURE_INJECTIONS`, since
   // there is no live ledger to subscribe to without a server.
+  //
+  // A bubble attaches to a *canvas node* id (`node.id`), never a session id
+  // (`node.refId`) — the two coincide for every fixture (`sessionCanvasNode`
+  // sets both to the session's own id), which is exactly what let this seam
+  // subscribe under the wrong id for a whole window without a single test
+  // catching it: every fixture and unit test satisfied `nodeId === sessionId`
+  // by construction, and only a real server (a real node id, generated
+  // separately from the session id it stands for) disagreed. `sessionNodeIds`
+  // is deliberately `{ nodeId, sessionId }` pairs, not one list read two ways,
+  // so the two id spaces cannot be silently reconflated again at a call site.
   const sessionNodeIds = useMemo(
     () =>
-      (graph?.nodes ?? []).filter((n) => n.role === "session").map((n) => n.id),
+      (graph?.nodes ?? [])
+        .filter((n) => n.role === "session" && n.refId)
+        .map((n) => ({ nodeId: n.id, sessionId: n.refId as SessionId })),
     [graph],
+  );
+  // The same pairing, the other direction — structured questions (below)
+  // arrive keyed by session id and need the node id to attach a bubble to.
+  const nodeIdBySessionId = useMemo(
+    () =>
+      new Map(
+        sessionNodeIds.map(({ nodeId, sessionId }) => [sessionId, nodeId]),
+      ),
+    [sessionNodeIds],
   );
   const [sessionBubbleData, setSessionBubbleData] = useState<
     ReadonlyMap<
@@ -290,8 +311,7 @@ export function App() {
   >(new Map());
 
   useEffect(() => {
-    const unsubscribes = sessionNodeIds.map((nodeId) => {
-      const sessionId = nodeId as SessionId;
+    const unsubscribes = sessionNodeIds.map(({ nodeId, sessionId }) => {
       let transcript: Transcript = { sessionId, turns: [] };
       let phase: SessionPhase = { kind: "idle" };
       let injections: readonly InjectionLedgerEntry[] = [];
@@ -357,7 +377,7 @@ export function App() {
       }));
     const commandSources = deriveCommandBubbleSources(commandInputs);
 
-    const sessionSources = sessionNodeIds.flatMap((nodeId) => {
+    const sessionSources = sessionNodeIds.flatMap(({ nodeId }) => {
       const data = sessionBubbleData.get(nodeId);
       if (!data) return [];
       return deriveSessionBubbleSources({
@@ -373,7 +393,7 @@ export function App() {
     // has no live ledger to read, so it falls back to the fixture one,
     // rendered on whichever session node(s) it names.
     const injectionSources = LIVE
-      ? sessionNodeIds.flatMap((nodeId) => {
+      ? sessionNodeIds.flatMap(({ nodeId }) => {
           const data = sessionBubbleData.get(nodeId);
           if (!data || data.injections.length === 0) return [];
           return deriveInjectionBubbleSources(
@@ -381,7 +401,7 @@ export function App() {
             new Map(data.injections.map((entry) => [entry.id, entry])),
           );
         })
-      : sessionNodeIds.flatMap((nodeId) => {
+      : sessionNodeIds.flatMap(({ nodeId }) => {
           const injectedNodeIds = new Set(
             [...FIXTURE_INJECTIONS.values()].map(
               (entry) => entry.nodeId as string,
@@ -392,16 +412,27 @@ export function App() {
             : [];
         });
 
-    const questionSources: BubbleSource[] = openQuestions.map((question) => ({
-      id: `${question.nodeId}:question:${question.id}`,
-      nodeId: question.nodeId,
-      kind: "question",
-      text: question.text,
-      options: question.options,
-      answeredValue: question.answeredValue,
-      updatedAt: question.raisedAt,
-      wantsAttention: question.answeredValue === null,
-    }));
+    // `OpenQuestion.nodeId` is the *session* id on the live source
+    // (`createApiQuestionDataSource`'s `toOpenQuestion` has only a
+    // `SessionQuestion` to read, which knows no canvas node) and the fixture's
+    // own node id on the fixture source (where the two already coincide) —
+    // `nodeIdBySessionId` resolves either uniformly, falling back to the raw
+    // value so an unresolvable id collapses into `UNATTACHED_BUBBLE_NODE_ID`
+    // (placement.ts) rather than silently vanishing.
+    const questionSources: BubbleSource[] = openQuestions.map((question) => {
+      const attachedNodeId =
+        nodeIdBySessionId.get(question.nodeId as SessionId) ?? question.nodeId;
+      return {
+        id: `${attachedNodeId}:question:${question.id}`,
+        nodeId: attachedNodeId,
+        kind: "question",
+        text: question.text,
+        options: question.options,
+        answeredValue: question.answeredValue,
+        updatedAt: question.raisedAt,
+        wantsAttention: question.answeredValue === null,
+      };
+    });
 
     return [
       ...commandSources,
@@ -409,7 +440,13 @@ export function App() {
       ...injectionSources,
       ...questionSources,
     ];
-  }, [graph, sessionNodeIds, sessionBubbleData, openQuestions]);
+  }, [
+    graph,
+    sessionNodeIds,
+    sessionBubbleData,
+    openQuestions,
+    nodeIdBySessionId,
+  ]);
 
   // Graph warnings (§5): pure derivation over the live graph, re-run
   // whenever it changes. Never a refusal — read here and in the editor
