@@ -758,6 +758,67 @@ describe("the producing completion loop (§3.5, principle 3)", () => {
     expect(at(injections[0], "deliveredAt")).not.toBeNull();
   });
 
+  it("binds the produced output to the run that produced it (§15-4)", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness);
+
+    // Something for the session to hand back: an object and the exact version of
+    // it, which is what an output address resolves to.
+    const produced = await harness.ok("/notes", {
+      method: "POST",
+      body: {
+        title: "result",
+        body: "what the session produced",
+        workstreamId: fixture.workstream,
+      },
+    });
+
+    const started = await run(harness, fixture.commandId, {
+      acts: [
+        {
+          on: "start",
+          steps: [
+            { observation: { kind: "turn-started", turn: 1 } },
+            {
+              observation: {
+                kind: "turn-ended",
+                turn: 1,
+                usage: { inputTokens: 3, outputTokens: 2 },
+              },
+            },
+            {
+              submit: {
+                outputs: [
+                  {
+                    name: "result",
+                    objectId: str(produced, "objectId"),
+                    versionId: str(produced, "versionId"),
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const runId = str(started, "run.id");
+    await endedSession(harness, str(started, "session.id"));
+
+    // The placeholder that existed before any run now stands for a real object,
+    // and it names the run it came from — `output@n` is the general address, and
+    // this run is the n.
+    const instantiated = await harness.ok(`/commands/${fixture.commandId}`);
+    const output = list(instantiated, "outputs")[0];
+    expect(at(output, "boundRunId")).toBe(runId);
+    expect(at(output, "boundObjectId")).toBe(str(produced, "objectId"));
+    expect(at(output, "boundAt")).not.toBeNull();
+
+    const read = await harness.ok(`/runs/${runId}`);
+    expect(at(read, "run.status")).toBe("completed");
+    expect(at(read, "run.ordinal")).toBe(1);
+  });
+
   it("refuses to call an unproven end a completion", async () => {
     const harness = await boot(repository());
     const fixture = await command(harness, {
