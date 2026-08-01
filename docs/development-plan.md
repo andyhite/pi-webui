@@ -1638,24 +1638,57 @@ epic's:_
 
 **Exit criteria:** the queue answers questions/approvals/drift without opening anything; budgets bind transitively; a capped session ends as out-of-budget, not failed.
 
-### Epic 6.1 — Attention system (`attention`)
+### Epic 6.1 — Attention system (`attention`) — _UI surfaces landed, Stage 1 of 2 (Batch 4, Weeks 15–18); fixture-fed — derivation and outbound routing are Track A's Stage 2_
 
-- [ ] One derivation, many surfaces: node state, off-screen marker, header, window title, badge, system notification (§7)
-- [ ] The queue: single ranked keyboard-driven list; rows answerable in place; selection navigates the canvas (§7.1)
-- [ ] Feeds: questions, approvals, drift, health alerts, completions — each with acknowledge/snooze/mute (§7.1, §4.5)
+- [x] One derivation, many surfaces: node state, off-screen marker, header, window title, badge, system notification (§7)
+- [x] The queue: single ranked keyboard-driven list; rows answerable in place; selection navigates the canvas (§7.1)
+- [x] Feeds: questions, approvals, drift, health alerts, completions — each with acknowledge/snooze/mute (§7.1, §4.5)
 - [ ] Health alerts from observation only: idle, spinning, conflict-predicted (cross-workstream path overlap + intra-workstream waitlist overlap), unanswered, blocked-on-you with claim-wait thresholds (§7.2)
-- [ ] What-changed-while-away: capped per-workstream event history, entries route to targets and tolerate their absence (§7.3)
+- [x] What-changed-while-away: capped per-workstream event history, entries route to targets and tolerate their absence (§7.3)
 - [ ] Outbound notification routing: state-attached routes (push/webhook), edge-triggered, redacted (§7.3)
 
-### Epic 6.2 — Budgets and spend (`budgets`)
+_Landed as `packages/ui/src/attention/` (Track B, Batch 4 Stage 1): every
+surface named above is real mechanics against `AttentionDataSource`
+(`attention/types.ts`), not a mockup — ranking, traversal, and the three
+triage verbs all work exactly as they will once a live source replaces the
+fixture, because `createFixtureAttentionDataSource` is the one
+implementation of the exact interface a server-side one will satisfy 1:1
+(the contract is recorded in `docs/attention-contract.md` for Track A).
+Health-alert derivation (§7.2, from observation) and outbound notification
+routing (§7.3, push/webhook) are explicitly out of this stage — both need
+Track A's Stage 2 backend (session health signals, a routes store) that does
+not exist yet; their in-app-surface halves (a `health` feed item and its
+rendering, an edge-triggered in-app system notification) are landed and
+waiting for real items to flow through them. The queue's j/k traversal, its
+answer-in-place per feed, `visibleAttentionItems`'s rank+triage filtering,
+the edge-triggered/batched notification decision, and the what-changed
+capped history with its honest tombstone are all pure and unit-tested
+(`attention/*.test.ts`, 47 tests)._
+
+### Epic 6.2 — Budgets and spend (`budgets`) — _the two UI panels landed (Track B, Batch 4); accounting/budgets/enforcement remain Track A's_
 
 - [ ] Persistent spend accounting per session / workstream / fleet; totals outlive sessions (§8)
 - [ ] Budgets at run/batch, workstream, global scope; **shipped default global ceiling** (§8, principle 2)
 - [ ] Sessions can read remaining budget that binds them; near-cap defined behavior: stop cleanly, wrap up, report (§8)
 - [ ] Out-of-budget as its own end state everywhere it renders; retries never blindly re-run it (§3.6, §8)
 - [ ] Broadcast-induced and delegated spend charged up the initiating chain (§6.5, §3.6)
-- [ ] Fleet panel: today's total, biggest spender, running vs concurrency limit (§8, §11)
-- [ ] Session timeline panel: temporal turns/tool-calls view, works for finished sessions (§8, §11)
+- [x] Fleet panel: today's total, biggest spender, running vs concurrency limit (§8, §11)
+- [x] Session timeline panel: temporal turns/tool-calls view, works for finished sessions (§8, §11)
+
+_The Fleet panel (`packages/ui/src/fleet/`) aggregates real data from what
+exists on main today — `GET /api/sessions` (running vs total) and each
+session's own `GET /api/sessions/:id/spend` (today's total and the biggest
+spender, real per-entry timestamps) — not a fixture standing in for missing
+endpoints. **One genuine gap, recorded rather than faked:** the concurrency
+limit's configured *value* has no read endpoint anywhere (`apps/server/src/
+config.ts` resolves it at boot and never publishes it); `createApiFleetDataSource`
+takes it as a parameter defaulting to the shipped default, with a `TODO`
+in `fleet/types.ts`/`fleet/data-source.ts` naming exactly what a fleet
+aggregate endpoint should add. The Timeline panel
+(`packages/ui/src/timeline/`) lays out turns and tool calls
+time-proportionally from `GET /api/sessions/:id/observations`, already live
+on main — no gap there. 24 new tests (fleet aggregation, timeline layout
+math)._
 
 ### Epic 6.3 — Approvals (`approvals`) — _domain landed; server and surfaces pending_
 
