@@ -228,12 +228,15 @@ the predicates in `@plotroom/core`, and the route reports what they said —
 `409` with `code: "refused"` and the predicate's own machine-readable
 `details.reason` (`illegal_target`, `source_not_content`,
 `session_not_running`, `would_cycle`, `duplicate`, `own_chain`,
-`session_sets_lifecycle`, `already_bound`), never a 500 and never a silent
-no-op; an id that names nothing is a `404` matched on `EntityNotFound` rather
-than on a message's wording. Undo is a first-class pair everywhere:
-`DELETE` soft-deletes, `POST .../restore` puts it back, and `GET
-/api/restorable` lists what can be — including deletions a session made.
-Removing a node takes its context edges with it and restores exactly those.
+`session_sets_lifecycle`, `already_bound`, `node_deleted`,
+`provenance_not_authored`), never a 500 and never a silent no-op; an id that
+names nothing is a `404` matched on `EntityNotFound` rather than on a
+message's wording. Undo is a first-class pair everywhere: `DELETE`
+soft-deletes, `POST .../restore` puts it back, and `GET /api/restorable`
+lists what can be — including deletions a session made. Removing a node takes
+its context edges with it and restores exactly those; until it is restored it
+is off the board, so placing or wiring it again is refused rather than
+silently resurrecting the wiring the removal took down.
 Every successful mutation publishes on the Epic 2.1 bus (the vocabulary grew
 a `node` entity, since placement is a gesture too), so `/ws` sees the same
 shapes the REST reads return and a refused mutation publishes nothing.
