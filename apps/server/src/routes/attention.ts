@@ -228,10 +228,16 @@ export function attentionRoutes(
    * Routes, with their delivery health beside them. A destination that has been
    * failing is visible here rather than inferred from notifications that stopped
    * arriving.
+   *
+   * **Operator-only, including the read.** A route's URL is a webhook token in
+   * everything but name — anyone holding it can post into the operator's chat —
+   * so this read is gated like the writes rather than left open because it is a
+   * GET (§9.3: credentials are exposed to nothing).
    */
-  app.get("/notification-routes", (c) =>
-    c.json({ routes: stores.attention.routes() }),
-  );
+  app.get("/notification-routes", (c) => {
+    operatorOnly(actorOf(c), "reading the notification routes");
+    return c.json({ routes: stores.attention.routes() });
+  });
 
   app.post("/notification-routes", validateJsonBody(routeBody), (c) => {
     operatorOnly(actorOf(c), "adding a notification route");

@@ -361,6 +361,40 @@ describe("outbound routing (§7.3)", () => {
     }
   });
 
+  it("keeps its webhook URLs from a session: the read is the operator's too", async () => {
+    const harness = await boot(repository());
+    await harness.ok("/notification-routes", {
+      method: "POST",
+      body: {
+        name: "chat",
+        state: "blocked",
+        url: "https://hooks.example.invalid/t/a-secret-token",
+      },
+    });
+
+    const { sessionId } = await askingSession(harness);
+
+    // A route URL is a webhook token in everything but name — anyone holding it
+    // can post into the operator's chat — so the read is gated like the writes
+    // rather than left open because it is a GET (§9.3).
+    const refused = await harness.call("/notification-routes", {
+      actor: `session:${sessionId}`,
+    });
+    expect(refused.status).toBe(403);
+    expect(JSON.stringify(refused.body)).not.toContain("a-secret-token");
+
+    const written = await harness.call("/notification-routes", {
+      method: "POST",
+      body: {
+        name: "another",
+        state: "failed",
+        url: "https://hooks.example.invalid/t/second",
+      },
+      actor: `session:${sessionId}`,
+    });
+    expect(written.status).toBe(403);
+  });
+
   it("records a failing destination as route health rather than crashing", async () => {
     const harness = await boot(repository());
     await harness.ok("/notification-routes", {
