@@ -32,6 +32,7 @@ function emptyRawSnapshot(seq: number): RawSnapshot {
     commandDefinitions: [],
     commands: [],
     outputs: [],
+    sessions: [],
   };
 }
 

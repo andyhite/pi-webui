@@ -31,7 +31,12 @@ import type { RawSnapshot } from "./board-state.js";
 import { buildGraphSnapshot } from "./build-snapshot.js";
 import type { GraphDataSource, GraphSnapshot, Unsubscribe } from "./types.js";
 
-type WsServerMessage =
+/**
+ * The `/ws` wire message shape, exported so any other data source scoped to
+ * the same stream (`sessions/data-source.ts`'s live `SessionDataSource`)
+ * parses it identically rather than restating the shape.
+ */
+export type WsServerMessage =
   | {
       readonly type: "hello";
       readonly nextSeq: number;
@@ -39,7 +44,7 @@ type WsServerMessage =
     }
   | { readonly type: "event"; readonly event: DomainEvent };
 
-function parseWsMessage(data: unknown): WsServerMessage | null {
+export function parseWsMessage(data: unknown): WsServerMessage | null {
   try {
     const text = typeof data === "string" ? data : String(data);
     const parsed = JSON.parse(text) as WsServerMessage;

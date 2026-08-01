@@ -66,6 +66,17 @@ export interface InstantiateCommandInput {
   readonly context?: readonly string[];
 }
 
+export interface RunCommandInput {
+  readonly commandId: string;
+  /**
+   * The caller's own idea of "this gesture" (principle 9) — a retry with the
+   * same key is the same run and the same session, never a second one. The
+   * canvas run gesture generates a fresh one per click; a caller retrying an
+   * in-flight request reuses the same key instead.
+   */
+  readonly initiationKey: string;
+}
+
 export interface GraphActions {
   createWorkstream(
     subjectId?: string,
@@ -85,6 +96,16 @@ export interface GraphActions {
     objectId: string,
     input: { readonly title?: string; readonly body: string },
   ): Promise<ActionResult<void>>;
+  /**
+   * Run one command (§4.1): idempotent in the initiation key. Refusal
+   * reasons travel back verbatim (workspace not ready, budget exceeded, an
+   * initiation key already in flight, ...) — surfaced, never swallowed.
+   */
+  runCommand(
+    input: RunCommandInput,
+  ): Promise<
+    ActionResult<{ readonly runId: string; readonly sessionId: string }>
+  >;
   /** A command definition dropped onto a bare ticket (§3.5, §3.3), post-workstream. */
   instantiateCommand(
     input: InstantiateCommandInput,
@@ -156,6 +177,15 @@ export function createApiActions(http: HttpClient): GraphActions {
           node: { readonly id: string };
         }>("/api/commands", input);
         return { commandId: response.command.id, nodeId: response.node.id };
+      }),
+
+    runCommand: (input) =>
+      asAction(async () => {
+        const response = await http.post<{
+          run: { readonly id: string };
+          session: { readonly id: string };
+        }>("/api/runs", input);
+        return { runId: response.run.id, sessionId: response.session.id };
       }),
 
     reorderContext: (nodeId, edgeIds) =>

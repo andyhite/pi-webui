@@ -182,6 +182,14 @@ export interface PlotCanvasProps {
   readonly onDropPaletteEntry?: (entryId: string, position: Point) => void;
   /** Per-node warning messages (spec §5), flagged on the card regardless of zoom. */
   readonly warningsByNodeId?: ReadonlyMap<string, readonly string[]>;
+  /**
+   * The minimal run affordance (§4.1): a "run" gesture on a command node.
+   * The host generates the initiation key and POSTs `/api/runs` (idempotent,
+   * principle 9), surfacing readiness/refusal reasons itself — this only
+   * reports which command node asked. Absent: no run button renders at all
+   * (mechanics only; offline/fixture hosts can choose not to wire it).
+   */
+  readonly onRunCommand?: (commandNodeId: string) => void;
 }
 
 /** The drag payload a command-definition drag source sets (host's palette). */
@@ -203,6 +211,8 @@ type BoxNodeData = {
   onDropDefinition?: (definitionId: string) => void;
   /** Graph warnings for this node (§5): flagged on the card, regardless of zoom. */
   warnings: readonly string[];
+  /** Set on a command node when the host wired the run gesture (§4.1). */
+  onRun?: () => void;
 };
 
 type BoxNode = Node<BoxNodeData, "box">;
@@ -243,6 +253,9 @@ function BoxNodeView({ data, id, selected }: NodeProps<BoxNode>) {
       : "1px solid black";
   return (
     <div
+      // A stable hook for driving mechanics from outside React (e2e tests,
+      // §5's milestone gate in particular) — not a styling decision.
+      data-testid={`canvas-node-${id}`}
       style={{
         border,
         background: "white",
@@ -278,6 +291,11 @@ function BoxNodeView({ data, id, selected }: NodeProps<BoxNode>) {
       ) : null}
       {data.acceptsDefinitionDrop ? (
         <div>(drop a command definition here)</div>
+      ) : null}
+      {data.role === "command" && data.onRun ? (
+        <button type="button" onClick={data.onRun}>
+          run
+        </button>
       ) : null}
       {data.zoomLevel !== "workstream" ? <div>id: {id}</div> : null}
       {data.zoomLevel === "detail" ? (
@@ -481,6 +499,7 @@ function toBoxNode(
       definitionId: string,
     ) => void;
     readonly warningsByNodeId?: ReadonlyMap<string, readonly string[]>;
+    readonly onRunCommand?: (commandNodeId: string) => void;
   },
 ): BoxNode {
   return {
@@ -507,6 +526,9 @@ function toBoxNode(
               ctx.onDropDefinitionOnTicket?.(input.id, definitionId),
           }
         : {}),
+      ...(input.role === "command" && ctx.onRunCommand
+        ? { onRun: () => ctx.onRunCommand?.(input.id) }
+        : {}),
     },
   };
 }
@@ -531,6 +553,7 @@ function CanvasInner({
   onDropDefinitionOnTicket,
   onDropPaletteEntry,
   warningsByNodeId,
+  onRunCommand,
 }: PlotCanvasProps) {
   const { zoom } = useViewport();
   const zoomLevel = zoomLevelForScale(zoom, zoomThresholds);
@@ -605,6 +628,7 @@ function CanvasInner({
         collapsedContainerIds: effectiveCollapsedContainerIds,
         ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
         ...(warningsByNodeId ? { warningsByNodeId } : {}),
+        ...(onRunCommand ? { onRunCommand } : {}),
       }),
     );
 
@@ -618,6 +642,7 @@ function CanvasInner({
     onToggleContainer,
     onDropDefinitionOnTicket,
     warningsByNodeId,
+    onRunCommand,
     zoomLevel,
     selectedNodeId,
   ]);
@@ -740,6 +765,7 @@ function CanvasInner({
           collapsedContainerIds: effectiveCollapsedContainerIds,
           ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
           ...(warningsByNodeId ? { warningsByNodeId } : {}),
+          ...(onRunCommand ? { onRunCommand } : {}),
         }),
       );
       if (
@@ -761,6 +787,7 @@ function CanvasInner({
     onToggleContainer,
     onDropDefinitionOnTicket,
     warningsByNodeId,
+    onRunCommand,
     zoomLevel,
     selectedNodeId,
     setNodes,
@@ -784,6 +811,31 @@ function CanvasInner({
       }),
     );
   }, [warningsByNodeId, setNodes]);
+
+  // A node's label/running state can change after it is already placed — a
+  // command node's latest run status arriving well after the drop that
+  // created it, a session's derived phase moving on (§3.6) — unlike the
+  // additive effect above (which only ever seeds these once, on first
+  // add), this keeps every already-placed node's label/running in sync with
+  // its current `CanvasNodeInput`.
+  useEffect(() => {
+    const byId = new Map(nodeInputs.map((input) => [input.id, input]));
+    setNodes((current) =>
+      current.map((node) => {
+        if (node.type !== "box") return node;
+        const input = byId.get(node.id);
+        if (!input) return node;
+        const running = input.running ?? false;
+        if (node.data.label === input.label && node.data.running === running) {
+          return node;
+        }
+        return {
+          ...node,
+          data: { ...node.data, label: input.label, running },
+        };
+      }),
+    );
+  }, [nodeInputs, setNodes]);
 
   useEffect(() => {
     setEdges((current) => {
@@ -1145,6 +1197,12 @@ function CanvasInner({
         <MiniMap />
       </ReactFlow>
       <CanvasLegend nodes={nodeInputs} />
+      {/* A stable hook for e2e tests to wait on a deterministic zoom level
+          before depending on container-collapse behavior (`fitView`'s
+          computed zoom is otherwise not something a test can predict). */}
+      <div data-testid="zoom-level" style={{ display: "none" }}>
+        {zoomLevel}
+      </div>
       <ActionBar
         selectedIds={selectedIds}
         actions={batchActions}

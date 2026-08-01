@@ -112,6 +112,54 @@ describe("createApiActions", () => {
     });
   });
 
+  it("runCommand posts to /api/runs and returns the run/session ids", async () => {
+    const post = vi.fn(async () => ({
+      run: { id: "run1" },
+      session: { id: "sess1" },
+    }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.runCommand({
+      commandId: "cmd1",
+      initiationKey: "key1",
+    });
+
+    expect(post).toHaveBeenCalledWith("/api/runs", {
+      commandId: "cmd1",
+      initiationKey: "key1",
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: { runId: "run1", sessionId: "sess1" },
+    });
+  });
+
+  it("runCommand surfaces a refusal (e.g. the workspace isn't ready) rather than throwing", async () => {
+    const post = vi.fn(async () => {
+      throw new HttpError(409, "/api/runs", {
+        error: {
+          code: "refused",
+          message: "no repository is configured to branch from",
+          details: { reason: "workspace_not_configured" },
+        },
+      });
+    });
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.runCommand({
+      commandId: "cmd1",
+      initiationKey: "key1",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      refusal: {
+        reason: "workspace_not_configured",
+        message: "no repository is configured to branch from",
+      },
+    });
+  });
+
   it("reorderContext posts the new edge order to /api/nodes/:id/context/order", async () => {
     const post = vi.fn(async () => ({}));
     const actions = createApiActions(fakeHttp({ post }));

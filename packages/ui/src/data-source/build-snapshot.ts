@@ -7,7 +7,7 @@
  * itself needs nothing but the state already in memory.
  */
 
-import type { NodeRole } from "@plotroom/core";
+import { isRunning, type NodeRole, type Run } from "@plotroom/core";
 
 import type {
   CanvasContainerInput,
@@ -53,16 +53,32 @@ export function buildGraphSnapshot(
 
   const liveNodes = [...state.nodes.values()];
 
-  const nodes: CanvasNodeInput[] = liveNodes.map((node, index) => ({
-    id: node.id,
-    label: labelForNode(node.role, node.refId, state),
-    role: node.role,
-    refId: node.refId,
-    ...(node.running !== undefined ? { running: node.running } : {}),
-    ...(node.workstreamId ? { containerId: node.workstreamId } : {}),
-    defaultPosition: gridPosition(index),
-    acceptsDefinitionDrop: acceptsDefinitionDrop(node, state),
-  }));
+  // Latest-received run per command (Stage 2, Track A's run spine): a run
+  // event never carries its own "is this the newest" flag, so this keeps
+  // whichever one this board has most recently seen an update for — good
+  // enough for "run status visible on the node" (mechanics only), and a
+  // history view reads the real ordinal-ordered list from the server later.
+  const latestRunByCommandId = new Map<string, Run>();
+  for (const run of state.runs.values()) {
+    const current = latestRunByCommandId.get(run.commandId);
+    if (!current || run.ordinal >= current.ordinal) {
+      latestRunByCommandId.set(run.commandId, run);
+    }
+  }
+
+  const nodes: CanvasNodeInput[] = liveNodes.map((node, index) => {
+    const running = runningFor(node, state);
+    return {
+      id: node.id,
+      label: labelForNode(node.role, node.refId, state, latestRunByCommandId),
+      role: node.role,
+      refId: node.refId,
+      ...(running !== undefined ? { running } : {}),
+      ...(node.workstreamId ? { containerId: node.workstreamId } : {}),
+      defaultPosition: gridPosition(index),
+      acceptsDefinitionDrop: acceptsDefinitionDrop(node, state),
+    };
+  });
 
   const edges: CanvasEdgeInput[] = [...state.edges.values()].map((edge) => ({
     id: edge.id,
@@ -98,10 +114,32 @@ export function buildGraphSnapshot(
   };
 }
 
+/**
+ * A session-role node's live running state (§3.6, §3.7): the board's own
+ * `session` record, not the placed node's `running` flag — that flag is
+ * written once, at placement, and the server has no reason to push a `node`
+ * update over `/ws` every time a session's phase changes (the `session`
+ * event already carries that). Falls back to the node's own flag for every
+ * other role, and while a session's record hasn't arrived yet.
+ */
+function runningFor(
+  node: {
+    readonly role: NodeRole;
+    readonly refId: string;
+    readonly running?: boolean;
+  },
+  state: BoardState,
+): boolean | undefined {
+  if (node.role !== "session") return node.running;
+  const known = state.sessions.get(node.refId);
+  return known ? isRunning(known.session) : node.running;
+}
+
 function labelForNode(
   role: NodeRole,
   refId: string,
   state: BoardState,
+  latestRunByCommandId: ReadonlyMap<string, Run>,
 ): string {
   if (role === "content") {
     const object = state.objects.get(refId);
@@ -115,11 +153,33 @@ function labelForNode(
     const definition = command
       ? state.commandDefinitions.get(command.definitionId)
       : undefined;
-    return `command: ${definition?.name ?? refId}`;
+    const name = definition?.name ?? refId;
+    const run = command ? latestRunByCommandId.get(command.id) : undefined;
+    // "Run status visible on the node" (Stage 2's run gesture): the latest
+    // run this board has seen an event for, however that run ended.
+    return run
+      ? `command: ${name} — run: ${runStatusLabel(run)}`
+      : `command: ${name}`;
   }
-  // role === "session": no session store wired yet (Epic 4.1's API has not
-  // landed), so this is an honest placeholder, not a lookup.
-  return `session ${refId}`;
+  // role === "session": the board's own live session record (Stage 2, Track
+  // A's run spine) — phase, never a raw placeholder, whenever it has arrived.
+  const known = state.sessions.get(refId);
+  return known ? `session ${refId} (${known.phase.kind})` : `session ${refId}`;
+}
+
+function runStatusLabel(run: Run): string {
+  switch (run.status) {
+    case "running":
+      return "running";
+    case "completed":
+      return "completed ✓";
+    case "failed":
+      return "failed";
+    case "out_of_budget":
+      return "out of budget";
+    case "stopped":
+      return "stopped";
+  }
 }
 
 /** A bare (containerless) ticket accepts a dropped definition (§3.5, §3.3). */

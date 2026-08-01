@@ -1,17 +1,42 @@
 import { describe, expect, it } from "vitest";
-import type {
-  CommandDefinition,
-  CommandNode,
-  CommandOutput,
-  Edge,
-  PlacedNode,
-  PlotObject,
-  Workstream,
+import {
+  humanAuthor,
+  INHERIT_APP_TOOLS,
+  startSession,
+  type CommandDefinition,
+  type CommandNode,
+  type CommandOutput,
+  type Edge,
+  type PlacedNode,
+  type PlotObject,
+  type Session,
+  type Workstream,
 } from "@plotroom/core";
+import { makeRun } from "@plotroom/core/testing";
 
 import { emptyBoardState, stateFromSnapshot } from "./board-state.js";
 import type { RawSnapshot } from "./board-state.js";
 import { buildGraphSnapshot } from "./build-snapshot.js";
+
+function testSession(overrides: Partial<Session> = {}): Session {
+  const session = startSession(
+    {
+      id: "sess_1" as Session["id"],
+      workstreamId: "ws_1" as Session["workstreamId"],
+      commandId: null,
+      mode: "open",
+      launch: {
+        model: "fixture-model",
+        effort: "medium",
+        toolPermissions: INHERIT_APP_TOOLS,
+      },
+      initiatedBy: humanAuthor,
+      runtime: { adapterId: "scripted", ref: "scripted-1" },
+    },
+    1_000,
+  );
+  return { ...session, ...overrides };
+}
 
 function rawSnapshot(overrides: Partial<RawSnapshot> = {}): RawSnapshot {
   return {
@@ -23,6 +48,7 @@ function rawSnapshot(overrides: Partial<RawSnapshot> = {}): RawSnapshot {
     commandDefinitions: [],
     commands: [],
     outputs: [],
+    sessions: [],
     ...overrides,
   };
 }
@@ -186,6 +212,128 @@ describe("buildGraphSnapshot", () => {
         label: "command: implement",
         role: "command",
         containerId: "ws_1",
+      }),
+    );
+  });
+
+  it("labels a command node with its latest run's status, when one exists", () => {
+    const definition: CommandDefinition = {
+      id: "def_1" as CommandDefinition["id"],
+      name: "implement",
+      instruction: "do it",
+      model: { model: "x", effort: "medium" },
+      permissions: { allowed: [], denied: [] },
+      askPoints: [],
+      lifecycle: "open",
+      outcome: null,
+      parameters: [],
+      budget: {
+        modelWindowTokens: 200_000,
+        warnAtFraction: 0.85,
+        hardCapTokens: null,
+      },
+      source: "user",
+      folder: null,
+      duplicatedFrom: null,
+      createdAt: 0,
+      updatedAt: 0,
+    };
+    const command: CommandNode = {
+      id: "cmd_1" as CommandNode["id"],
+      definitionId: definition.id,
+      workstreamId: "ws_1" as CommandNode["workstreamId"],
+      createdAt: 0,
+      deletedAt: null,
+    };
+    const node: PlacedNode = {
+      id: "n_cmd" as PlacedNode["id"],
+      role: "command",
+      refId: command.id,
+      workstreamId: "ws_1" as PlacedNode["workstreamId"],
+      createdAt: 0,
+      deletedAt: null,
+    };
+    const olderRun = makeRun({
+      commandId: command.id,
+      ordinal: 1,
+      status: "failed",
+    });
+    const latestRun = makeRun({
+      commandId: command.id,
+      ordinal: 2,
+      status: "running",
+    });
+
+    const state = stateFromSnapshot(
+      rawSnapshot({
+        commandDefinitions: [definition],
+        commands: [command],
+        nodes: [node],
+      }),
+    );
+    // Runs never travel with the snapshot (unbounded history); a board only
+    // learns of one from a live `run` event.
+    const withRuns = {
+      ...state,
+      runs: new Map([
+        [olderRun.id, olderRun],
+        [latestRun.id, latestRun],
+      ]),
+    };
+
+    const snapshot = buildGraphSnapshot(withRuns, new Map());
+    expect(snapshot.nodes[0]?.label).toBe("command: implement — run: running");
+  });
+
+  it("labels a session node with its live phase, and derives running from the session record", () => {
+    const running = testSession();
+    const node: PlacedNode = {
+      id: "n_sess" as PlacedNode["id"],
+      role: "session",
+      refId: running.id,
+      workstreamId: null,
+      createdAt: 0,
+      deletedAt: null,
+      // Stale on purpose: the node's own flag says not running, but the
+      // live session record (still open, no `end`) must win.
+      running: false,
+    };
+    const state = stateFromSnapshot(rawSnapshot({ nodes: [node] }));
+    const withSession = {
+      ...state,
+      sessions: new Map([
+        [
+          running.id,
+          { session: running, phase: { kind: "thinking" as const } },
+        ],
+      ]),
+    };
+
+    const snapshot = buildGraphSnapshot(withSession, new Map());
+    expect(snapshot.nodes[0]).toEqual(
+      expect.objectContaining({
+        label: `session ${running.id} (thinking)`,
+        running: true,
+      }),
+    );
+  });
+
+  it("falls back to the node's own running flag before a session record has arrived", () => {
+    const node: PlacedNode = {
+      id: "n_sess" as PlacedNode["id"],
+      role: "session",
+      refId: "sess_unknown",
+      workstreamId: null,
+      createdAt: 0,
+      deletedAt: null,
+      running: true,
+    };
+    const state = stateFromSnapshot(rawSnapshot({ nodes: [node] }));
+    const snapshot = buildGraphSnapshot(state, new Map());
+    expect(snapshot.nodes[0]).toEqual(
+      expect.objectContaining({
+        label: "session sess_unknown",
+        running: true,
       }),
     );
   });

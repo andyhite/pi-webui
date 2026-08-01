@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { humanAuthor } from "@plotroom/core";
-import type { DomainEvent, PlacedNode, Workstream } from "@plotroom/core";
+import {
+  humanAuthor,
+  INHERIT_APP_TOOLS,
+  phaseFacts,
+  startSession,
+  type DomainEvent,
+  type PlacedNode,
+  type Run,
+  type Session,
+  type SessionPhase,
+  type Workstream,
+} from "@plotroom/core";
+import { makeRun } from "@plotroom/core/testing";
 
 import {
   applyEvent,
@@ -36,6 +47,7 @@ function rawSnapshot(overrides: Partial<RawSnapshot> = {}): RawSnapshot {
     commandDefinitions: [],
     commands: [],
     outputs: [],
+    sessions: [],
     ...overrides,
   };
 }
@@ -134,15 +146,113 @@ describe("applyEvent", () => {
     expect(state.nodes.has(node.id)).toBe(true);
   });
 
-  it("advances seq without touching state for entities the canvas doesn't render yet", () => {
+  it("advances seq without touching state for entities this board doesn't render yet", () => {
     const state = emptyBoardState();
-    const deleted: DomainEvent = {
+    const created: DomainEvent = {
       ...envelope(9),
-      entity: "session",
-      verb: "deleted",
+      entity: "session_observation",
+      verb: "created",
       sessionId: "s1" as never,
+      seqInSession: 1,
+      observation: { kind: "turn-started", turn: 1, at: 0 },
     };
-    const next = applyEvent(state, deleted);
+    const next = applyEvent(state, created);
     expect(next.seq).toBe(9);
   });
+
+  it("tracks a session's record and derived phase, updates in place, drops on delete", () => {
+    const session = testSession();
+    const phase: SessionPhase = { kind: "thinking" };
+
+    const created: DomainEvent = {
+      ...envelope(1),
+      entity: "session",
+      verb: "created",
+      session,
+      status: {
+        phase,
+        facts: phaseFacts(phase),
+        health: { silentForMs: 0, possiblyStalled: false },
+      },
+    };
+    const afterCreate = applyEvent(emptyBoardState(), created);
+    expect(afterCreate.sessions.get(session.id)).toEqual({ session, phase });
+
+    const respondingPhase: SessionPhase = { kind: "responding" };
+    const updated: DomainEvent = {
+      ...envelope(2),
+      entity: "session",
+      verb: "updated",
+      session,
+      status: {
+        phase: respondingPhase,
+        facts: phaseFacts(respondingPhase),
+        health: { silentForMs: 0, possiblyStalled: false },
+      },
+    };
+    const afterUpdate = applyEvent(afterCreate, updated);
+    expect(afterUpdate.sessions.get(session.id)?.phase).toEqual(
+      respondingPhase,
+    );
+
+    const deleted: DomainEvent = {
+      ...envelope(3),
+      entity: "session",
+      verb: "deleted",
+      sessionId: session.id,
+    };
+    const afterDelete = applyEvent(afterUpdate, deleted);
+    expect(afterDelete.sessions.has(session.id)).toBe(false);
+  });
+
+  it("tracks a run by id, created/updated in full, dropped on delete", () => {
+    const run: Run = makeRun();
+
+    const created: DomainEvent = {
+      ...envelope(1),
+      entity: "run",
+      verb: "created",
+      run,
+    };
+    const afterCreate = applyEvent(emptyBoardState(), created);
+    expect(afterCreate.runs.get(run.id)).toEqual(run);
+
+    const completed: Run = { ...run, status: "completed", endedAt: 100 };
+    const updated: DomainEvent = {
+      ...envelope(2),
+      entity: "run",
+      verb: "updated",
+      run: completed,
+    };
+    const afterUpdate = applyEvent(afterCreate, updated);
+    expect(afterUpdate.runs.get(run.id)?.status).toBe("completed");
+
+    const deleted: DomainEvent = {
+      ...envelope(3),
+      entity: "run",
+      verb: "deleted",
+      runId: run.id,
+    };
+    const afterDelete = applyEvent(afterUpdate, deleted);
+    expect(afterDelete.runs.has(run.id)).toBe(false);
+  });
 });
+
+function testSession(): Session {
+  return startSession(
+    {
+      id: "sess_1" as Session["id"],
+      workstreamId: workstream.id,
+      commandId: null,
+      mode: "open",
+      launch: {
+        model: "fixture-model",
+        effort: "medium",
+        toolPermissions: INHERIT_APP_TOOLS,
+      },
+      initiatedBy: humanAuthor,
+      runtime: { adapterId: "scripted", ref: "scripted-1" },
+    },
+    1_000,
+  );
+}

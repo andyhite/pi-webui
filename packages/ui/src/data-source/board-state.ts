@@ -16,8 +16,17 @@ import type {
   Edge,
   PlacedNode,
   PlotObject,
+  Run,
+  Session,
+  SessionPhase,
   Workstream,
 } from "@plotroom/core";
+
+/** A session as the board knows it: the record plus the phase PlotRoom derived. */
+export interface BoardSession {
+  readonly session: Session;
+  readonly phase: SessionPhase;
+}
 
 /** The exact shape `GET /api/snapshot` returns (`apps/server/src/routes/snapshot.ts`). */
 export interface RawSnapshot {
@@ -29,6 +38,18 @@ export interface RawSnapshot {
   readonly commandDefinitions: readonly CommandDefinition[];
   readonly commands: readonly CommandNode[];
   readonly outputs: readonly CommandOutput[];
+  /**
+   * Sessions travel with the phase PlotRoom derived, the same shape the
+   * `session` DomainEvent's `status.phase` carries (Stage 2, Track A's run
+   * spine). Runs are absent here too, same as the server's own snapshot
+   * (history is unbounded and read per command) — this board only ever
+   * knows about a run once a `run` event names it.
+   */
+  readonly sessions: readonly {
+    readonly session: Session;
+    readonly runId: string | null;
+    readonly phase: SessionPhase;
+  }[];
 }
 
 export interface BoardState {
@@ -40,6 +61,10 @@ export interface BoardState {
   readonly commandDefinitions: ReadonlyMap<string, CommandDefinition>;
   readonly commands: ReadonlyMap<string, CommandNode>;
   readonly outputs: ReadonlyMap<string, CommandOutput>;
+  /** Keyed by session id — the session record plus its derived phase (§3.6). */
+  readonly sessions: ReadonlyMap<string, BoardSession>;
+  /** Keyed by run id (§4.1); used to show a command node's latest run status. */
+  readonly runs: ReadonlyMap<string, Run>;
 }
 
 export function emptyBoardState(): BoardState {
@@ -52,6 +77,8 @@ export function emptyBoardState(): BoardState {
     commandDefinitions: new Map(),
     commands: new Map(),
     outputs: new Map(),
+    sessions: new Map(),
+    runs: new Map(),
   };
 }
 
@@ -68,6 +95,15 @@ export function stateFromSnapshot(raw: RawSnapshot): BoardState {
     ),
     commands: new Map(raw.commands.map((row) => [row.id, row])),
     outputs: new Map(raw.outputs.map((row) => [row.id, row])),
+    sessions: new Map(
+      raw.sessions.map((entry) => [
+        entry.session.id,
+        { session: entry.session, phase: entry.phase },
+      ]),
+    ),
+    // The snapshot never carries runs (history is unbounded, read per
+    // command); the board only learns of one from a live `run` event.
+    runs: new Map(),
   };
 }
 
@@ -81,9 +117,12 @@ export function stateFromSnapshot(raw: RawSnapshot): BoardState {
  * something already gone — exactly what makes applying the buffered tail of
  * events after a snapshot fetch safe (the documented resync recipe).
  *
- * Unknown-to-the-canvas entities (`version`, `run`, `session`,
- * `session_observation`, `session_transcript`) advance `seq` and nothing else —
- * nothing here renders them yet.
+ * `session` carries the record plus PlotRoom's own derived phase (never
+ * agent-reported, principle 7) — what a session-role node's label/running
+ * state renders from (`build-snapshot.ts`). `run` is tracked the same way,
+ * for a command node's latest-run status. `version`, `session_observation`,
+ * and `session_transcript` still only advance `seq`: a session's transcript
+ * is its own live seam (`sessions/data-source.ts`), not the board's.
  */
 export function applyEvent(state: BoardState, event: DomainEvent): BoardState {
   const next = { ...state, seq: event.seq };
@@ -138,9 +177,23 @@ export function applyEvent(state: BoardState, event: DomainEvent): BoardState {
         event.verb === "deleted" ? undefined : event.output,
       );
       return next;
-    case "version":
-    case "run":
     case "session":
+      next.sessions = withChange(
+        state.sessions,
+        event.verb === "deleted" ? event.sessionId : event.session.id,
+        event.verb === "deleted"
+          ? undefined
+          : { session: event.session, phase: event.status.phase },
+      );
+      return next;
+    case "run":
+      next.runs = withChange(
+        state.runs,
+        event.verb === "deleted" ? event.runId : event.run.id,
+        event.verb === "deleted" ? undefined : event.run,
+      );
+      return next;
+    case "version":
     case "session_observation":
     case "session_transcript":
       return next;
