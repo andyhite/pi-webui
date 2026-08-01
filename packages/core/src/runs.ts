@@ -411,3 +411,20 @@ export function isQueuedRunStartable(state: QueuedRunState): boolean {
 export function isQueuedRunCancellable(state: QueuedRunState): boolean {
   return state === "queued" || state === "needs_reask" || state === "paused";
 }
+
+/**
+ * Whether this run is over — whatever it ended as.
+ *
+ * Stated as a predicate because "not done" and "not finished yet" are different
+ * facts and reading one for the other strands work: a command waiting on an
+ * upstream that *failed* is waiting for something that is not coming, and a queue
+ * that only asked "is it done?" would wait for ever.
+ */
+export function isQueuedRunSettled(state: QueuedRunState): boolean {
+  return (
+    state === "done" ||
+    state === "failed" ||
+    state === "interrupted" ||
+    state === "cancelled"
+  );
+}

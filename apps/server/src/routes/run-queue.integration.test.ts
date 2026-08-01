@@ -896,6 +896,62 @@ describe("a restart does not strand admitted work (§4.1, principle 11)", () => 
     expect(at(admitted, "sessionId")).not.toBeNull();
   });
 
+  it("lets the operator finish a one-run batch the restart interrupted", async () => {
+    // The narrowest version of the same shape, and the one that made resuming the
+    // remedy into the disease: a batch of one whose run was interrupted has nothing
+    // left to do, and resuming it — the gesture the pause instructs — used to put it
+    // back to "running" for ever with nothing running.
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-restart-"));
+    mkdirSync(join(stateDir, "workspaces"), { recursive: true });
+    const scriptPath = join(stateDir, "script.json");
+    writeFileSync(scriptPath, JSON.stringify(staysOpen), "utf8");
+
+    const settings = {
+      ...repository(),
+      concurrencyLimit: 1,
+      runtime: { adapterId: "scripted", scriptPath },
+    };
+
+    const first = await boot(settings, { stateDir });
+    const only = await command(first, { name: "The only one" });
+    const batch = await scope(first, {
+      scope: "one",
+      scopeId: only.commandId,
+      initiationKey: "restart-single",
+    });
+    const batchId = str(batch, "batch.id");
+    expect(at(batch, "queued.0.state")).toBe("running");
+
+    await first.handle.close();
+    const second = await boot(settings, { stateDir });
+
+    const paused = await waitFor(async () => {
+      const read = await second.ok(`/run-batches/${batchId}`);
+      return at(read, "batch.state") === "paused" ? read : null;
+    }, "the one-run batch to pause after the restart");
+    expect(at(paused, "entries.0.state")).toBe("interrupted");
+
+    // The gesture the pause asks for. It must finish the batch rather than reopen it.
+    const resumed = await second.ok(`/run-batches/${batchId}/resume`, {
+      method: "POST",
+      body: {},
+    });
+
+    expect(at(resumed, "batch.state")).toBe("completed");
+    expect(at(resumed, "batch.settledAt")).not.toBeNull();
+
+    // And nothing was started to get there: the interrupted run is not silently
+    // re-run by the resume (principle 2 — resuming an interrupted session is its own
+    // gesture, and this is not it).
+    const entries = list(await second.ok(`/run-batches/${batchId}`), "entries");
+    expect(entries).toHaveLength(1);
+    expect(at(entries[0], "state")).toBe("interrupted");
+  });
+
   it("settles an interrupted run as interrupted, and pauses its batch honestly", async () => {
     const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
@@ -1149,6 +1205,78 @@ describe("the in-batch rule: a chain runs unattended (§4.1)", () => {
 
     // And the batch is done: nothing paused, nothing waiting, nothing asking.
     expect(at(finished, "batch.state")).toBe("completed");
+    expect(list(await harness.ok("/run-queue"), "queued")).toHaveLength(0);
+  });
+
+  it("does not strand a downstream when its producer fails and the operator resumes", async () => {
+    // The path a real operator takes: a producer fails, §4.1 pauses the batch and
+    // tells them to address it and resume, and resuming must reach a conclusion. It
+    // used to leave the downstream queued for ever — waiting on a command that was
+    // never going to run again.
+    const harness = await bootWithScript(failsImmediately, 1);
+    const workstream = str(
+      await harness.ok("/workstreams", { method: "POST", body: {} }),
+      "workstream.id",
+    );
+    const producer = await command(harness, {
+      workstreamId: workstream,
+      name: "Produce",
+    });
+    const outputs = list(
+      await harness.ok(`/commands/${producer.commandId}`),
+      "outputs",
+    );
+    const consumer = await command(harness, {
+      workstreamId: workstream,
+      name: "Consume",
+    });
+    const placeholderNode = await harness.ok("/nodes", {
+      method: "POST",
+      body: {
+        role: "content",
+        refId: str(outputs[0], "id"),
+        workstreamId: workstream,
+      },
+    });
+    await harness.ok("/edges", {
+      method: "POST",
+      body: {
+        from: str(placeholderNode, "node.id"),
+        to: consumer.commandNodeId,
+      },
+    });
+
+    const batch = await scope(harness, {
+      scope: "subgraph",
+      scopeId: producer.commandId,
+      initiationKey: "producer-fails",
+    });
+    const batchId = str(batch, "batch.id");
+
+    await waitFor(async () => {
+      const read = await harness.ok(`/run-batches/${batchId}`);
+      return at(read, "batch.state") === "paused" ? read : null;
+    }, "the batch to pause on the failed producer");
+
+    const resumed = await harness.ok(`/run-batches/${batchId}/resume`, {
+      method: "POST",
+      body: {},
+    });
+
+    // A conclusion, either way — never a queue entry nobody will ever admit.
+    expect(at(resumed, "batch.state")).toBe("completed");
+
+    const entries = list(
+      await harness.ok(`/run-batches/${batchId}`),
+      "entries",
+    );
+    const downstream = entries.find(
+      (entry) => at(entry, "commandId") === consumer.commandId,
+    );
+    expect(at(downstream, "state")).toBe("cancelled");
+    expect(String(at(downstream, "detail"))).toContain(
+      "settled without producing",
+    );
     expect(list(await harness.ok("/run-queue"), "queued")).toHaveLength(0);
   });
 

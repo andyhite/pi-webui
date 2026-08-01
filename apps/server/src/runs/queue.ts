@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   estimateRunCost,
   isQueuedRunCancellable,
+  isQueuedRunSettled,
   type Author,
   type CommandId,
   type CostEstimate,
@@ -22,7 +23,12 @@ import type { Logger } from "../logging/logger.js";
 import type { ApiStores } from "../routes/api.js";
 import type { RunOneInput, RunOneResult, RunService } from "./service.js";
 import { checkRunGesture } from "./delegation.js";
-import { dependenciesOf, resolveScope, type ScopedCommand } from "./scopes.js";
+import {
+  consumedOutputsOf,
+  dependenciesOf,
+  resolveScope,
+  type ScopedCommand,
+} from "./scopes.js";
 
 /**
  * Scoped runs and the queue of work (§4.1, Epic 5.5).
@@ -435,8 +441,15 @@ export class RunQueueService {
     };
   }
 
-  /** "Can be cancelled before it starts" (§4.1) — and only before. */
-  cancel(entryId: string, actor: Author): QueuedRun {
+  /**
+   * "Can be cancelled before it starts" (§4.1) — and only before.
+   *
+   * Draining afterwards is not tidiness: cancelling an entry can be what makes
+   * another one unviable (a downstream whose producer has just been called off) or
+   * admissible, and the consequence belongs to the gesture that caused it rather
+   * than to whatever unrelated session happens to end next.
+   */
+  async cancel(entryId: string, actor: Author): Promise<QueuedRun> {
     const entry = this.deps.stores.queue.entry(entryId);
     checkRunGesture(this.deps.stores, {
       actor,
@@ -458,7 +471,8 @@ export class RunQueueService {
     );
     this.publishEntry(cancelled, "updated", actor);
     this.settleBatch(cancelled.batchId, actor);
-    return this.toQueuedRun(cancelled);
+    await this.drain();
+    return this.toQueuedRun(this.deps.stores.queue.entry(entryId));
   }
 
   /**
@@ -547,6 +561,14 @@ export class RunQueueService {
     }
 
     await this.drain();
+
+    // A resume can find nothing to do: everything left in the batch may already be
+    // settled — the single-entry batch a restart interrupted is exactly that, and
+    // resuming it is the gesture the pause instructs. Without this the batch goes
+    // back to "running" and stays there with nothing running, which is the same
+    // symptom, reached through the remedy.
+    this.settleBatch(batchId, actor);
+
     return toRunBatch(this.deps.stores.queue.batch(batchId));
   }
 
@@ -646,6 +668,15 @@ export class RunQueueService {
         this.deps.stores.queue.settle(entry.id, "done", end.kind);
         this.settleBatch(entry.batchId, { kind: "human" });
         return;
+
+      default:
+        // The assertion that makes the exhaustiveness real rather than intended.
+        // A `switch` of bare `return`s over a union compiles perfectly well with a
+        // case missing — the function just returns `undefined` for it, which is how
+        // an interrupted session was silently reported as `done` in the first place.
+        // This line is what fails to compile when a seventh end kind is added.
+        end satisfies never;
+        return;
     }
   }
 
@@ -676,27 +707,74 @@ export class RunQueueService {
   }
 
   /**
-   * Commands in this entry's own batch that it consumes from and that have not
-   * finished yet.
+   * How this entry stands with respect to the commands in its own batch that it
+   * consumes from.
    *
-   * `done` is the only state that counts: a sibling that failed, was interrupted, or
-   * was cancelled will never produce what this entry needs, and the batch's own
-   * pause or abort is what decides that entry's fate — not a silent admission of
-   * something that cannot run.
+   * Three answers, and the middle one used to be missing — which stranded a
+   * downstream command for ever whenever its producer failed, was cancelled, or was
+   * interrupted. "Not done" is not the same fact as "not finished yet": a settled
+   * producer will never produce, and an entry waiting on one is waiting for
+   * something that is not coming.
+   *
+   * - `waiting` — a producer is still going to run. The entry stays queued.
+   * - `abandoned` — a producer has settled without producing, **and** the output
+   *   this entry consumes is still unbound, so this entry can never run. It is
+   *   settled with a reason naming the producer.
+   * - `ready` — every producer is done, or an unfinished one's output arrived by
+   *   some other route. The ordinary contract check decides from here: if somebody
+   *   bound or rewired that input outside the batch, the hash no longer matches and
+   *   it re-asks, which is the right answer to "this changed while you waited".
+   *
+   * The distinction is what stops a producer's failure from either wedging the
+   * downstream or condemning it: a downstream whose input the operator supplied
+   * another way is not doomed, and one whose input nobody supplied is not viable.
    */
-  private pendingInBatchProducers(entry: RunQueueRow): readonly string[] {
+  private inBatchStanding(
+    entry: RunQueueRow,
+  ):
+    | { readonly kind: "ready" }
+    | { readonly kind: "waiting"; readonly producers: readonly string[] }
+    | { readonly kind: "abandoned"; readonly producers: readonly string[] } {
     const siblings = this.deps.stores.queue
       .entriesForBatch(entry.batchId)
       .filter((sibling) => sibling.commandId !== entry.commandId);
-    if (siblings.length === 0) return [];
+    if (siblings.length === 0) return { kind: "ready" };
 
-    const dependencies = dependenciesOf(this.deps.stores, entry.commandId);
-    return siblings
-      .filter(
-        (sibling) =>
-          dependencies.includes(sibling.commandId) && sibling.state !== "done",
-      )
-      .map((sibling) => sibling.commandId);
+    const stateOf = new Map(
+      siblings.map((sibling) => [sibling.commandId, sibling.state]),
+    );
+    const consumed = consumedOutputsOf(
+      this.deps.stores,
+      entry.commandId,
+    ).filter((input) => stateOf.has(input.producerCommandId));
+
+    const waiting = new Set<string>();
+    const abandoned = new Set<string>();
+
+    for (const input of consumed) {
+      const state = stateOf.get(input.producerCommandId);
+      if (state === "done") continue;
+
+      // A settled producer is not going to produce. It only *strands* this entry if
+      // what it was going to produce is still missing; an output that arrived by
+      // another route leaves this entry perfectly runnable.
+      const settled = isQueuedRunSettled(state as QueuedRunState);
+      if (settled) {
+        if (!input.bound) abandoned.add(input.producerCommandId);
+        continue;
+      }
+
+      waiting.add(input.producerCommandId);
+    }
+
+    // Abandonment is decided first: an entry with one dead producer and one live
+    // one is not viable however long it waits for the live one, and saying so now
+    // is better than saying it later.
+    if (abandoned.size > 0) {
+      return { kind: "abandoned", producers: [...abandoned].sort() };
+    }
+    if (waiting.size > 0) return { kind: "waiting", producers: [...waiting] };
+    return { kind: "ready" };
   }
 
   /**
@@ -871,17 +949,41 @@ export class RunQueueService {
       return false;
     }
 
-    // Not yet its turn: something this entry consumes is produced by a command in
-    // its own batch that has not finished. This is the other half of the in-batch
-    // rule — excluding those inputs from the contract stops it *re-asking*, and
-    // this stops it *running* before what it consumes exists. Without it a
+    // Where this entry stands with its own batch. This is the other half of the
+    // in-batch rule — excluding those inputs from the contract stops it *re-asking*,
+    // and this stops it *running* before what it consumes exists. Without it a
     // subgraph under a limit of two would admit the downstream command immediately
     // and the run path would refuse it for an input nothing had produced yet.
-    //
-    // It stays `queued` on purpose: nothing is wrong with it, and the drain moves
-    // on because it never considers an entry twice in one pass.
-    const pending = this.pendingInBatchProducers(entry);
-    if (pending.length > 0) {
+    const standing = this.inBatchStanding(entry);
+
+    if (standing.kind === "waiting") {
+      // Its turn has not come. It stays `queued` on purpose: nothing is wrong with
+      // it, and the drain moves on because it never considers an entry twice in one
+      // pass.
+      return false;
+    }
+
+    if (standing.kind === "abandoned") {
+      // Its producer settled without producing, so this will never run. Settled here
+      // rather than sent down the run path: that path would provision a workspace
+      // before refusing, and it would record the refusal as this command *failing*,
+      // which is not what happened — it never started.
+      const named = standing.producers.join(", ");
+      const settled = stores.queue.settle(
+        entry.id,
+        "cancelled",
+        `it consumes an output of ${named}, which settled without producing it; this run cannot happen`,
+      );
+      this.publishEntry(settled, "updated", actorOfBatch(batch));
+      this.deps.logger.warn("a queued run's producer will never produce", {
+        entryId: entry.id,
+        commandId: entry.commandId,
+        producers: standing.producers,
+      });
+      // The batch may now have nothing left to do, and a batch that sat at
+      // "running" with nothing running is the symptom this whole family of defects
+      // shares.
+      this.settleBatch(entry.batchId, actorOfBatch(batch));
       return false;
     }
 

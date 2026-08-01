@@ -37,21 +37,69 @@ export interface ResolvedScope {
   readonly commands: readonly ScopedCommand[];
 }
 
+/**
+ * One consumed input that another command produces.
+ *
+ * `bound` is the difference between "waiting for it" and "has it": an output
+ * placeholder with nothing bound to it is what blocks a run, and the same wire with
+ * a bound object is what unblocks one. The queue needs the distinction to tell a
+ * downstream command that is still waiting from one whose input arrived by some
+ * other route (§4.1's in-batch rule and what happens when its producer never
+ * produces).
+ */
+export interface ConsumedOutput {
+  /** The command that declares the output this one consumes. */
+  readonly producerCommandId: string;
+  readonly outputId: string;
+  /** False while the placeholder has produced nothing — the blocking case. */
+  readonly bound: boolean;
+}
+
+/** Every input this command consumes that some other command produces. */
+export function consumedOutputsOf(
+  stores: ApiStores,
+  commandId: string,
+): readonly ConsumedOutput[] {
+  const node = stores.commands.commandNode(commandId);
+  const outputs = stores.commands.allOutputs();
+  const consumed: ConsumedOutput[] = [];
+
+  for (const edge of stores.graph.contextInputs(node.id)) {
+    const source = stores.graph.node(edge.fromNode);
+    const output = outputs.find(
+      (candidate) =>
+        candidate.id === source.refId ||
+        (candidate.boundObjectId !== null &&
+          candidate.boundObjectId === source.refId),
+    );
+    if (output === undefined) continue;
+    if (output.commandId === commandId) continue;
+
+    consumed.push({
+      producerCommandId: output.commandId,
+      outputId: output.id,
+      // The wire points at the bound object once there is one, so a consumed
+      // placeholder that still has no object is the unbound case whatever the
+      // node happens to name.
+      bound: output.boundObjectId !== null,
+    });
+  }
+
+  return consumed;
+}
+
 /** The commands whose outputs this command consumes. */
 export function dependenciesOf(
   stores: ApiStores,
   commandId: string,
 ): readonly string[] {
-  const node = stores.commands.commandNode(commandId);
-  const producers = new Set<string>();
-
-  for (const edge of stores.graph.contextInputs(node.id)) {
-    const source = stores.graph.node(edge.fromNode);
-    const producer = producerOf(stores, source.refId);
-    if (producer !== null && producer !== commandId) producers.add(producer);
-  }
-
-  return [...producers];
+  return [
+    ...new Set(
+      consumedOutputsOf(stores, commandId).map(
+        (consumed) => consumed.producerCommandId,
+      ),
+    ),
+  ];
 }
 
 /** The commands that consume this command's outputs. */
@@ -69,23 +117,6 @@ export function dependentsOf(
   }
 
   return [...consumers];
-}
-
-/**
- * Which command produces the object (or placeholder) a content node stands for.
- *
- * A placeholder names its command directly; a bound object is found through the
- * output that bound it. An input that is nobody's output has no producer, which is
- * exactly the "blocked on something a human must supply" case.
- */
-function producerOf(stores: ApiStores, refId: string): string | null {
-  for (const output of stores.commands.allOutputs()) {
-    if (output.id === refId) return output.commandId;
-    if (output.boundObjectId !== null && output.boundObjectId === refId) {
-      return output.commandId;
-    }
-  }
-  return null;
 }
 
 export function resolveScope(

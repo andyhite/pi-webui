@@ -35,13 +35,32 @@ interface Fixture {
   readonly queue: RunQueueService;
   readonly stores: ApiStores;
   readonly batchId: string;
+  /** The consumer, when the fixture wired one; the second command otherwise. */
   readonly entryId: string;
+  /** The producer, when the fixture wired one; the first command otherwise. */
   readonly siblingEntryId: string;
+  readonly producerCommandId: string;
+  /** The producer's output placeholder, for binding it by hand. */
+  readonly outputId: string;
+  readonly objectId: string;
   /** How many times the queue tried to actually run something. */
   runAttempts(): number;
 }
 
-function fixture(concurrencyLimit = 4): Fixture {
+interface FixtureOptions {
+  readonly concurrencyLimit?: number;
+  /**
+   * Wire the second command to the first's output placeholder, so one entry
+   * genuinely consumes what the other produces — the shape every in-batch rule is
+   * about, and one the unwired fixture cannot express.
+   */
+  readonly wired?: boolean;
+}
+
+function fixture(options: FixtureOptions | number = {}): Fixture {
+  const settings: FixtureOptions =
+    typeof options === "number" ? { concurrencyLimit: options } : options;
+  const concurrencyLimit = settings.concurrencyLimit ?? 4;
   const database = openDatabase({ stateDir: ":memory:" });
   databases.push(database);
 
@@ -72,12 +91,16 @@ function fixture(concurrencyLimit = 4): Fixture {
   // One workstream, two commands, one batch of two — the smallest shape that has a
   // sibling to fail and an entry to confirm.
   const workstream = api.workstreams.create({ author: humanAuthor });
+  // Producing, so the commands have output placeholders: an in-batch dependency is
+  // one command consuming another's declared output, and a definition that declares
+  // none cannot express the shape at all.
   const definition = api.commands.define({
     name: "Do it",
     instruction: "Do it.",
     model: "fixture-model",
     effort: "medium",
-    lifecycle: "open",
+    lifecycle: "producing",
+    outcome: { name: "result", kind: "document", conditions: [] },
   });
 
   const first = api.commands.instantiate({
@@ -90,6 +113,33 @@ function fixture(concurrencyLimit = 4): Fixture {
     workstreamId: workstream.id,
     author: humanAuthor,
   });
+
+  // Something for the producer to have produced, so a test can bind the
+  // placeholder by hand and ask what the queue makes of that.
+  const produced = api.objects.write({
+    kind: "document",
+    title: "The result",
+    renderings: {
+      card: { text: "produced" },
+      summary: "produced",
+      agentContent: "the upstream command's result",
+    },
+  });
+
+  const outputId = first.outputs[0]?.id as string;
+
+  if (settings.wired === true) {
+    const placeholder = api.graph.place({
+      role: "content",
+      refId: outputId,
+      workstreamId: workstream.id,
+    });
+    api.graph.addContextEdge({
+      from: placeholder.id,
+      to: second.node.id,
+      author: humanAuthor,
+    });
+  }
 
   const batch = api.queue.createBatch({
     initiationKey: "one-gesture",
@@ -120,6 +170,9 @@ function fixture(concurrencyLimit = 4): Fixture {
     batchId: batch.id,
     entryId: entry.id,
     siblingEntryId: sibling.id,
+    producerCommandId: first.command.id,
+    outputId,
+    objectId: produced.objectId,
     runAttempts: () => attempts,
   };
 }
@@ -185,6 +238,129 @@ describe("confirming a re-ask (§4.1)", () => {
     await expect(
       board.queue.confirm(board.entryId, humanAuthor),
     ).rejects.toThrow(/nothing left for a confirmation to start/u);
+    expect(board.runAttempts()).toBe(0);
+  });
+});
+
+describe("a producer that will never produce (§4.1)", () => {
+  /**
+   * "Not done" and "not finished yet" are different facts, and reading one for the
+   * other stranded the downstream command for ever. A producer that failed, was
+   * cancelled, or was interrupted is not going to produce, so an entry waiting on
+   * one is waiting for something that is not coming.
+   *
+   * What happens next depends on whether the entry can run *anyway*: if the output
+   * it consumes is still unbound it never can, and it is settled with a reason
+   * naming the producer; if somebody supplied that input another way it is not
+   * doomed at all, and the ordinary contract check re-asks because what it would
+   * assemble changed.
+   */
+  it("settles a downstream whose producer failed, and lets the batch finish", async () => {
+    const board = fixture({ wired: true });
+
+    // Repro 1: the producer fails, which pauses the batch and moves the downstream
+    // from `queued` to `paused` (§4.1). The operator addresses the failure outside
+    // the batch and resumes — the gesture the pause instructs.
+    board.stores.queue.settle(board.siblingEntryId, "failed", "failed");
+    board.stores.queue.pauseBatch(board.batchId, "a run in this batch failed");
+    expect(board.stores.queue.entry(board.entryId).state).toBe("paused");
+
+    await board.queue.resumeBatch(board.batchId, humanAuthor);
+
+    // Before the fix this sat `queued` for ever: the gate asked "is the producer
+    // done?", the answer was no and always would be, and nothing ever said so.
+    const settled = board.stores.queue.entry(board.entryId);
+    expect(settled.state).toBe("cancelled");
+    expect(settled.detail).toContain("settled without producing");
+    expect(settled.detail).toContain(board.producerCommandId);
+
+    // Nothing was run to discover that. Sending it down the run path would have
+    // provisioned a workspace before refusing, and recorded the refusal as this
+    // command failing — which is not what happened; it never started.
+    expect(board.runAttempts()).toBe(0);
+
+    // And the batch is finished rather than back at "running" with nothing running.
+    expect(board.stores.queue.batch(board.batchId).state).toBe("completed");
+    expect(board.stores.queue.waiting()).toHaveLength(0);
+  });
+
+  it("settles a downstream whose producer was cancelled, with no pause to prompt it", async () => {
+    const board = fixture({ wired: true });
+
+    // Repro 2: the operator cancels the upstream while the batch is still running.
+    // Nothing pauses and nothing fails, so before the fix there was no signal at
+    // all — the downstream simply waited for a command that had been called off.
+    await board.queue.cancel(board.siblingEntryId, humanAuthor);
+
+    const settled = board.stores.queue.entry(board.entryId);
+    expect(settled.state).toBe("cancelled");
+    expect(settled.detail).toContain("settled without producing");
+    expect(board.runAttempts()).toBe(0);
+
+    // Cancelling one entry is what made the other unviable, so the consequence
+    // lands on the same gesture rather than waiting for an unrelated session to end.
+    expect(board.stores.queue.batch(board.batchId).state).toBe("completed");
+  });
+
+  it("does not condemn a downstream whose input arrived another way", async () => {
+    const board = fixture({ wired: true });
+
+    // The same dead producer — but the operator supplied the output themselves, so
+    // this entry is perfectly runnable. Settling it would refuse work that can run.
+    // Bound for real, through the store that binds it after a run: the point of the
+    // check is that a *bound* output leaves the entry runnable, so faking the bind
+    // would fake the thing under test.
+    const produced = board.stores.runs.start({
+      commandId: board.producerCommandId,
+    });
+    board.stores.commands.bindOutput(board.outputId, {
+      objectId: board.objectId,
+      runId: produced.run.id,
+    });
+    board.stores.queue.settle(board.siblingEntryId, "failed", "failed");
+
+    await board.queue.drain();
+
+    // It is not cancelled: it re-asks, because what it would assemble is no longer
+    // what was previewed — which is the honest answer to "this changed while you
+    // waited" (§4.1), and the operator can confirm it.
+    const entry = board.stores.queue.entry(board.entryId);
+    expect(entry.state).toBe("needs_reask");
+    expect(entry.settledAt).toBeNull();
+    expect(board.runAttempts()).toBe(0);
+  });
+
+  it("still waits while a producer is genuinely unfinished", async () => {
+    const board = fixture({ wired: true });
+
+    // The rule it must not break: a producer that has not run yet is not a producer
+    // that will never run, and the downstream waits rather than being condemned.
+    board.stores.queue.markStarting(board.siblingEntryId);
+
+    await board.queue.drain();
+
+    const entry = board.stores.queue.entry(board.entryId);
+    expect(entry.state).toBe("queued");
+    expect(entry.settledAt).toBeNull();
+    expect(board.stores.queue.batch(board.batchId).state).toBe("running");
+  });
+});
+
+describe("resuming a batch with nothing left to do (§4.1)", () => {
+  it("settles it instead of returning it to running-forever", async () => {
+    const board = fixture({ wired: true });
+
+    // Every entry already settled — the shape a restart leaves behind when the one
+    // run in a batch was interrupted. Resuming is what the pause tells the operator
+    // to do, so resuming must not be how the batch gets stuck.
+    board.stores.queue.settle(board.siblingEntryId, "interrupted", "restarted");
+    board.stores.queue.settle(board.entryId, "cancelled", "nothing to consume");
+    board.stores.queue.pauseBatch(board.batchId, "a run was interrupted");
+
+    const resumed = await board.queue.resumeBatch(board.batchId, humanAuthor);
+
+    expect(resumed.state).toBe("completed");
+    expect(resumed.settledAt).not.toBeNull();
     expect(board.runAttempts()).toBe(0);
   });
 });

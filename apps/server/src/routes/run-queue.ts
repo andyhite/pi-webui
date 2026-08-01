@@ -93,8 +93,8 @@ export function runQueueRoutes(queue: RunQueueService): Hono<ApiEnv> {
   app.get("/run-batches/:id", (c) => c.json(queue.batch(param(c, "id"))));
 
   /** "Cancellable before it starts" (§4.1) — and refused after. */
-  app.delete("/run-queue/:id", (c) =>
-    c.json({ cancelled: queue.cancel(param(c, "id"), actorOf(c)) }),
+  app.delete("/run-queue/:id", async (c) =>
+    c.json({ cancelled: await queue.cancel(param(c, "id"), actorOf(c)) }),
   );
 
   /**
