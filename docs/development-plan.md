@@ -2206,12 +2206,73 @@ hidden, and panels/palette entries as declarations until their dispatch lands._
 
 ### Epic 7.2 — Integration substrate (`integrations`)
 
-- [ ] Declared refresh modes: interval / on-demand / observed; manual refresh per integration and per object; **scheduled reads only, never scheduled runs** (§9.1, principle 2)
-- [ ] Runtime-configurable scoping in the source's query language (§9.1)
-- [ ] Refresh → version bump → drift; changes as deltas (§9.1, §3.2)
-- [ ] Writes: UI action + agent tool per write, reversibility declared per action, results read back never assumed (§9.2)
-- [ ] In-app connect flows; visible connection state; broken connection = health problem, never missing data (§9.3)
-- [ ] Concepts present-or-absent, never degraded (§3.1)
+- [x] Declared refresh modes: interval / on-demand / observed; manual refresh per integration and per object; **scheduled reads only, never scheduled runs** (§9.1, principle 2)
+- [x] Runtime-configurable scoping in the source's query language (§9.1)
+- [ ] Refresh → version bump → drift; changes as deltas (§9.1, §3.2) — _the version-bump/drift half landed and is tested; the delta half is a deferral, see the landed-note_
+- [x] Writes: UI action + agent tool per write, reversibility declared per action, results read back never assumed (§9.2)
+- [x] In-app connect flows; visible connection state; broken connection = health problem, never missing data (§9.3)
+- [x] Concepts present-or-absent, never degraded (§3.1)
+
+_**Landed in Batch 5 (Track A), against the plugin-contract draft
+(`packages/plugin-sdk/src/draft/`), not the frozen contract — Epic 7.1 has not
+frozen anything yet.** `apps/server/src/integrations/` is the substrate:
+`IntegrationRegistry` (the direct-invocation seam standing in for Track C's
+still-unfinished host, which speaks only load/ping/dispose), `IntegrationService`
+(connect/disconnect/scoping, refresh with reconciliation through `ObjectStore`,
+and write-action execution with a read-back that is never assumed), and
+`refresh-job.ts` (the scheduled-read tick, timers injected, structurally unable
+to reach any run or session API). `IntegrationStore`/`CredentialStore`
+(`packages/db`, migration 24) hold instances and secrets — no read path
+anywhere returns a credential's value, proven grep-proof and api-proof in both
+packages' test suites. A broken connection is its own health alert
+(`"integration-broken"`, `@plotroom/core`'s `attention/health.ts`), read
+directly off `IntegrationStore` rather than inferred, and the object an
+integration produced keeps its exact last-known content through it — tested.
+The write-action approval path reuses the Batch-4 external-write seam exactly
+as that batch's own gate.ts docstring anticipated: `integrationToolWorldDeclarations`
+builds a `ToolWorldDeclarations` from a plugin's own reversibility
+declarations, and `createSessionGate` now accepts one (`world`), wired from the
+registry in `app.ts` — inert today because no runtime yet calls a plugin's tool
+by name, but the seam a future host plugs into rather than a stub for one to
+replace. A fake/test producer (`integrations/fake-plugin.ts`, scope item 5) is
+registered on every boot as `fake-plugin`/`fake-tickets`; it contributes
+nothing until an operator connects it, and its `comment` write action
+deliberately mutates differently than asked (appends a system note) so the
+read-back tests prove honesty rather than an echo.
+
+**Deviations from the draft, recorded rather than silently patched into
+Track C's subtree:**
+
+- `DraftRenderings.card` is `string`; `@plotroom/core`'s `Renderings.card` is
+  `Readonly<Record<string, unknown>>`. Bridged in `registry.ts`'s
+  `toCoreRenderings` (parses as JSON, falls back to `{ text: <string> }`).
+- `DraftConceptKind` spells one member `"pull-request"`; `@plotroom/core`'s
+  `ObjectKind` spells it `"pull_request"`. Bridged by `toCoreObjectKind`.
+- `DraftConceptProducer`/`DraftWriteAction` name no plugin; `IntegrationProducer`
+  (this package) adds `pluginId`, additively.
+
+**Deferred, and what it waits on:**
+
+- **Per-kind delta expression** (`DraftContentRenderer.renderDelta`) is not
+  wired: the draft has no `DraftContentRenderer` registered anywhere in this
+  substrate, so every refresh writes full content and lets `ObjectStore`'s own
+  `chooseDelta` decide there is no delta to prefer. Version bump and drift are
+  real and tested; "four new review comments arrived" being smaller than a
+  re-rendered pull request is not, because no in-box plugin needing it has
+  landed yet (Epic 7.3, Track C, later this batch). The seam
+  (`ObjectStore.write`'s `delta` parameter) already exists from Epic 1.1 and
+  takes a delta the moment a producer offers one.
+- **A real, worker-isolated plugin host** is Track C's Epic 7.1, still
+  in-flight. `IntegrationRegistry` is same-process and says so on every
+  export; when the host lands, it is the thing that calls `register` with a
+  worker-backed producer, and nothing above the registry changes.
+- **The permission-grant UX** (declared but not decided, per
+  `docs/plugin-contract-draft.md`) is not implemented: connecting the fake
+  producer stores a credential with no grant dialog, because there is no
+  grant model yet to route through.
+- **The four in-box plugins** (git, GitHub, filesystem, Jira) build on this
+  substrate next (Epic 7.3): each is a real `IntegrationProducer` (and, for
+  GitHub/Jira, `writeActions`) registered the same way the fake one is._
 
 ### Epic 7.3 — In-box plugins (`integrations`)
 
