@@ -7,16 +7,20 @@ import { GraphStore } from "@plotroom/db";
 import type { DomainEvent } from "@plotroom/core";
 import { loadServerConfig } from "../config.js";
 import { startServer } from "../index.js";
+import { ephemeralPort } from "../testing/harness.js";
 
-let port = 46100;
 type Handle = ReturnType<typeof startServer>;
 
 let handle: Handle;
 let base: string;
 let origin: string;
+/** Assigned per test by the bind probe below; the WS helpers read it. */
+let port: number;
 
-beforeEach(() => {
-  port += 1;
+beforeEach(async () => {
+  // From the OS rather than a counter: a static band collides with a leaked server
+  // or another suite, and the failure can be requests landing on the other one.
+  port = await ephemeralPort();
   const stateDir = mkdtempSync(join(tmpdir(), "plotroom-api-test-"));
   handle = startServer(
     loadServerConfig(

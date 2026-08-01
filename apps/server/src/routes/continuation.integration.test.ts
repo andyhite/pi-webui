@@ -343,6 +343,50 @@ describe("fork (§6.3)", () => {
     expect(at(again.body, "replayed")).toBe(true);
   });
 
+  it("completes the provenance edge on a replayed fork (crash window)", async () => {
+    // The session is started and its key settled inside `startForkedSession`, so a
+    // process that died between that and the provenance write left a fork with
+    // nothing recording where it came from — and every retry used to early-return
+    // without drawing it. There is never an invisible session (principle 5), and an
+    // unexplained one is the same failure wearing a hat.
+    const harness = await bootWith(twoTurns);
+    const { sessionId } = await endedTwoTurnSession(harness);
+
+    const first = await harness.ok(`/sessions/${sessionId}/fork`, {
+      method: "POST",
+      body: { turn: 1, initiationKey: "fork-replay" },
+    });
+    const forkedId = str(first, "session.id");
+
+    const again = await harness.call(`/sessions/${sessionId}/fork`, {
+      method: "POST",
+      body: { turn: 1, initiationKey: "fork-replay" },
+    });
+
+    expect(again.status).toBe(200);
+    expect(at(again.body, "replayed")).toBe(true);
+    expect(at(again.body, "session.id")).toBe(forkedId);
+    // The plan the replay describes is the fork that happened, not one that would
+    // have: it still reports the point's cleanliness and the seed's completeness.
+    expect(at(again.body, "cleanliness.state")).toBeTruthy();
+
+    // Exactly one edge, present: the replay completed the settled state rather than
+    // duplicating it or skipping it.
+    const provenance = list(await harness.ok("/snapshot"), "edges").filter(
+      (edge) => at(edge, "relation") === "session_forked_from",
+    );
+    expect(provenance).toHaveLength(1);
+    expect(at(provenance[0], "to")).toBe(
+      at(
+        list(await harness.ok("/snapshot"), "nodes").find(
+          (node) =>
+            at(node, "role") === "session" && at(node, "refId") === forkedId,
+        ),
+        "id",
+      ),
+    );
+  });
+
   it("refuses a turn the transcript does not have", async () => {
     const harness = await bootWith(twoTurns);
     const { sessionId } = await endedTwoTurnSession(harness);
@@ -523,6 +567,141 @@ describe("initiation keys name one gesture (principle 9)", () => {
     );
     expect(
       at(await harness.ok(`/sessions/${second.sessionId}`), "session.end"),
+    ).not.toBeNull();
+  });
+
+  it("refuses a handoff key reused for a different brief, and corrupts neither", async () => {
+    // The exact corruption. Brief A's key, reused while sending brief B, used to take
+    // the retry path with B's plan: B's content and edge were wired into **A's**
+    // session, provenance was recorded from B's source to A's session, and B was
+    // marked sent — permanently, so B could never seed a session of its own. Nothing
+    // refused and nothing said so.
+    const harness = await bootWith(twoTurns);
+    const first = await endedTwoTurnSession(harness);
+    const second = await endedTwoTurnSession(harness);
+    const target = await command(harness, {
+      lifecycle: "open",
+      name: "Receiving",
+    });
+
+    const reviewed = async (sessionId: string, text: string) => {
+      const briefId = str(
+        await harness.ok(`/sessions/${sessionId}/handoff-brief`, {
+          method: "POST",
+          body: { text },
+        }),
+        "brief.id",
+      );
+      await harness.ok(`/handoff-briefs/${briefId}/review`, {
+        method: "POST",
+        body: {},
+      });
+      return briefId;
+    };
+
+    const briefA = await reviewed(first.sessionId, "A: where I got to");
+    const briefB = await reviewed(second.sessionId, "B: a different handoff");
+
+    const sentA = await harness.ok("/handoffs", {
+      method: "POST",
+      body: {
+        briefId: briefA,
+        workstreamId: target.workstream,
+        initiationKey: "one-handoff-key",
+      },
+    });
+    const sessionA = str(sentA, "session.id");
+
+    const reused = await harness.call("/handoffs", {
+      method: "POST",
+      body: {
+        briefId: briefB,
+        workstreamId: target.workstream,
+        initiationKey: "one-handoff-key",
+      },
+    });
+
+    expect(reused.status).toBe(409);
+    expect(at(reused.body, "error.details.reason")).toBe(
+      "initiation_key_reused",
+    );
+
+    // Nothing of B's reached A's session: no second context edge into it, and no
+    // provenance from B's source.
+    const snapshot = await harness.ok("/snapshot");
+    const sessionANode = list(snapshot, "nodes").find(
+      (node) =>
+        at(node, "role") === "session" && at(node, "refId") === sessionA,
+    );
+    const intoA = list(snapshot, "edges").filter(
+      (edge) =>
+        at(edge, "kind") === "context" &&
+        at(edge, "to") === at(sessionANode, "id"),
+    );
+    expect(intoA).toHaveLength(1);
+
+    const provenance = list(snapshot, "edges").filter(
+      (edge) => at(edge, "relation") === "session_handoff",
+    );
+    expect(provenance).toHaveLength(1);
+    expect(at(provenance[0], "to")).toBe(at(sessionANode, "id"));
+
+    // And B is still unsent, so it can still seed a session of its own — which the
+    // corruption took away permanently.
+    const briefsB = list(
+      await harness.ok(`/sessions/${second.sessionId}/handoff-briefs`),
+      "briefs",
+    );
+    expect(at(briefsB[0], "state")).toBe("reviewed");
+
+    const sentB = await harness.ok("/handoffs", {
+      method: "POST",
+      body: {
+        briefId: briefB,
+        workstreamId: target.workstream,
+        initiationKey: "b-own-key",
+      },
+    });
+    expect(at(sentB, "session.id")).not.toBe(sessionA);
+    expect(
+      list(await harness.ok("/snapshot"), "edges").filter(
+        (edge) => at(edge, "relation") === "session_handoff",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("refuses a fork key reused as a resume of the session it created", async () => {
+    // The resume fast path compared the session id and not the **kind**, and a fork's
+    // key settles with the id of the session it created — so resuming that forked
+    // session with the fork's own key answered `replayed: true` about a resumption
+    // that never happened, leaving the session ended and the caller told otherwise.
+    const harness = await bootWith(twoTurns);
+    const { sessionId } = await endedTwoTurnSession(harness);
+
+    const forked = await harness.ok(`/sessions/${sessionId}/fork`, {
+      method: "POST",
+      body: { turn: 1, initiationKey: "fork-then-resume" },
+    });
+    const forkedId = str(forked, "session.id");
+
+    await harness.ok(`/sessions/${forkedId}/stop`, {
+      method: "POST",
+      body: {},
+    });
+    await endedSession(harness, forkedId);
+
+    const reused = await harness.call(`/sessions/${forkedId}/resume`, {
+      method: "POST",
+      body: { initiationKey: "fork-then-resume" },
+    });
+
+    expect(reused.status).toBe(409);
+    expect(at(reused.body, "error.details.reason")).toBe(
+      "initiation_key_reused",
+    );
+    // Still ended: the false replay would have reported it live without resuming it.
+    expect(
+      at(await harness.ok(`/sessions/${forkedId}`), "session.end"),
     ).not.toBeNull();
   });
 

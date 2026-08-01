@@ -641,3 +641,108 @@ describe("durable placement (§5)", () => {
     expect(graph.clearPositions()).toEqual({ cleared: 0 });
   });
 });
+
+describe("a caller-supplied edge id names one gesture (principle 9)", () => {
+  it("returns the same edge when the same gesture arrives twice", () => {
+    const from = place.content("obj_1").id;
+    const to = place.command("cmd_1").id;
+
+    const first = graph.addContextEdge({
+      edgeId: "edge_one_gesture",
+      from,
+      to,
+      author: humanAuthor,
+    });
+    const again = graph.addContextEdge({
+      edgeId: "edge_one_gesture",
+      from,
+      to,
+      author: humanAuthor,
+    });
+
+    // One wire, not two, and not a duplicate refusal: the gesture already happened
+    // and was already judged legal, so re-judging it would refuse the retry as a
+    // duplicate of itself. This is what makes a replayed injection, broadcast, or
+    // handoff safe.
+    expect(again.id).toBe(first.id);
+    expect(graph.contextInputs(to)).toHaveLength(1);
+  });
+
+  it("refuses an id that already wires something else", () => {
+    const to = place.command("cmd_1").id;
+    graph.addContextEdge({
+      edgeId: "edge_taken",
+      from: place.content("obj_1").id,
+      to,
+      author: humanAuthor,
+    });
+
+    // The short-circuit above assumes "this gesture already happened", and that is
+    // only safe while the row it found is the row the caller is describing. An id
+    // resolving to an edge between *other* nodes means the caller derived a colliding
+    // id, and handing it back would report somebody else's wire as this gesture's.
+    expect(() =>
+      graph.addContextEdge({
+        edgeId: "edge_taken",
+        from: place.content("obj_2").id,
+        to,
+        author: humanAuthor,
+      }),
+    ).toThrow(ConnectionRefused);
+  });
+
+  it("refuses to resurrect a removed edge", () => {
+    const from = place.content("obj_1").id;
+    const to = place.command("cmd_1").id;
+    const edge = graph.addContextEdge({
+      edgeId: "edge_removed",
+      from,
+      to,
+      author: humanAuthor,
+    });
+    graph.removeEdge(edge.id);
+
+    // Restoring is its own gesture (principle 10); a retry must not undo a deletion
+    // nobody undid.
+    expect(() =>
+      graph.addContextEdge({
+        edgeId: "edge_removed",
+        from,
+        to,
+        author: humanAuthor,
+      }),
+    ).toThrow(ConnectionRefused);
+  });
+});
+
+describe("provenance is idempotent in the fact it states (§3.7)", () => {
+  it("records one edge however many times the same fact is recorded", () => {
+    const from = place.session("sess_source").id;
+    const to = place.session("sess_forked").id;
+
+    const first = graph.recordProvenance(from, to, "session_forked_from");
+    const again = graph.recordProvenance(from, to, "session_forked_from");
+
+    // A fork recorded twice does not make two forks; it draws one relationship
+    // twice. The gestures that record provenance are retryable, and a retry that got
+    // this far the first time must not leave a second edge behind.
+    expect(again.id).toBe(first.id);
+    expect(
+      graph
+        .provenance(to)
+        .filter((edge) => edge.relation === "session_forked_from"),
+    ).toHaveLength(1);
+  });
+
+  it("still records a different relation between the same pair", () => {
+    const from = place.session("sess_source").id;
+    const to = place.session("sess_other").id;
+
+    const forked = graph.recordProvenance(from, to, "session_forked_from");
+    const handoff = graph.recordProvenance(from, to, "session_handoff");
+
+    // Deduping is per fact, not per pair: two different relations are two facts.
+    expect(handoff.id).not.toBe(forked.id);
+    expect(graph.provenance(to)).toHaveLength(2);
+  });
+});

@@ -227,10 +227,10 @@ the baseline in a column so a restart between the two does not lose the charge.
 
 An **initiation does not always produce a run** (migration 17): a fork, a handoff, and
 a resume each spend a key and produce a session, so `run_initiations.command_id` is
-nullable. And a key names one **gesture** rather than one command (migration 18's
-`kind`): a run of command X and a fork of one of that command's sessions both name X,
-so comparing the command alone handed the second the first one's answer and called it
-a retry. Every steering gesture **replays** a repeated key with what the first attempt
+nullable. And a settled key names its **whole gesture** — its kind
+(migration 18) and its subject (migration 19): a run of command X and a fork of one of
+that command's sessions both name X, and a handoff named no brief at all, so a reused
+key wired one brief's content into another's session and marked it sent for ever. Every steering gesture **replays** a repeated key with what the first attempt
 produced — none of them refuse one — which is what makes the id-stable writes behind
 them load-bearing: `addContextEdge` returns an existing edge for a supplied id before
 any legality check, and `recordProvenance` is idempotent in the fact it states. And `sessions.runtime_mode` records **which fork branch ran** — native or

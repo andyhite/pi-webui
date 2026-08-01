@@ -589,6 +589,17 @@ export class RunStore {
      * first one's answer would call it a retry of something it never was.
      */
     kind: InitiationKind = "run",
+    /**
+     * What this gesture is about: the session a resume resumes, the source a fork
+     * forks, the brief a handoff sends. Omitted for a run, whose subject is the
+     * command.
+     *
+     * Compared as strictly as the other two, and for a sharper reason: a key whose
+     * kind and command match but whose **subject** differs is a different gesture
+     * wearing the same clothes, and answering it as a retry hands it the first
+     * gesture's session to write into.
+     */
+    subjectId: string | null = null,
   ): InitiationClaim {
     return this.state.db.transaction(() => {
       const existing = this.initiation(key);
@@ -606,6 +617,12 @@ export class RunStore {
             message: `initiation key ${key} already spent on a ${existing.kind} gesture; a ${kind} is a different gesture and needs its own key (principle 9)`,
           });
         }
+        if (existing.subjectId !== subjectId) {
+          throw new RunRefused({
+            reason: "initiation_key_reused",
+            message: `initiation key ${key} already spent on ${kind} of ${String(existing.subjectId)}; the same key cannot name a second ${kind} (principle 9)`,
+          });
+        }
         // Settled means the key produced what it was going to produce. A run-less
         // initiation (§6.3) settles with a session and no run, so "no run" is not
         // evidence it is still in flight — the settle timestamp is.
@@ -616,7 +633,13 @@ export class RunStore {
 
       this.state.db
         .insert(runInitiations)
-        .values({ initiationKey: key, commandId, kind, createdAt: this.now() })
+        .values({
+          initiationKey: key,
+          commandId,
+          kind,
+          subjectId,
+          createdAt: this.now(),
+        })
         .run();
 
       return { state: "claimed" as const };

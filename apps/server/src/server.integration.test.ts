@@ -2,14 +2,36 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { humanAuthor } from "@plotroom/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { loadServerConfig, type ServerConfig } from "./config.js";
 import { startServer } from "./index.js";
+import { ephemeralPort } from "./testing/harness.js";
 
-let port = 45900;
+/**
+ * Ports the OS assigned, reserved up front.
+ *
+ * `boot()` here is synchronous and called from fifteen places, so the bind probe runs
+ * once in a `beforeAll` and hands out what it found: a static band collides with a
+ * leaked server or another suite, and the failure is not always a clean EADDRINUSE —
+ * it can be requests landing on the other server, surfacing far away as something
+ * else. Pre-reserving keeps the call sites synchronous without keeping the guess.
+ */
+const reserved: number[] = [];
+
+beforeAll(async () => {
+  for (let index = 0; index < 24; index += 1) {
+    reserved.push(await ephemeralPort());
+  }
+});
+
 function nextPort(): number {
-  port += 1;
+  const port = reserved.shift();
+  if (port === undefined) {
+    throw new Error(
+      "the reserved port pool is empty; raise the count in this file's beforeAll",
+    );
+  }
   return port;
 }
 
@@ -143,6 +165,34 @@ describe("server integration (Epic 2.1)", () => {
     });
     expect(ok.status).toBe(200);
     expect(handle.logger.level).toBe("debug");
+  });
+
+  it("keeps the log level the operator's own (§8)", async () => {
+    const { handle, config } = boot();
+
+    // Both verbs are declared `humanOnly`, and the actor is what enforces that.
+    // What a session would do with it is the point: turning the log down is how you
+    // make your own behaviour harder to see.
+    for (const [method, body] of [
+      ["GET", undefined],
+      ["PATCH", JSON.stringify({ level: "debug" })],
+    ] as const) {
+      const refused = await fetch(
+        `http://127.0.0.1:${config.port}/api/log-level`,
+        {
+          method,
+          headers: {
+            origin: loopbackOrigin(config.port),
+            "content-type": "application/json",
+            "x-plotroom-actor": "session:sess_curious",
+          },
+          ...(body === undefined ? {} : { body }),
+        },
+      );
+      expect(refused.status, method).toBe(403);
+    }
+
+    expect(handle.logger.level).toBe("error");
   });
 
   it("streams a published domain event to a connected WS client", async () => {

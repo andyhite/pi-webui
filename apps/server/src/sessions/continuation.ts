@@ -186,7 +186,17 @@ export class ContinuationService {
     // the right answer to a *new* gesture and the wrong one to a retry of the same
     // gesture. "A retry returns the same one" (principle 9).
     const settled = stores.runs.initiation(input.initiationKey);
-    if (settled?.settledAt != null && settled.sessionId === input.sessionId) {
+    if (
+      settled?.settledAt != null &&
+      // The kind, not only the session. A **fork**'s key settles with the id of the
+      // session it created, so resuming that forked session with the fork's own key
+      // matched here and answered `replayed: true` about a resumption that never
+      // happened. A key names one gesture; this is the fast path reading the same
+      // rule `claimInitiation` enforces, rather than a looser version of it.
+      settled.kind === "resume" &&
+      settled.subjectId === input.sessionId &&
+      settled.sessionId === input.sessionId
+    ) {
       return {
         session: stored,
         firstTurnQueued: false,
@@ -273,42 +283,30 @@ export class ContinuationService {
 
     // Null where the source ran no command: a fork spends a key and produces no
     // run of its own (§6.3), which is what migration 17 made representable.
+    // The source is the subject, so a key spent forking one session is refused for
+    // another — which is what the provenance edge used to be asked, indirectly and
+    // wrongly: a crash between the settle and that edge made every retry refuse a
+    // legitimate gesture for ever, and the edge was never drawn.
     const claim = stores.runs.claimInitiation(
       input.initiationKey,
       source.session.commandId,
       "fork",
+      source.session.id,
     );
     if (claim.state === "settled") {
-      const existing = stores.sessions.get(
-        claim.initiation.sessionId as string,
+      // Completed rather than early-returned. The session is started and the key
+      // settled inside `startForkedSession`, so a process that died between that and
+      // the provenance write left a fork with no edge recording where it came from —
+      // and every retry took this path and returned without drawing it. Completing
+      // on every attempt is what makes the settled state whole (principle 9,
+      // principle 5: there is never an invisible session, and never an unexplained
+      // one either).
+      return this.completeFork(
+        source,
+        point,
+        stores.sessions.get(claim.initiation.sessionId as string),
+        input.actor,
       );
-
-      // A settled key answers with what it produced, and what it produced has to be
-      // a fork of *this* source. Two sessions of one command share a `commandId`, so
-      // the command comparison alone would let a key spent forking one of them
-      // report that fork as a retry of forking the other. The provenance edge is the
-      // record of which source it came from, so that is what is checked.
-      const forkedFrom = stores.graph
-        .provenance(stores.graph.nodeFor("session", existing.session.id).id)
-        .some(
-          (edge) =>
-            edge.relation === "session_forked_from" &&
-            edge.fromNode ===
-              stores.graph.nodeFor("session", source.session.id).id,
-        );
-      if (!forkedFrom) {
-        throw refused({
-          reason: "initiation_key_reused",
-          message: `initiation key ${input.initiationKey} already forked a different session; use a new key (principle 9)`,
-        });
-      }
-
-      return {
-        plan: await this.planFork(source, point, input.actor),
-        session: existing,
-        mode: stores.sessions.runtimeModeOf(existing.session.id) ?? "native",
-        replayed: true,
-      };
     }
     if (claim.state === "in_flight") {
       throw refused({
@@ -383,6 +381,55 @@ export class ContinuationService {
 
     if (!result.ok) throw refused(result.refusal);
     return result.plan;
+  }
+
+  /**
+   * Finish a fork whose session already exists — a retry, or the tail of an attempt
+   * that died before it drew its own provenance.
+   *
+   * The plan is rebuilt with the **existing** ids rather than fresh ones, so what it
+   * describes is the fork that happened rather than one that would have.
+   * `recordProvenance` is idempotent in the fact it states, so recording it again is
+   * recording it once.
+   */
+  private async completeFork(
+    source: StoredSession,
+    point: TranscriptPoint,
+    existing: StoredSession,
+    actor: Author,
+  ): Promise<{
+    readonly plan: SessionForkPlan;
+    readonly session: StoredSession;
+    readonly mode: "native" | "seeded";
+    readonly replayed: boolean;
+  }> {
+    const { stores, bus } = this.deps;
+
+    const plan = await this.planFork(source, point, actor, {
+      sessionId: existing.session.id,
+      workstreamId: existing.session.workstreamId,
+      workspaceId: (existing.workspaceId ??
+        `wsp_${existing.session.workstreamId}`) as WorkspaceId,
+    });
+
+    const provenance = stores.graph.recordProvenance(
+      stores.graph.nodeFor("session", source.session.id).id,
+      stores.graph.nodeFor("session", existing.session.id).id,
+      plan.provenance.relation,
+    );
+    bus.publish({
+      entity: "edge",
+      verb: "created",
+      edge: toEdge(provenance),
+      author: actor,
+    });
+
+    return {
+      plan,
+      session: existing,
+      mode: stores.sessions.runtimeModeOf(existing.session.id) ?? "native",
+      replayed: true,
+    };
   }
 
   private async startFork(
@@ -576,7 +623,23 @@ export class ContinuationService {
     // `sentAt` first refused the retry, which is how the crash window below became
     // unrecoverable: the retry could never reach the writes it needed to complete.
     const spent = stores.runs.initiation(input.initiationKey);
-    const isRetry = spent?.settledAt != null && spent.sessionId !== null;
+    const settled = spent?.settledAt != null && spent.sessionId !== null;
+
+    // A settled key names its **whole** gesture, and the brief is part of it.
+    //
+    // Without this, replaying brief A's key while sending brief B took the retry
+    // path with B's plan: B's content and edge were wired into A's session,
+    // provenance was recorded from B's source to A's session, and B was marked sent
+    // — permanently, so B could never seed a session of its own. Nothing refused and
+    // nothing said so, which is the worst shape a bug can have.
+    if (settled && spent?.subjectId !== input.briefId) {
+      throw refused({
+        reason: "initiation_key_reused",
+        message: `initiation key ${input.initiationKey} already sent brief ${String(spent?.subjectId)}; a different brief is a different handoff and needs its own key (principle 9)`,
+      });
+    }
+
+    const isRetry = settled;
 
     if (!isRetry && row.sentAt !== null) {
       throw refused({

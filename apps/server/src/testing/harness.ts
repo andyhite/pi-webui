@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadServerConfig, type ServerConfigOverrides } from "../config.js";
@@ -41,17 +42,48 @@ export interface CallResult {
 }
 
 /**
- * Ports are per worker, not per module.
+ * A port the OS says is free, rather than one this module guessed.
  *
- * Vitest runs suites in parallel workers, each with its own copy of this module,
- * so a shared starting number means two suites binding the same port — and the
- * failure is not a clean EADDRINUSE but requests landing on *the other suite's
- * server*, which looks like an unrelated refusal. Each worker gets its own band.
+ * Per-worker bands were the previous answer and they were not enough: a band is
+ * still a static range, so a leaked server from an earlier run, another suite's
+ * harness, or anything else on the machine can already hold a port in it — and the
+ * failure is not always a clean `EADDRINUSE`. It can be requests landing on *the
+ * other server*, which surfaces as an unrelated refusal somewhere far away.
+ *
+ * Binding a throwaway socket to port 0 and reading back what the OS assigned cannot
+ * collide with anything already listening, leaked or not. It is the same probe
+ * `apps/web`'s e2e harness uses, and its own comment names the reason PlotRoom's
+ * server cannot simply be told to bind 0 itself: `startServer` reports the
+ * *configured* port, so a caller asking for 0 would not learn which port it got.
+ * There is a narrow window between closing the probe and the child binding;
+ * acceptable for test tooling, and strictly safer than a counter.
+ */
+export function ephemeralPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.unref();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (address === null || typeof address === "string") {
+        probe.close(() =>
+          reject(new Error("could not determine an ephemeral port")),
+        );
+        return;
+      }
+      const { port } = address;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+/**
+ * A key unique to this process, so "the same gesture" means the same gesture and two
+ * suites cannot collide on one (principle 9's own mechanism, applied to the harness).
  */
 const worker = Number(
   process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? 1,
 );
-let port = 47100 + (Number.isFinite(worker) ? worker : 1) * 300;
 
 const harnesses: Harness[] = [];
 const scratch: string[] = [];
@@ -95,7 +127,7 @@ export async function boot(
   overrides: ServerConfigOverrides = {},
   options: { readonly stateDir?: string } = {},
 ): Promise<Harness> {
-  port += 1;
+  const thisPort = await ephemeralPort();
   const stateDir =
     options.stateDir ?? mkdtempSync(join(tmpdir(), "plotroom-int-test-"));
   if (options.stateDir === undefined) scratch.push(stateDir);
@@ -103,7 +135,6 @@ export async function boot(
   const workspaceDir = join(stateDir, "workspaces");
   mkdirSync(workspaceDir, { recursive: true });
 
-  const thisPort = port;
   const handle = startServer(
     loadServerConfig(
       {},

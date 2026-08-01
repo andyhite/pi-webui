@@ -19,6 +19,7 @@ import {
 import { openDatabase, WorkspaceStore, WorkstreamStore } from "@plotroom/db";
 import { loadServerConfig, type ServerConfigOverrides } from "../config.js";
 import { startServer } from "../index.js";
+import { ephemeralPort } from "../testing/harness.js";
 
 /**
  * Durability and portability over the real app (Epic 2.3, §12).
@@ -29,7 +30,12 @@ import { startServer } from "../index.js";
  * copying the directory to a new path, on a new port, and asserting the snapshot
  * is identical and the content is still readable.
  */
-let port = 46500;
+/**
+ * Ports come from the OS, not from a counter. A static band collides with a leaked
+ * server or another suite, and the failure is not always a clean EADDRINUSE — it can
+ * be requests landing on the other server, which surfaces far away as something
+ * else. `ephemeralPort` is the shared bind probe.
+ */
 
 interface Harness {
   readonly handle: ReturnType<typeof startServer>;
@@ -63,13 +69,12 @@ async function boot(
   overrides: ServerConfigOverrides = {},
   options: { readonly stateDir?: string } = {},
 ): Promise<Harness> {
-  port += 1;
   const stateDir =
     options.stateDir ?? mkdtempSync(join(tmpdir(), "plotroom-durable-"));
   if (options.stateDir === undefined) scratch.push(stateDir);
   mkdirSync(join(stateDir, "workspaces"), { recursive: true });
 
-  const thisPort = port;
+  const thisPort = await ephemeralPort();
   const handle = startServer(
     loadServerConfig(
       {},

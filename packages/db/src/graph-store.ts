@@ -286,7 +286,32 @@ export class GraphStore {
         .from(edges)
         .where(eq(edges.id, input.edgeId))
         .get();
-      if (already) return already;
+
+      if (already) {
+        // Same id, different wire. The short-circuit above assumes "this gesture
+        // already happened", and that assumption is only safe while the row it found
+        // is the row the caller is describing: an id that resolves to an edge between
+        // *other* nodes means the caller derived a colliding id, and handing it back
+        // would report somebody else's wire as this gesture's own.
+        if (already.fromNode !== input.from || already.toNode !== input.to) {
+          throw new ConnectionRefused({
+            reason: "edge_id_collision",
+            message: `edge ${input.edgeId} already wires ${already.fromNode} into ${already.toNode}; this gesture describes a different wire and needs its own id`,
+          });
+        }
+
+        // A removed edge is not on the board (principle 10): restoring one is its own
+        // gesture, and quietly resurrecting it here would make a retry undo a
+        // deletion nobody undid.
+        if (already.deletedAt !== null) {
+          throw new ConnectionRefused({
+            reason: "edge_deleted",
+            message: `edge ${input.edgeId} was removed from the board; restore it instead of wiring it again`,
+          });
+        }
+
+        return already;
+      }
     }
 
     const fromRow = this.node(input.from);

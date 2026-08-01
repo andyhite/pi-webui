@@ -15,6 +15,7 @@ import { openDatabase, RunStore, SessionStore } from "@plotroom/db";
 import { loadServerConfig, type ServerConfigOverrides } from "../config.js";
 import { startServer } from "../index.js";
 import type { RuntimeScript } from "../runtime/scripted.js";
+import { ephemeralPort } from "../testing/harness.js";
 
 /**
  * The run spine, over the real app (Epics 4.1/4.2).
@@ -26,7 +27,12 @@ import type { RuntimeScript } from "../runtime/scripted.js";
  * phase reducer, accounting, the WS stream, the completion loop — so what these
  * tests prove about the spine is true of a real session too.
  */
-let port = 46300;
+/**
+ * Ports come from the OS, not from a counter. A static band collides with a leaked
+ * server or another suite, and the failure is not always a clean EADDRINUSE — it can
+ * be requests landing on the other server, which surfaces far away as something
+ * else. `ephemeralPort` is the shared bind probe.
+ */
 
 interface Harness {
   readonly handle: ReturnType<typeof startServer>;
@@ -84,7 +90,6 @@ async function boot(
   overrides: ServerConfigOverrides = {},
   options: { readonly stateDir?: string } = {},
 ): Promise<Harness> {
-  port += 1;
   const stateDir =
     options.stateDir ?? mkdtempSync(join(tmpdir(), "plotroom-run-test-"));
   if (options.stateDir === undefined) scratch.push(stateDir);
@@ -92,7 +97,7 @@ async function boot(
   const workspaceDir = join(stateDir, "workspaces");
   mkdirSync(workspaceDir, { recursive: true });
 
-  const thisPort = port;
+  const thisPort = await ephemeralPort();
   const handle = startServer(
     loadServerConfig(
       {},

@@ -1352,7 +1352,9 @@ fork's check sees the **source** and never the descendant it is about to create,
 is what the catalog's own resolution says in capitals. `session_handoff` declares
 `humanOnly` and now refuses a session actor at the service, for the same reason the
 review step does: the brief exists because a human decided this work should move, and
-a session sending it is that decision not being made.
+a session sending it is that decision not being made. `log_level_get` / `log_level_set`
+declare it too and are gated the same way — what a session would do with it is the
+point, since turning the log down is how you make your own behaviour harder to see (§8).
 
 Resume reopens **the same record**, which is the whole difference from a fork, and
 two things about it were only discovered by testing it. The previous handle's pump
@@ -1383,6 +1385,19 @@ re-sendable. They run on every attempt now, each idempotent in an id the plan su
 and `markSent` is last so a crash before it leaves the brief re-sendable rather than
 sent with nothing to show for it. The `already_sent` refusal is checked **after** the
 key, so it still refuses a second gesture and no longer refuses a retry of the first.
+
+**The integration harnesses take their ports from the OS.** Every server-side suite
+used a static per-band counter, and a band is still a guess: a leaked server from an
+earlier run, another suite, or anything else on the machine can already hold a port in
+it — and the failure is not always a clean `EADDRINUSE`. It can be requests landing on
+_the other server_, which surfaces far away as an unrelated refusal, which is exactly
+how the last round's initiation-key mystery presented. `ephemeralPort` (a throwaway
+bind to port 0, read back, closed) is shared from `testing/harness.ts` and used by all
+five suites; the two synchronous ones reserve a pool up front so their call sites stay
+synchronous without keeping the guess. There is a narrow window between closing the
+probe and the child binding — acceptable for test tooling, and strictly safer than a
+counter. `apps/server` cannot simply bind 0 itself: `startServer` reports the
+_configured_ port, so a caller asking for 0 would not learn which one it got.
 
 _Deferred, honestly: a command definition carries **no** default continuation mode
 yet, so the comparison uses the shipped default and says so rather than guessing per

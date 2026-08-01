@@ -565,6 +565,9 @@ export class RunService {
       input.initiationKey,
       stored.session.commandId,
       "resume",
+      // The session being resumed is the subject, so a key spent resuming one is
+      // refused for another rather than answering about the wrong session.
+      input.sessionId,
     );
     if (claim.state === "settled") {
       // A settled key answers with **what it produced**, not with what this call
@@ -765,7 +768,11 @@ export class RunService {
    * feature.
    */
   async startHandoffSession(input: {
-    readonly brief: { readonly text: string; readonly sourceSessionId: string };
+    readonly brief: {
+      readonly id: string;
+      readonly text: string;
+      readonly sourceSessionId: string;
+    };
     readonly workstreamId: string;
     readonly launch: SessionLaunchChoices;
     readonly initiationKey: string;
@@ -780,6 +787,10 @@ export class RunService {
       input.initiationKey,
       null,
       "handoff",
+      // The brief is the subject. Without it a key spent sending one brief answered
+      // as a retry while a *different* brief's writes went into the first one's
+      // session — a corruption rather than a refusal.
+      input.brief.id,
     );
     if (claim.state === "settled") {
       return {

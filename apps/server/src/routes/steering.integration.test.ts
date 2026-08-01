@@ -605,6 +605,71 @@ describe("a broadcast replays rather than refusing (principle 9)", () => {
     expect(edges).toHaveLength(2);
   });
 
+  it("replays only for the sender who sent it", async () => {
+    const harness = await bootWith(costsNothing);
+    const sender = await liveSession(harness, costsNothing, { name: "A" });
+    const other = await liveSession(harness, costsNothing, { name: "B" });
+
+    const repositoryId = String(
+      list(await harness.ok("/broadcast-world"), "members")
+        .filter((member) => at(member, "sessionId") === sender.sessionId)
+        .flatMap((member) => list(member, "repositoryIds"))[0],
+    );
+
+    await harness.ok("/broadcasts", {
+      method: "POST",
+      body: {
+        text: "the shared branch moved",
+        scope: { kind: "everyone-in-repository", repositoryId },
+        category: "material-state-changed",
+        broadcastId: "bcast-mine",
+      },
+      actor: `session:${sender.sessionId}`,
+    });
+
+    // A broadcast id is the caller's own, so another session naming it would be
+    // handed this broadcast's recipient list — a read of who is running and sharing
+    // state, which is exactly what a session may not address (§6.5).
+    const byOther = await harness.call("/broadcasts", {
+      method: "POST",
+      body: {
+        text: "the shared branch moved",
+        scope: { kind: "everyone-in-repository", repositoryId },
+        category: "material-state-changed",
+        broadcastId: "bcast-mine",
+      },
+      actor: `session:${other.sessionId}`,
+    });
+    expect(byOther.status).toBe(409);
+    expect(at(byOther.body, "error.details.reason")).toBe("not_your_broadcast");
+
+    // The sender's own retry replays, and so does the operator's: they see every send
+    // by construction (§6.5's operator-visible clause).
+    const mine = await harness.call("/broadcasts", {
+      method: "POST",
+      body: {
+        text: "the shared branch moved",
+        scope: { kind: "everyone-in-repository", repositoryId },
+        category: "material-state-changed",
+        broadcastId: "bcast-mine",
+      },
+      actor: `session:${sender.sessionId}`,
+    });
+    expect(mine.status).toBe(200);
+    expect(at(mine.body, "replayed")).toBe(true);
+
+    const asOperator = await harness.call("/broadcasts", {
+      method: "POST",
+      body: {
+        text: "the shared branch moved",
+        target: { kind: "everything-running" },
+        broadcastId: "bcast-mine",
+      },
+    });
+    expect(asOperator.status).toBe(200);
+    expect(at(asOperator.body, "replayed")).toBe(true);
+  });
+
   it("excludes a refused delivery from what the sender is charged for", async () => {
     // A delivery the runtime never received induced no turn, so billing the sender
     // for it would charge them for work their broadcast did not cause — the same

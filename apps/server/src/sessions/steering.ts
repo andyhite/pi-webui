@@ -502,6 +502,24 @@ export class SteeringService {
     // the same content is still exactly one turn for every one of them.
     const existing = stores.broadcasts.found(broadcastId);
     if (existing !== undefined) {
+      // A replay answers the sender who sent it, not whoever names the id.
+      //
+      // A broadcast id is the caller's own, so a session guessing or reusing another
+      // session's id would otherwise be handed that broadcast's recipient list —
+      // which is a read of who is running and sharing state, exactly what §6.5's
+      // scope rule exists to stop a session addressing. The operator sees everything
+      // by construction (§6.5's whole "operator-visible" clause), so their replay is
+      // always allowed.
+      const sender = existing.senderSessionId;
+      const isSameSender =
+        input.actor.kind === "human" ||
+        (existing.origin === "session" && sender === input.actor.sessionId);
+      if (!isSameSender) {
+        throw refused({
+          reason: "not_your_broadcast",
+          message: `broadcast ${broadcastId} was sent by somebody else; a replay answers the gesture that made it (§6.5)`,
+        });
+      }
       return this.replayBroadcast(existing);
     }
 

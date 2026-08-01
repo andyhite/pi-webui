@@ -1377,4 +1377,30 @@ export const migrations: readonly Migration[] = [
       ALTER TABLE run_initiations ADD COLUMN kind TEXT NOT NULL DEFAULT 'run';
     `,
   },
+  {
+    id: 19,
+    name: "initiation_subject",
+    sql: `
+      -- What the gesture was about.
+      --
+      -- A settled key has to name its **whole** gesture, and the kind plus the
+      -- command named only part of one. A handoff's key named no brief at all, so replaying
+      -- brief A's key while sending brief B took the retry path with B's plan: B's
+      -- content and edge were wired into A's session, provenance was recorded from
+      -- B's source to A's session, and B was marked sent — permanently, so B could
+      -- never seed a session of its own. Nothing refused, and nothing said so.
+      --
+      -- One column rather than one per kind, because the question is the same
+      -- question every time: a resume is about a session, a fork about its source, a
+      -- handoff about its brief, and a run about the command that column already
+      -- names (so NULL there). Comparing it on every claim is what makes a reused
+      -- key a refusal instead of a corruption.
+      --
+      --
+      -- No foreign key: the subject is a session, a brief, or nothing, and a column
+      -- that can point at three tables cannot reference one. The comparison is by
+      -- value, which is all it needs to be.
+      ALTER TABLE run_initiations ADD COLUMN subject_id TEXT;
+    `,
+  },
 ];

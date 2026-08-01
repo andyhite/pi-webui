@@ -786,6 +786,16 @@ export const runInitiations = sqliteTable(
     })
       .notNull()
       .default("run"),
+    /**
+     * What the gesture was about: the session a resume resumes, the source a fork
+     * forks, the brief a handoff sends. Null for a run, whose subject is the command
+     * `commandId` already names.
+     *
+     * Compared on every claim. A settled key that named only its kind and its
+     * command named only part of its gesture, and the part it left out is what a
+     * reused key silently corrupted.
+     */
+    subjectId: text("subject_id"),
     createdAt: integer("created_at").notNull(),
     settledAt: integer("settled_at"),
   },
