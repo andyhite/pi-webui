@@ -158,6 +158,36 @@ Authorship is enforced twice on purpose: the predicate refuses, and the schema
 cannot represent an unattributed context edge (`author_kind NOT NULL` plus a
 CHECK that only provenance edges may be `system`).
 
+**Path claims** live in `claims` / `claim_waits` / `claim_policies`, with the
+write ledger in `path_writes` / `path_reads` (migration 11). The tables are
+`@plotroom/core`'s `ClaimState` at rest and nothing more: `ClaimStore` applies the
+`ClaimEffect` list and decides nothing, because a store that re-derived "is this
+path held" would be the second implementation principle 8 exists to prevent. Two
+CHECKs make an illegal state unrepresentable rather than merely refused — a holder
+with no session id, and a non-root claim with no lease, since only the operator's
+root claim is immortal. Rows are retired rather than deleted so a release and an
+expiry stay different events. `ClaimService` (`apps/server/src/claims/`) sweeps
+lapsed leases **before every decision**, publishes `claim` / `claim_wait` /
+`claim_policy` on the one event stream, and enforces the operator-only verbs by the
+request's actor rather than by the tool catalog's flag. Every runtime write passes
+`decideToolPermission` before it runs; a driver with no gate wired **denies**.
+
+**Spend attribution** lives in `spend_attributions` (migration 12): one row per
+(charged session, spender), replaced rather than accumulated, because the accounting
+total is folded from the observation log and the same spend observed twice must be
+charged once. `own` rows only for a workstream or fleet total, or a delegated dollar
+would be counted once per ancestor. Enforcement is Phase 6's; the data starts at the
+first delegation because attribution that starts later cannot answer what an earlier
+chain cost.
+
+**Scoped runs and the queue** live in `run_batches` / `run_queue` (migrations 13 and
+14). One batch is one gesture over a scope; one entry is one command, admitted rather
+than scheduled. Every entry carries `contract_hash` — the assembled body, the
+configuration, and the exact versions that went in — because **the preview is the
+contract**: at admission the preview is taken again, and a mismatch re-asks instead
+of running something else. There is no timer anywhere in it: the queue drains from
+the session event stream, including for a session that never went through it.
+
 **Commands and runs** live in `command_definitions` / `commands` /
 `command_parameter_bindings` / `command_outputs` and `runs` / `run_inputs` /
 `run_outputs` (migration 5). Four §3.5 rules are schema constraints rather
@@ -382,4 +412,21 @@ Decided (recorded as they were made):
 - **A second, scripted session runtime ships beside the pi adapter** (Epic 4.1/4.2). It replays a declared script of observations and is registered only when the operator selects it (`PLOTROOM_RUNTIME=scripted`), so a default installation has no such adapter to name. It exists because the run spine — observation log, phase reducer, accounting, WS events, completion loop — must be provable without a model, and it exercises that exact path rather than a parallel one. The Playwright milestone gate scripts it (`apps/server/src/runtime/scripted.ts` documents the format, including the bounded `delay` step that paces a session so a streaming assertion cannot be satisfied by a refetch).
 - **A submission is a tool call**, not a private channel, and PlotRoom answers by checking the declared world conditions itself — so completion is proven identically however it was asked for. There are two entry points into that one path, deliberately: `plotroom_submit_outcome` is what a _runtime_ calls (the scripted runtime emits it and the driver recognises it as an observation), and `session_submit` is the agent tool over `POST /api/sessions/:id/submit` in Epic 4.5's catalog. Same service call, same proof; the earlier note here claimed one shared name, which is not what landed.
 - **Cost estimates are priced per definition, from priced runs only, and never rendered as a bare number** (Epic 4.2, §4.1). `estimateRunCost` returns a basis, a range, and a sentence; the range is `null` — not zero — when nothing in that definition's history recorded a cost, and a run whose runtime reported none contributes no evidence about money. The suggested spend cap is the most expensive prior run, and there is no suggestion at all without history.
+- **Global concurrency limit default: 4 sessions** (`PLOTROOM_CONCURRENCY_LIMIT`).
+  §4.1 says the limit is configurable and says nothing about its value. Four is
+  chosen so the queue is a path an ordinary board takes rather than an unreachable
+  branch — a fleet gesture over a handful of commands queues, is visible, and is
+  cancellable on the first day of use — and because it is survivable on one laptop
+  against one provider's rate limits. Zero is **refused** rather than read as
+  "unlimited": a limit of none is spelled by setting it high, and a typo that
+  silently removed the bound would be the one failure the limit exists to prevent.
+  Decided in Epic 5.5.
+- **The limit bounds initiation, not one endpoint.** `POST /api/runs` goes through
+  the same admission as a scoped run: 201 with `{run, session, status}` when a slot
+  was free, **202 with `{queued, run: null, session: null}`** when the gesture was
+  admitted and is waiting. A 202 is not a refusal — the system is deciding _when_,
+  never _whether_ (§4.1) — and a client that reads `session.id` unconditionally
+  fails loudly rather than proceeding with a session that does not exist yet.
+  Decided in Epic 5.5 (Batch 3), because an unbounded second entry point would make
+  the limit documentation rather than enforcement.
 - **Compaction interval default: 6 hours** (`PLOTROOM_COMPACTION_INTERVAL_SECONDS`), first sweep after one interval rather than at startup, and `0` disables the schedule while leaving `POST /api/maintenance/compact` available. Decided in Epic 2.3: often enough that the store does not grow unbounded between restarts, rare enough that the sweep is never what the operator notices, and a restart loop must not be able to sweep on every boot.

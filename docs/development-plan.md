@@ -631,7 +631,7 @@ in, with no reader for the in-repository file yet; discovery walks with a
 directory-listing seam and no watch; and clone-from-a-PR-card is the same
 `clone` path with a UI that does not exist until §9.4._
 
-### Epic 4.4 — Path claims (`claims`) — _done (domain; server wiring pending Track A)_
+### Epic 4.4 — Path claims (`claims`) — _done (domain Batch 2; server wiring landed in Batch 3)_
 
 - [x] Claim model: per-path leases; root claim per workstream; every claim a subdivision of a held claim (§3.4)
 - [x] Hierarchical conflict (ancestor/descendant paths, not-yet-existing paths covered)
@@ -641,7 +641,7 @@ directory-listing seam and no watch; and clone-from-a-PR-card is the same
 - [x] Waitlists as visible state; wait-for-cycle deadlock detection refusing the newest claim with an actionable message
 - [x] Claim-precise divergence: stale iff a read path was written by a different holder (§3.4)
 - [x] Operator as implicit claim holder: hand edits are their own divergence class, staling a session only for paths it read (§3.4)
-- [x] Session tools: request, yield, inspect — decision functions in `core` (`ClaimManager`); the endpoints that expose them are Track A's, tracked in Epic 4.5's carry-over below (principle 4)
+- [x] Session tools: request, yield, inspect — decision functions in `core` (`ClaimManager`); the endpoints that expose them are Track A's, tracked in Epic 4.5's carry-over below (principle 4) — _mounted in Batch 3; see the server note below_
 
 _Landed as `@plotroom/core`'s `claims/` subtree: `paths` (canonicalization stated
 and tested — case-folded, separators and `..` normalized, escapes refused — plus
@@ -683,6 +683,47 @@ lands with Epic 4.2's run path; and `checkClaimContinuation` keeps Epic 4.3's
 conservative verdict whenever the ledger is not complete for the interval, so
 narrowing only takes effect once run-time recording exists._
 
+**Server wiring landed (Batch 3, Track A).** Migration 11 is `ClaimState` at rest
+(`claims` / `claim_waits` / `claim_policies`) plus the ledger (`path_writes` /
+`path_reads`), and `ClaimStore` applies the `ClaimEffect` list — nothing outside the
+claim manager decides anything, which is why a store that re-derived "is this path
+held" would have been the second implementation principle 8 exists to prevent. Rows
+are retired rather than deleted, so a release and an expiry stay different events;
+two schema CHECKs make an unrepresentable state unrepresentable rather than merely
+refused (a holder with no session id, and a non-root claim with no lease — only the
+operator's root claim is immortal). `ClaimService` sweeps lapsed leases **before
+every decision**, as the contract requires, and turns effects into events on the one
+vocabulary: `claim`, `claim_wait`, and `claim_policy` are entities on the same stream
+as nodes and sessions, because a waitlist a surface has to poll for is the invisible
+stall §3.4 is about. All eight declared endpoints are mounted (`routes/claims.ts`)
+plus `DELETE /api/claim-waits/:id`, and the two operator-only ones are enforced by
+the request's **actor** rather than by the catalog's `humanOnly` flag — a flag
+describes, and the route is the gate.
+
+**Enforcement, which is the part that matters.** The first session in a workstream
+is granted the root claim by the operator at provisioning (§3.4's single-writer
+default, and the reason principle 1 holds rather than looks held: every claim
+downstream subdivides a human's reach). Every runtime write then passes
+`decideToolPermission` before it runs, through one seam for both adapters: the
+scripted runtime raises the same `tool-permission` request pi's tool layer does,
+waits unbounded for PlotRoom's answer, and **does not touch the disk when the answer
+is no** — so claim enforcement is provable without a model, and it is proved
+(`claims.integration.test.ts` asserts a second session's write is refused and the
+file is not there). A driver with no gate wired **denies**; an adapter with no
+declaration gets `UNKNOWN_WRITE_INTENTS`, under which every write raises an approval
+rather than being allowed because nothing recognised it. Waiting on a claim is the
+session phase core already modelled, fed from the wait rows so the card, the queue,
+and blocked-on accounting cannot disagree. Claims are released on session end
+automatically, before anything about the run is decided.
+
+_Still deferred: **`PathRead` capture has no source.** `WriteIntentDeclaration`
+declares write extents and says nothing about reads, so there is nothing to attribute
+a read to yet — `recordRead` exists and the table is there, but only writes accrue.
+`checkClaimContinuation` therefore still keeps Epic 4.3's conservative verdict, and
+will keep it until an adapter declares read extents. Approvals are raised as log
+lines and the `blockedOnHuman` fact on the wait event; the §6.6 approval surface is
+Phase 6's._
+
 **Adversarial review round (post-landing).** Three defects reached `main`-ready
 state with 164 tests passing, which is worth recording because each one hid in a
 place tests were not looking:
@@ -718,11 +759,11 @@ verdict is correct today (deny wins at any depth, and the extent check bounds
 it); what is missing is provenance. Non-blocking — it lands with whichever epic
 first needs a claim audit trail._
 
-### Epic 4.5 — Agent tool surface (`tools`) — _done (domain; server mounting pending Track A)_
+### Epic 4.5 — Agent tool surface (`tools`) — _done (domain Batch 2; server mounting landed in Batch 3)_
 
 - [x] Every human gesture exposed as an agent tool over the same API vocabulary (principle 8) — one catalog in `core`, pinned to the server's mounted routes by a test in both directions
 - [x] Reflexivity enforcement: no session authors context/capabilities/budget into its own initiation chain; propose-and-accept path for self-touching targets (principle 1) — `checkToolCall` over the Phase 1 lineage model, called by the bridge before any request is built. _Carry-over resolved in the tool layer: the bridge is constructed with the session it serves, sets `X-PlotRoom-Actor` from that binding, and refuses an actor-shaped input rather than stripping it — a session has no way to say who it is. The server-side half (mount the bridge's transport, keep the header caller-supplied only for the operator) is Track A's._
-- [x] Delegation: child sessions visible on the graph with provenance; spend attributed up the initiating chain (§3.6, principle 2) — `planDelegation` records the `session_delegated` provenance edge and `attributeSpend` writes one ledger row per session in the chain; enforcement lands with Phase 6 budgets
+- [x] Delegation: child sessions visible on the graph with provenance; spend attributed up the initiating chain (§3.6, principle 2) — `planDelegation` records the `session_delegated` provenance edge and `attributeSpend` writes one ledger row per session in the chain; enforcement lands with Phase 6 — _wired in Batch 3: `POST /api/runs` with a session actor is the delegation, and the server records both halves (see the note below)_ budgets
 - [x] Graph warnings readable by agents (§5) — in the catalog as `graph_warnings_read`, `pending` until the warnings endpoint exists
 
 _Landed as `@plotroom/core`'s `sessions/tools/` subtree: `catalog` (the single
@@ -750,6 +791,35 @@ _field_ names are declarations checked by review rather than pinned, because the
 request schemas live in `apps/server` (zod) and `core` cannot import them — when
 those schemas move into `core`, the catalog derives from them; and the propose‑
 and‑accept records are shapes until proposals are persisted._
+
+**Server mounting landed (Batch 3, Track A).** The claim tools are `live` (see Epic
+4.4's server note), and the catalog gained entries for the endpoints this batch
+added: `run_scope_preview`, `run_scope`, `run_queue_read`, `run_queue_cancel`,
+`run_queue_confirm`, `run_batch_read`, `run_batch_resume`, `workspace_diff_read`,
+`session_spend_read`, `workstream_spend_read`, `fleet_spend_read`, and
+`claim_wait_withdraw`. The catalog test earned its keep again: every one of those
+existed because it failed the moment the route did, which is principle 8 drifting in
+the direction nobody notices.
+
+**Delegation is mounted, and `ToolTargetIndex` is implemented** (`runs/delegation.ts`).
+The resolution the catalog carries as the mounting contract is the resolution the
+server uses, including the part written in capitals: a `run_one` target resolves to
+the sessions the command has **already** run and never to the one the run is about to
+create, or delegation itself would be refused. A session actor on `POST /api/runs`
+therefore does three things — `checkToolCall` refuses a run inside the caller's own
+chain before anything is recorded (so the initiation key is still free afterwards),
+`planDelegation` records the `session_delegated` provenance edge (recorded, never
+authored: it passes through no authoring check), and `attributeSpend` charges every
+session in the chain. Attribution rows are unique per (charged session, spender) and
+**replace** rather than accumulate, because the accounting total is folded from the
+observation log and the same spend observed twice must be charged once. Totals are
+readable per session, per workstream, and fleet-wide; `own` rows only for the latter
+two, since summing `descendant` rows would count a delegated dollar once per
+ancestor. Enforcement stays Phase 6's — nothing refuses on money yet.
+
+_Still deferred: proposals, graph warnings, and the §6.6 approval surface have no
+endpoints, so `proposal_create`, `proposal_accept`, and `graph_warnings_read` remain
+`pending`._
 
 **Review round additions.** `session_dispatch` was declared reflexivity `none`,
 which made §4.1's rule — a session may not run, resume, or re-run work inside its
@@ -850,6 +920,20 @@ affordance (subgraphs, a queue, re-run-drifted) — that epic is still open._
 _Composer send is honestly disabled with a reason: injection has no server
 endpoint yet (§6.5 is Batch 3 scope); "wire as context" stays a placeholder
 hook. `DiffPanel` stays fixture-fed — no workspace/diff read API exists yet._
+
+_**The diff read landed in Batch 3** (Track A): `GET /api/workstreams/:id/diff`
+answers the panel's own `WorkspaceDiff` shape — a flat file list with a status, a
+patch, and pre-split hunks per file — so the fixture can be replaced by the real
+thing. Every git invocation behind it is a read through `runGit`, so a diff cannot
+become the one place an app credential reaches a workspace (§3.4). What "changes"
+means is stated rather than assumed: the merge-base with the configured base ref
+where there is one, so the diff still shows the work after a session commits, and
+`HEAD` where there is not — with the response saying which, because a diff whose base
+is a guess is a wrong answer with no evidence. Untracked files are included, since a
+session that wrote a new file changed the workspace. Three not-ready states are
+answers rather than empty successes: no workspace, a record with nothing checked out,
+and a checkout git cannot read (§3.4's visible reason). **Track B replaces the
+fixture** — cross-track follow-up._
 
 _**THE W10 MILESTONE GATE**: `apps/web/e2e/milestone.spec.ts` (Playwright,
 run via `pnpm --filter @plotroom/web e2e`, not part of `pnpm verify` or
@@ -1170,12 +1254,68 @@ left loose: `senderSharesScope` reads membership from the `BroadcastWorld` Track
 builds, so a wrong `repositoryIds` join would widen what a session may declare — the
 rule is stated once and enforced once, but its inputs are the server's to get right.
 
-### Epic 5.5 — Scoped runs and the queue of work (`runs`)
+### Epic 5.5 — Scoped runs and the queue of work (`runs`) — _done_
 
-- [ ] Run subgraph (dependency order; pauses on failure/out-of-budget; stop aborts remainder) (§4.1)
-- [ ] Run what's missing: never-disabled run affordance; "waiting on…" with reveal-and-run-upstream, asked once (§4.1)
-- [ ] Re-run all drifted: per-workstream and fleet-wide (§4.1)
-- [ ] Global concurrency limit with visible, cancellable queue; **preview is the contract** — drifted inputs re-ask instead of silently running (§4.1)
+- [x] Run subgraph (dependency order; pauses on failure/out-of-budget; stop aborts remainder) (§4.1)
+- [x] Run what's missing: never-disabled run affordance; "waiting on…" with reveal-and-run-upstream, asked once (§4.1) — _the server half: the scoped preview names what each blocked command is waiting on and the scope that would unblock it, and one confirmation covers the chain. The affordance that renders it is Track B's_
+- [x] Re-run all drifted: per-workstream and fleet-wide (§4.1)
+- [x] Global concurrency limit with visible, cancellable queue; **preview is the contract** — drifted inputs re-ask instead of silently running (§4.1)
+
+_Landed as `apps/server/src/runs/{scopes,queue,drift}.ts` over migrations 13 and
+14, plus `routes/run-queue.ts`. Five things about it are load-bearing:_
+
+- **A scope resolves to an ordered list of commands and nothing else.** The
+  dependency relation is read off the graph (a command depends on another when one
+  of its context inputs is that command's output placeholder, or the object the
+  placeholder bound to) rather than declared anywhere, so there is no second notion
+  of "depends on" to disagree with the canvas. Ordering is Kahn's algorithm over the
+  scope with a deterministic tie-break; a leftover cycle is appended rather than
+  dropped, because silently losing a command from a scope the operator confirmed is
+  worse than an imperfect order.
+- **Drift is derived, never stored, and never acted on.** `deriveBoardDrift` builds
+  `@plotroom/core`'s `DriftGraph` from what each command's **newest** run consumed
+  (every historical run consumed something older, so counting them all would report
+  every command as permanently drifted) and asks `deriveDrift`. "Re-run all drifted"
+  reads the `attention` half, so acknowledged/snoozed/muted drift is not re-run
+  (§4.5), and a scope with nothing drifted is refused as `empty_scope` rather than
+  producing an empty batch.
+- **THE PREVIEW IS THE CONTRACT, as a hash.** Every queue entry records
+  `sha256(assembled-body-hash + configuration + the exact versions that went in)`.
+  At admission the preview is taken again and compared; a mismatch does not run —
+  the entry becomes `needs_reask` with a sentence naming which inputs moved, and
+  only `POST /api/run-queue/:id/confirm` (which replaces the contract with the
+  current one) queues it again. Body-hash alone would miss a model change; versions
+  alone would miss an edit producing identical bytes; both is the smallest honest
+  statement of "this is what you agreed to run".
+- **The queue is admission, and it has no timer.** It subscribes to the session
+  event stream and drains when a session ends — including a session that never went
+  through it, since an ordinary run under the limit holds a slot too. Draining is
+  serialized by a flag, because two overlapping drains would each see the same free
+  slot. Nothing the product decides can enqueue (principle 2), and a restart
+  re-queues anything left `starting` rather than starting it, so the contract is
+  re-checked rather than assumed.
+- **The limit bounds initiation, not one endpoint.** `POST /api/runs` goes through
+  the same admission: **201 `{run, session, status}`** when a slot was free
+  (unchanged, and what the W10 gate still gets under the shipped default of four),
+  **202 `{queued, run: null, session: null}`** when it was admitted and is waiting.
+  A caller reading `session.id` unconditionally fails loudly on a 202 rather than
+  proceeding with a session that does not exist yet. Migration 14 carries the
+  runtime the caller named on the entry, because running the same content on a
+  different runtime is a different run. **Track B's run affordance should render the
+  queued position for the 202 case** (cross-track follow-up).
+
+_A batch pauses on a failed or out-of-budget session and is resumable by a human
+gesture only; a user stop **aborts** the remainder and an aborted batch is refused a
+resume, because stopped means stopped. `GET /api/run-batches/:id` returns every
+entry including settled ones, because a paused batch's failed run is precisely what
+"address it and resume" is about._
+
+_Deferred, honestly: the scoped estimate aggregates the per-command ones and says so
+in its own sentence — a scope where only some commands have priced history has an
+incomplete range, and the range is `null` rather than zero when none of them do;
+`unblockWith` is always `missing` because that is the only unblocking scope §4.1
+names; and the spend cap is recorded per run in the scope and enforced by Phase 6,
+not here._
 
 ---
 
@@ -1303,7 +1443,7 @@ Recorded intentions only; pull one in deliberately, never by drift:
 
 ## Cross-cutting rules (apply to every phase)
 
-1. **§15 first.** Any schema touching runs, edges, versions, or outputs is reviewed against the four invariants before merge.
+1. **§15 first.** Any schema touching runs, edges, versions, or outputs is reviewed against the four invariants before merge — and, since Batch 3, asserted by `apps/server/src/invariants.integration.test.ts`, which runs in `pnpm test` and therefore in CI. It is named so a failure reads as what it is: an invariant breach, not a broken test. It drives the real API against the live store, because that is where an invariant can actually be violated — a unit test over a predicate cannot tell you the endpoint wrote the row. Six things: the four §15 invariants, plus reflexivity (principle 1) and never-silently-truncating (principle 12), whose failure mode is the same permanent damage.
 2. **One vocabulary.** No UI capability without the matching API/agent tool, and vice versa (principle 8). PRs adding a gesture add both or state why not.
 3. **Enforced, not documented.** Prohibitions (reflexivity, illegal edges, plugin intent, timed defaults) live in server-side checks with tests, never only in prompts or docs.
 4. **Never silently truncate, never auto-run, never infer relationships** (principles 2, 7, 12; §14) — treated as review checklist items.
@@ -1378,11 +1518,11 @@ Phase 0 and Epic 1.1 are complete; week 1 starts from the current state of
 
 **Weeks 11–14 — Steering (Phase 5)**
 
-| Track | Work                                                                                      |
-| ----- | ----------------------------------------------------------------------------------------- |
-| A     | Epic 5.5 scoped runs, concurrency queue, preview-is-the-contract                          |
-| B     | Epic 5.1 finished ahead of schedule (done at the W10 gate above); Epic 5.3 speech bubbles |
-| C     | Epic 5.2 injection/questions/broadcast; Epic 5.4 resume/fork/handoff                      |
+| Track | Work                                                                                                                                                                                                         |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A     | Epic 5.5 scoped runs, concurrency queue, preview-is-the-contract — _landed, with the Epic 4.4/4.5 server carry-overs (claims persistence + enforcement, delegation attribution) and the workspace diff read_ |
+| B     | Epic 5.1 finished ahead of schedule (done at the W10 gate above); Epic 5.3 speech bubbles                                                                                                                    |
+| C     | Epic 5.2 injection/questions/broadcast; Epic 5.4 resume/fork/handoff                                                                                                                                         |
 
 **🏁 Milestone (end W14):** the originating-problem demo — many sessions, inject mid-flight, answer a question from a bubble, stop at three scopes.
 
