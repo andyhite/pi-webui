@@ -37,6 +37,13 @@ export interface WriteObjectInput {
   readonly delta?: ContentDelta | null;
 }
 
+/** An edit names the object; only its content and title can change (§3.8). */
+export interface EditObjectInput {
+  readonly renderings: Renderings;
+  readonly title?: string;
+  readonly delta?: ContentDelta | null;
+}
+
 export interface WriteResult {
   readonly objectId: string;
   readonly versionId: string;
@@ -86,38 +93,7 @@ export class ObjectStore {
       .update(input.renderings.agentContent)
       .digest("hex");
 
-    if (existing) {
-      const latest = this.latestVersionRow(existing.id);
-
-      if (latest && latest.contentHash === contentHash) {
-        this.state.db
-          .update(objects)
-          .set({ title: input.title })
-          .where(eq(objects.id, existing.id))
-          .run();
-
-        return {
-          objectId: existing.id,
-          versionId: latest.id,
-          ordinal: latest.ordinal,
-          created: false,
-        };
-      }
-
-      const version = this.appendVersion(existing.id, input, latest);
-      this.state.db
-        .update(objects)
-        .set({ title: input.title, latestVersionId: version.id })
-        .where(eq(objects.id, existing.id))
-        .run();
-
-      return {
-        objectId: existing.id,
-        versionId: version.id,
-        ordinal: version.ordinal,
-        created: true,
-      };
-    }
+    if (existing) return this.appendTo(existing.id, input, contentHash);
 
     const objectId = newObjectId();
 
@@ -150,6 +126,31 @@ export class ObjectStore {
       ordinal: version.ordinal,
       created: true,
     };
+  }
+
+  /**
+   * Edit content that already exists (§3.8): "a note you cannot edit is not a
+   * note", and each edit is a new version, drifting consumers like any other
+   * change. Distinct from {@link write}, which reconciles on *external*
+   * identity — app-authored content has none, so editing it has to name the
+   * object rather than be matched to it.
+   */
+  edit(objectId: string, input: EditObjectInput): WriteResult {
+    const row = this.require(objectId);
+    const contentHash = createHash("sha256")
+      .update(input.renderings.agentContent)
+      .digest("hex");
+
+    return this.appendTo(
+      objectId,
+      {
+        kind: row.kind as ObjectKind,
+        title: input.title ?? row.title,
+        renderings: input.renderings,
+        ...(input.delta !== undefined ? { delta: input.delta } : {}),
+      },
+      contentHash,
+    );
   }
 
   /**
@@ -372,6 +373,49 @@ export class ObjectStore {
       .from(objects)
       .where(and(eq(objects.scope, "world"), isNull(objects.externalSystem)))
       .all();
+  }
+
+  /**
+   * Append a version to an object that exists. Content identical to the
+   * latest version writes no version — a re-read that changed nothing is not
+   * a change, and recording it as one would drift every consumer for free.
+   */
+  private appendTo(
+    objectId: string,
+    input: WriteObjectInput,
+    contentHash: string,
+  ): WriteResult {
+    const latest = this.latestVersionRow(objectId);
+
+    if (latest && latest.contentHash === contentHash) {
+      this.state.db
+        .update(objects)
+        .set({ title: input.title })
+        .where(eq(objects.id, objectId))
+        .run();
+
+      return {
+        objectId,
+        versionId: latest.id,
+        ordinal: latest.ordinal,
+        created: false,
+      };
+    }
+
+    const version = this.appendVersion(objectId, input, latest);
+
+    this.state.db
+      .update(objects)
+      .set({ title: input.title, latestVersionId: version.id })
+      .where(eq(objects.id, objectId))
+      .run();
+
+    return {
+      objectId,
+      versionId: version.id,
+      ordinal: version.ordinal,
+      created: true,
+    };
   }
 
   private require(objectId: string): ObjectRow {

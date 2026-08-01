@@ -24,12 +24,13 @@ import type {
   CommandNode,
   CommandOutput,
 } from "./commands.js";
-import type { Edge } from "./edges.js";
+import type { Edge, PlacedNode } from "./edges.js";
 import type {
   CommandDefinitionId,
   CommandId,
   EdgeId,
   EventId,
+  NodeId,
   ObjectId,
   OutputId,
   RunId,
@@ -46,6 +47,7 @@ import type { Workstream } from "./workstreams.js";
 export const EVENT_ENTITIES = [
   "object",
   "version",
+  "node",
   "edge",
   "workstream",
   "command_definition",
@@ -95,6 +97,16 @@ export type DomainEventBody =
       readonly entity: "version";
       readonly verb: "created";
       readonly version: ObjectVersion;
+    }
+  | {
+      readonly entity: "node";
+      readonly verb: "created" | "updated";
+      readonly node: PlacedNode;
+    }
+  | {
+      readonly entity: "node";
+      readonly verb: "deleted";
+      readonly nodeId: NodeId;
     }
   | { readonly entity: "edge"; readonly verb: "created"; readonly edge: Edge }
   | {

@@ -1,4 +1,4 @@
-import type { EdgeId, NodeId } from "./ids.js";
+import type { EdgeId, NodeId, WorkstreamId } from "./ids.js";
 import type { Author } from "./author.js";
 
 /**
@@ -14,6 +14,22 @@ export interface GraphNode {
   readonly role: NodeRole;
   /** Sessions only: a running session accepts injection, a finished one does not. */
   readonly running?: boolean;
+}
+
+/**
+ * A node as it exists on the board, rather than the minimum
+ * {@link checkConnection} needs to judge one: what it stands for, where it
+ * lives, and whether it has been removed (§3.7, principle 10). Placing and
+ * removing are gestures like any other, so this is what the state-change
+ * stream carries when one happens.
+ */
+export interface PlacedNode extends GraphNode {
+  /** The object, command, or session this node stands for. */
+  readonly refId: string;
+  readonly workstreamId: WorkstreamId | null;
+  readonly createdAt: number;
+  /** Soft delete: authored state is recoverable (principle 10). */
+  readonly deletedAt: number | null;
 }
 
 /**

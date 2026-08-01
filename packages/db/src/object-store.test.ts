@@ -295,3 +295,48 @@ describe("deletion is recoverable (principle 10)", () => {
     expect(() => store.delete("obj_nope")).toThrow(/unknown object/);
   });
 });
+
+describe("editing app-authored content (spec §3.8)", () => {
+  it("makes each edit a new version of the same object", () => {
+    const note = store.write({
+      kind: "note",
+      title: "thought",
+      renderings: ticket("first draft"),
+    });
+
+    const edited = store.edit(note.objectId, {
+      renderings: ticket("second draft"),
+      title: "sharper thought",
+    });
+
+    expect(edited.objectId).toBe(note.objectId);
+    expect(edited.created).toBe(true);
+    expect(edited.ordinal).toBe(2);
+    expect(store.versions(note.objectId)).toHaveLength(2);
+    expect(store.get(note.objectId)?.title).toBe("sharper thought");
+    expect(store.read(note.objectId).renderings.agentContent).toBe(
+      "second draft",
+    );
+  });
+
+  it("writes no version when the content did not change", () => {
+    const note = store.write({
+      kind: "note",
+      title: "thought",
+      renderings: ticket("unchanged"),
+    });
+
+    const edited = store.edit(note.objectId, {
+      renderings: ticket("unchanged"),
+    });
+
+    expect(edited.created).toBe(false);
+    expect(store.versions(note.objectId)).toHaveLength(1);
+  });
+
+  it("refuses to edit an object that does not exist", () => {
+    expect(() => store.edit("obj_nope", { renderings: ticket("x") })).toThrow(
+      /unknown object/,
+    );
+  });
+});
