@@ -865,6 +865,24 @@ proven completion shows on both the session (`end: completed`) and the
 command node's own label (`run: completed`) once the second attempt's
 tool call actually satisfies the condition._
 
+_**Batch 3 (Weeks 11–14) finish**, alongside Epic 5.3: bounded rendering
+(`sessions/windowing.ts`) caps the Conversation panel to a live tail window
+of turns — "load earlier turns" grows it one step at a time — so a
+long-running session's DOM stays bounded the way its transcript bytes
+already do (§6.1's release rule). The human half of the transcript
+checkpoint gesture (§3.6) is wired live: `ConversationPanel`'s
+"checkpoint transcript" button calls `checkpointTranscript`
+(`data-source/actions.ts`) over `POST /api/sessions/:id/checkpoint`, which
+turned out to already be live on `main` (Track A/C shipped it ahead of this
+rebase) — the agent-side half (a session checkpointing its own transcript
+through the tool catalog) is still Epic 5.2/Track C territory. `DiffPanel`
+moved behind a `DiffDataSource` seam (`diff/data-source.ts`) the same
+"fixture behind the real interface" shape as `SessionDataSource`; no
+workspace/diff server endpoint had landed on `main` as of this rebase, so
+`createFixtureDiffDataSource` is still the only implementation — the seam's
+own doc comment states the exact swap point for `GET
+/api/workstreams/:id/diff`._
+
 ### Epic 5.2 — Injection, questions, broadcast (`sessions`)
 
 - [ ] Injection as new turn + permanent graph content wired to the session (§6.5, principle 5); queued → delivered states for between-turn delivery
@@ -875,10 +893,39 @@ tool call actually satisfies the condition._
 - [ ] Session broadcast: scope-of-material-state only, mandatory declared category, rate-bounded per window, induced spend charged to sender's budget chain, operator-visible (§6.5)
 - [ ] Batch gestures: one prompt to many, stop/close/archive on a multi-selection; preset prompts (§4.2)
 
-### Epic 5.3 — Speech bubbles on canvas (`canvas`)
+### Epic 5.3 — Speech bubbles on canvas (`canvas`) — _mechanics landed Batch 3 (Weeks 11–14), fixture-fed where noted below_
 
-- [ ] Attributed bubbles per sender node; tool-in-flight chips (§5)
-- [ ] Constraints: never obscure minimap/controls, width-capped, collapse to counts unfocused, global cap on simultaneous bubbles (§5)
+- [x] Attributed bubbles per sender node; tool-in-flight chips (§5)
+- [x] Constraints: never obscure minimap/controls, width-capped, collapse to counts unfocused, global cap on simultaneous bubbles (§5)
+
+_Landed per the design gate (fleet rule 5): unstyled DOM, mechanics only.
+`bubbles/placement.ts` is the pure placement engine — attaches every bubble
+to its sender node's current extent, caps width to exactly that node's
+width, collapses every source on an unfocused node (focus defined here as
+selection or hover, documented at the one call site that decides it,
+`PlotCanvas`) to a count badge, and enforces a global cap (default six,
+`bubbleCap` prop) with deterministic priority — attention-wanting first,
+then recency, then id — folding anything past the cap into its node's
+collapsed badge. "Never obscure the minimap" is enforced, not flagged: a
+candidate rect that would overlap a `ReservedRegion` (the unstyled
+`<MiniMap>`'s own default footprint today; `<Controls>` is not yet rendered
+in this codebase) is tried at its opposite anchor, and collapses rather
+than draws if neither anchor is clear. `bubbles/derive-sources.ts` feeds
+real streams into that engine: a command's dispatched prompt from the live
+`GraphSnapshot.warningFacts` assembled-content already flowing to the
+canvas, and a session's latest saying / a distinct tool-in-flight chip from
+the live `SessionDataSource` (`subscribeTranscript`/`subscribeSession`,
+wired per session-role node in `apps/web/src/App.tsx`). Two sources stay
+fixture-fed, both for the same reason — no stream in the codebase carries
+them yet: structured questions (§6.4, `bubbles/question-source.ts`'s
+`QuestionDataSource`, answerable inline via `onAnswerQuestion` — no server
+endpoint exists, and `SessionStatus` exposes only the derived
+`waiting-input` phase, never the `RuntimeRequest` behind it) and injection
+queued/delivered states (§6.5, `bubbles/derive-sources.ts`'s
+`deriveInjectionBubbleSources` over core's real `InjectionLedger` shape,
+fed by a fixture ledger since Epic 5.2's injection endpoint has not landed).
+Both are ready to be joined by a live source without changing shape — the
+same swap `createApiSessionDataSource` already did for its own fixture._
 
 ### Epic 5.4 — Resume, fork, handoff (`sessions`)
 
