@@ -83,6 +83,50 @@ export interface ConversationPanelProps {
   readonly onFork?: (sessionId: SessionId, turn: number) => void;
   /** Injectable so copy is testable without a real clipboard. */
   readonly copyToClipboard?: (text: string) => void;
+  /**
+   * Handoff (§6.3, Batch 3 carry-over): the source session drafts, the
+   * operator reviews (editing or not) and only then sends. `briefs` is
+   * this session's own drafted/reviewed briefs (`GET /sessions/:id/
+   * handoff-briefs`) — rendered here, beside resume/fork, because a
+   * handoff is the third thing to do with an ended session's history.
+   */
+  readonly onRequestHandoffBrief?: (sessionId: SessionId) => void;
+  readonly handoffBriefs?: readonly HandoffBriefView[];
+  readonly onReviewHandoffBrief?: (briefId: string, text?: string) => void;
+  readonly onSendHandoff?: (briefId: string, workstreamId: string) => void;
+  /**
+   * Continue-vs-fresh (§4.3, Batch 3 carry-over): both options' costs and
+   * gates, side by side, for re-running this ended session's command.
+   * `null` while loading or when the session names no command; the host
+   * fetches it (`GraphActions.getContinuation`) keyed on `detail.session.
+   * commandId` once the session has ended.
+   */
+  readonly continuation?: ContinueVsFreshView | null;
+}
+
+/** The shape this panel needs from a `HandoffBrief` — loosened so a fixture/test does not need every core field. */
+export interface HandoffBriefView {
+  readonly id: string;
+  readonly text: string;
+  readonly origin: "session-written" | "derived";
+  readonly state: "drafted" | "reviewed";
+}
+
+/** The shape this panel needs from `ContinueVsFresh` — loosened the same way. */
+export interface ContinueVsFreshView {
+  readonly continue: {
+    readonly available: boolean;
+    readonly description: string;
+    readonly cost: { readonly description: string };
+    readonly blocks: readonly { readonly message: string }[];
+  };
+  readonly fresh: {
+    readonly available: boolean;
+    readonly description: string;
+    readonly cost: { readonly description: string };
+  };
+  readonly recommended: "continue" | "fresh";
+  readonly forcedFresh: boolean;
 }
 
 function defaultCopyToClipboard(text: string): void {
@@ -116,6 +160,11 @@ export function ConversationPanel({
   onResume,
   onFork,
   copyToClipboard = defaultCopyToClipboard,
+  onRequestHandoffBrief,
+  handoffBriefs = [],
+  onReviewHandoffBrief,
+  onSendHandoff,
+  continuation = null,
 }: ConversationPanelProps) {
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   // Bounded rendering (§6.1 mechanics): a live tail window, not the whole
@@ -149,6 +198,15 @@ export function ConversationPanel({
   // edits it, so the default tracks the transcript's own last turn instead
   // of freezing at whatever it was when the panel first rendered.
   const [forkTurn, setForkTurn] = useState<number | null>(null);
+  // Handoff (§6.3, Batch 3 carry-over): edits pending review, and the
+  // target workstream typed for a send — both keyed by brief id so several
+  // drafted/reviewed briefs coexist without clobbering each other's inputs.
+  const [handoffReviewEdits, setHandoffReviewEdits] = useState<
+    Record<string, string>
+  >({});
+  const [handoffTargets, setHandoffTargets] = useState<Record<string, string>>(
+    {},
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -420,6 +478,106 @@ export function ConversationPanel({
             >
               fork
             </button>
+
+            {/* Continue-vs-fresh (§4.3, Batch 3 carry-over): both options'
+                costs and gates, side by side, for re-running this ended
+                session's command — the host fetches it once it knows the
+                command id. */}
+            {continuation ? (
+              <div data-testid="continue-vs-fresh">
+                <div>
+                  continue: {continuation.continue.description} —{" "}
+                  {continuation.continue.cost.description}
+                  {continuation.continue.available
+                    ? ""
+                    : ` (unavailable: ${continuation.continue.blocks.map((b) => b.message).join("; ")})`}
+                </div>
+                <div>
+                  fresh: {continuation.fresh.description} —{" "}
+                  {continuation.fresh.cost.description}
+                </div>
+                <div>
+                  recommended: {continuation.recommended}
+                  {continuation.forcedFresh
+                    ? " (forced — continuation is blocked)"
+                    : ""}
+                </div>
+              </div>
+            ) : null}
+
+            {/* Handoff (§6.3, Batch 3 carry-over): draft → review → send,
+                as three separate gestures, none of them implicit. */}
+            <div data-testid="handoff">
+              <button
+                type="button"
+                onClick={() => onRequestHandoffBrief?.(sessionId)}
+                disabled={!onRequestHandoffBrief}
+              >
+                request handoff brief
+              </button>
+              <ul>
+                {handoffBriefs.map((brief) => (
+                  <li key={brief.id} data-testid={`handoff-brief-${brief.id}`}>
+                    <div>
+                      {brief.origin} · {brief.state}
+                    </div>
+                    {brief.state === "drafted" ? (
+                      <>
+                        <textarea
+                          value={handoffReviewEdits[brief.id] ?? brief.text}
+                          onChange={(event) =>
+                            setHandoffReviewEdits((current) => ({
+                              ...current,
+                              [brief.id]: event.target.value,
+                            }))
+                          }
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onReviewHandoffBrief?.(
+                              brief.id,
+                              handoffReviewEdits[brief.id],
+                            )
+                          }
+                          disabled={!onReviewHandoffBrief}
+                        >
+                          review
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <label>
+                          send to workstream
+                          <input
+                            type="text"
+                            value={handoffTargets[brief.id] ?? ""}
+                            onChange={(event) =>
+                              setHandoffTargets((current) => ({
+                                ...current,
+                                [brief.id]: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const workstreamId = handoffTargets[brief.id];
+                            if (workstreamId) {
+                              onSendHandoff?.(brief.id, workstreamId);
+                            }
+                          }}
+                          disabled={!onSendHandoff || !handoffTargets[brief.id]}
+                        >
+                          send
+                        </button>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         ) : (
           <>
