@@ -154,6 +154,29 @@ than conventions, so no call site can get them wrong:
   `run_inputs.version_id` is a real foreign key, so a version a run consumed
   cannot be deleted while the run exists (§15-3's interplay).
 
+**Sessions, observations, and workspaces** land in migration 7:
+`sessions` / `session_observations` / `session_transcript_publications` /
+`session_injections`, plus `run_submissions`, `run_initiations`, and
+`workspaces`. Four things about them are load-bearing:
+
+- the **observation log is the record** — PlotRoom's own `RuntimeObservation`
+  values, never vendor payloads (decision 0001) — and the `phase_json` and
+  accounting columns are a snapshot folded from it by `@plotroom/core`'s
+  reducer, recomputable at any time (`SessionStore.observationState`);
+- the end-state taxonomy is a CHECK, so `out-of-budget` and `interrupted` are
+  representable and distinct from `failed`, and `SessionStore.end` keeps the
+  **first** outcome (a doubled observation cannot rewrite one);
+- `run_initiations` holds a **client-supplied initiation key**, which is what
+  makes one gesture one run and one session across retries (principle 9); a
+  refused attempt releases the key;
+- `sessions.run_id` is `ON DELETE SET NULL`: run retention (§4.4) may reclaim a
+  run, and a session record is readable _always_ (§3.6), so the link goes and
+  the record stays.
+
+The transcript is content, not a table: it is projected from the log
+(`session-transcript.ts`) and versioned through `ObjectStore` when the
+checkpoint rule says to (`publishesVersion` — a turn never publishes).
+
 There is deliberately **no `latest` column anywhere**: `RunStore.resolve`
 orders by `runs.ordinal`, so `output@n` is the general address and `latest` is
 one query over it (§15-4). Publish (`command_outputs.published_at`, pre-run,
@@ -314,9 +337,9 @@ CONTRIBUTING.md        How to contribute (workflow detail)
 
 Record answers here as they are decided; do not assume.
 
-- Remaining graph schema: sessions (Epic 1.5). Workstreams, nodes, edges,
-  commands, and runs are landed — see "Persistence notes".
-- Collection membership model (the `collection` kind has no members yet)
+- Collection membership model (the `collection` kind has no members yet) — the
+  only schema gap left in Phase 1's model: workstreams, nodes, edges, commands,
+  runs, sessions, and workspaces are landed (see "Persistence notes").
 - Plugin distribution and permission-grant UX
 - Styling approach for the UI package
 - Versioning and release process
@@ -325,3 +348,5 @@ Decided (recorded as they were made):
 
 - **Electron packaging/updater tooling: electron-builder** (with electron-updater). Decided W6–7 under the operator's standing autonomous-judgment directive; applied in Epic 8.4. Rationale: mature updater story and config-driven multi-platform targets fit Epic 8.4's "installers per platform + updater" scope with the least assembly.
 - Retention policy defaults: last 20 runs per definition, 30-day version window (Epic 1.4, recorded in the development plan's Epic 1.4 note).
+- **A second, scripted session runtime ships beside the pi adapter** (Epic 4.1/4.2). It replays a declared script of observations and is registered only when the operator selects it (`PLOTROOM_RUNTIME=scripted`), so a default installation has no such adapter to name. It exists because the run spine — observation log, phase reducer, accounting, WS events, completion loop — must be provable without a model, and it exercises that exact path rather than a parallel one. The Playwright milestone gate scripts it (`apps/server/src/runtime/scripted.ts` documents the format).
+- **A submission is a tool call** (`plotroom_submit_outcome`), not a private channel: the scripted runtime emits it, Epic 4.5's agent tool surface exposes the same name, and PlotRoom answers by checking the declared world conditions itself — so completion is proven identically however it was asked for.

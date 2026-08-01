@@ -440,21 +440,82 @@ the predicate's own reason and never reaches the live graph. Canvas state
 ### Epic 4.1 — Session runtime abstraction (`sessions`)
 
 - [x] **Decide and record** the runtime boundary (open decision in AGENTS.md): the interface PlotRoom owns — start, stream, inject-between-turns, stop, fork-from-point, accounting taps — vs what a runtime adapter supplies — _accepted at Sync 1: pi coding agent first, Claude Agent SDK second (docs/decisions/0001)_
-- [ ] First runtime adapter (one concrete agent runtime end-to-end)
-- [ ] Phase derivation from observation: thinking, responding, tool-running, compacting, waiting-* , stopped, failed, idle (§3.6; principle 7 — derived, never agent-reported)
-- [ ] Per-session accounting: turns, elapsed, tokens, cost, last-activity, context-window meter with thresholds (§3.6)
-- [ ] Session records: live = stored; readable, resumable, forkable, deletable, always (§3.6)
+- [x] First runtime adapter (one concrete agent runtime end-to-end) — _two adapters are wired behind one registry; see the landed note for what is proven end to end and what is not_
+- [x] Phase derivation from observation: thinking, responding, tool-running, compacting, waiting-\* , stopped, failed, idle (§3.6; principle 7 — derived, never agent-reported)
+- [x] Per-session accounting: turns, elapsed, tokens, cost, last-activity, context-window meter with thresholds (§3.6)
+- [ ] Session records: live = stored; readable, resumable, forkable, deletable, always (§3.6) — _stored and readable now (records, observation log, transcript, accounting, end states, all over `/api`); resume, fork, and delete have no endpoint yet (Epic 5.4 owns resume/fork; the delete verb waits with §6.6 approvals)_
 
 ### Epic 4.2 — Context assembly and the run (`runs`)
 
-- [ ] Assembly: ordered edges → assembled content, with content-budget warnings; hard cap opt-in per command; never silent truncation (§3.5, principle 12)
+- [x] Assembly: ordered edges → assembled content, with content-budget warnings; hard cap opt-in per command; never silent truncation (§3.5, principle 12)
 - [ ] Run preview: exactly what will execute + cost estimate + spend cap acceptance, before anything starts (§4.1)
 - [ ] Cost estimates state their basis and render as ranges — "based on N prior runs" / "no history; input size only" — never a bare number (§4.1)
-- [ ] Completion proof is point-in-time: proven at submission, never silently revoked; later condition regression surfaces as drift/attention on done work (§3.5, principle 3)
-- [ ] Run-one; producing-session completion loop: submission checked against world conditions, failing condition returned as feedback, session continues within budget (§3.5, principle 3)
-- [ ] Open sessions: end by user; feed downstream via promote or transcript wiring (§3.5)
-- [ ] Idempotent initiation: one gesture → one session/run, across retries and reconnects (principle 9)
-- [ ] Run history capture at run time (exercises §15-1/§15-4 written in Phase 1)
+- [x] Completion proof is point-in-time: proven at submission, never silently revoked; later condition regression surfaces as drift/attention on done work (§3.5, principle 3) — _proof is written once at submission and nothing re-evaluates it; the drift/attention half of the sentence is Phase 6's feed_
+- [x] Run-one; producing-session completion loop: submission checked against world conditions, failing condition returned as feedback, session continues within budget (§3.5, principle 3)
+- [x] Open sessions: end by user; feed downstream via promote or transcript wiring (§3.5) — _end-by-user is a verb and refuses on a producing session; the transcript is a versioned object, so wiring it downstream is the ordinary context gesture, and the panel that offers it is Epic 5.1's_
+- [x] Idempotent initiation: one gesture → one session/run, across retries and reconnects (principle 9)
+- [x] Run history capture at run time (exercises §15-1/§15-4 written in Phase 1)
+
+_Landed (Batch 2, stage 1 — the run spine). Migration 7 persists what Epic 1.5
+and Epic 4.3 deliberately left as domain shapes: `sessions` (launch choices,
+the closed end-state taxonomy as a CHECK, accounting snapshot columns),
+`session_observations` — **PlotRoom's own observation records, never vendor
+payloads** — `session_transcript_publications` (the checkpoint rule's output,
+over `ObjectStore`, so a transcript is content like anything else),
+`session_injections` (the queued→delivered ledger, with the product's own
+world-condition feedback distinguished from authored steering),
+`run_submissions`, `run_initiations`, and `workspaces`. `sessions.run_id` is
+`ON DELETE SET NULL` on purpose: run retention may reclaim a run, and a session
+record is readable always (§3.6).
+
+Phases and accounting are **folded from the log** by `@plotroom/core`'s reducer
+and snapshotted on the row, so the row is a cache and the log is the record;
+`SessionStore.observationState` recomputes either at any time. Two adapters sit
+behind one registry over core's seam: the **pi coding agent** (the server owns
+the process, writes the permission-gate extension, and hands core the
+transport, since core owns no transport) and a **scripted runtime** that replays
+a declared script of observations and is registered only when the operator
+selects it (`PLOTROOM_RUNTIME=scripted`), so a default installation has no such
+adapter to name — asserted by a test. Both run the same downstream code:
+observation log → phase reducer → accounting → WS events → completion loop.
+
+`POST /api/runs` is the §4.1 gesture: claim the client-supplied initiation key
+(a retry gets the same run and session; a key reused for another command is
+refused; a refused attempt frees the key), provision the workspace **at first
+run** through Epic 4.3's git kind, gate on `checkReady` so not-ready blocks with
+the setup step's own reason, assemble ordered context whole (warn near the
+window, refuse over an opt-in hard cap, never truncate), record §15-1, then
+start the session under the workstream, place its node, and record
+`command_started_session` provenance. Completion is **proven, never claimed**: a
+submission (the `plotroom_submit_outcome` tool a real runtime will call in Epic
+4.5) is checked by a condition-check registry — `workspace_file_exists` and
+`workspace_command_succeeds` ship, plugins register more (§10.1) — a failing
+condition is injected back as feedback and the session continues, and a runtime
+that reports "completed" for work PlotRoom never proved is recorded as a failure
+that says so. Every end state is plumbed and distinct: completed(proven),
+ended-by-user, stopped, out-of-budget (the enforcer's `cause: "budget"` on the
+stop verb — enforcement itself is Phase 6), failed, and **interrupted**, which
+is written for every in-flight session at process start (principle 11).
+
+The event vocabulary grew two entities — `session_observation` (one appended
+record, stamped per session) and `session_transcript` (a published version) —
+and a `session` event now carries its derived status beside the record.
+
+Deferred, honestly: **run preview and cost estimates** (stage 2) — nothing
+renders what will execute before it does, so the §4.1 preview contract is not
+kept yet; **Epic 2.3** durability/compaction is untouched; a session has no
+`resume`/`fork`/`delete` endpoint; injection as a human gesture is Epic 5.2
+(the ledger exists and only the completion loop writes to it); `runs.status`
+has no `interrupted` member, so an interrupted run is recorded as `stopped`
+with the reason attached and the session carries the distinction (widening the
+CHECK needs a table rebuild, which belongs with Epic 2.3's schema work); a
+session's cost basis is `runtime-reported` or nothing, because there is no
+pricing table until Epic 6.2; the workspace repository is configured
+(`PLOTROOM_WORKSPACE_REPO`) rather than discovered, and the in-repository setup
+declaration still has no reader, so the settings override is the only source;
+and no test runs a real pi session through the server — pi's adapter is unit
+tested in `core` and its permission gate is spike-verified against pi 0.83.0,
+but the end-to-end spine proof is the scripted runtime._
 
 ### Epic 4.3 — Workspaces (`workspaces`) — _done (domain + git kind)_
 
@@ -488,9 +549,11 @@ a clone the host cannot authenticate ends as `host_auth` with git's own reason
 and no second attempt. `git.integration.test.ts` runs the real binary against
 temp repositories — no network — and asserts what lands on disk.
 
-Deferred, honestly: nothing is persisted (the workspace record is the state
-shape Track A's Phase-2 schema will store); the run path does not call
-`provision()` yet — that wiring lands with Epic 4.2; `commits-added` forces
+Persistence and the provisioning call landed with Epic 4.2's run spine:
+migration 7's `workspaces` table stores this record shape verbatim, and
+`POST /api/runs` provisions at first run and gates on `checkReady`.
+
+Deferred, honestly: `commits-added` forces
 fresh conservatively because attributing a commit to a holder needs Epic 4.4's
 claims, which is also what will narrow hand-edit divergence from "reported" to
 "per path a session read"; setup declarations are resolved from values handed
