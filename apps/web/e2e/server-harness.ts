@@ -222,7 +222,29 @@ function killAndWait(child: ChildProcess): Promise<void> {
   });
 }
 
-export async function startMilestoneServer(): Promise<MilestoneServer> {
+export interface StartServerOptions {
+  /**
+   * The server-wide default script a run falls back to when it names no
+   * `runtime.script` of its own (`POST /api/runs`'s own per-run override,
+   * which every gate that needs several distinctly-behaved sessions at
+   * once uses instead of relying on this default). Defaults to
+   * `MILESTONE_SCRIPT`, unchanged from every existing call site.
+   */
+  readonly defaultScript?: unknown;
+  /**
+   * `PLOTROOM_CONCURRENCY_LIMIT` (default 4, `apps/server/src/config.ts`).
+   * A gate that starts more concurrent sessions than the default limit
+   * raises this so every one of them starts immediately rather than a
+   * later one landing in the queue (§4.1) — a gate proving steering
+   * mechanics is not the place to also prove queue admission, which has
+   * its own server-side coverage already.
+   */
+  readonly concurrencyLimit?: number;
+}
+
+export async function startMilestoneServer(
+  options: StartServerOptions = {},
+): Promise<MilestoneServer> {
   const scratch: string[] = [];
   let child: ChildProcess | undefined;
 
@@ -242,7 +264,11 @@ export async function startMilestoneServer(): Promise<MilestoneServer> {
     mkdirSync(workspaceDir, { recursive: true });
 
     const scriptPath = join(stateDir, "milestone-script.json");
-    writeFileSync(scriptPath, JSON.stringify(MILESTONE_SCRIPT), "utf8");
+    writeFileSync(
+      scriptPath,
+      JSON.stringify(options.defaultScript ?? MILESTONE_SCRIPT),
+      "utf8",
+    );
 
     const port = await ephemeralPort();
 
@@ -258,6 +284,11 @@ export async function startMilestoneServer(): Promise<MilestoneServer> {
         PLOTROOM_RUNTIME_SCRIPT: scriptPath,
         PLOTROOM_WORKSPACE_REPO: repositoryPath,
         PLOTROOM_WORKSPACE_DIR: workspaceDir,
+        ...(options.concurrencyLimit === undefined
+          ? {}
+          : {
+              PLOTROOM_CONCURRENCY_LIMIT: String(options.concurrencyLimit),
+            }),
       },
     });
 
@@ -292,6 +323,24 @@ export async function apiPost<T>(
     method: "POST",
     headers: { "content-type": "application/json", origin: baseUrl },
     body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `${path} failed: ${response.status} ${await response.text()}`,
+    );
+  }
+  return (await response.json()) as T;
+}
+
+/**
+ * A same-origin, loopback-trusted GET — for asserting real server state
+ * (e.g. a session's recorded end reason) directly, rather than only through
+ * whatever the UI happens to render, the same "seed via the API, prove via
+ * the API" split `apiPost` already gives seeding.
+ */
+export async function apiGet<T>(baseUrl: string, path: string): Promise<T> {
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers: { origin: baseUrl },
   });
   if (!response.ok) {
     throw new Error(
