@@ -110,7 +110,12 @@ export function approvalRoutes(approvals: ApprovalService): Hono<ApiEnv> {
     });
   });
 
-  /** Every standing decision, withdrawn ones included (§6.6). */
+  /**
+   * Every standing decision, withdrawn ones included (§6.6). The operator's own
+   * list: which capabilities have been granted in advance is a statement about
+   * what sessions may do, and a session reading it would only learn which shapes
+   * of call to try.
+   */
   app.get("/pre-grants", (c) => c.json({ preGrants: approvals.preGrants() }));
 
   /**

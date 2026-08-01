@@ -4,10 +4,11 @@ import {
   ATTENTION_STATES,
   attentionItems,
   type AttentionState,
+  type Author,
 } from "@plotroom/core";
 import { randomUUID } from "node:crypto";
 import type { AttentionService } from "../attention/service.js";
-import { badRequest } from "../http/errors.js";
+import { badRequest, forbidden } from "../http/errors.js";
 import { validateJsonBody } from "../http/validate.js";
 import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
 
@@ -122,6 +123,20 @@ function nodeIdOf(stores: ApiStores, sessionId: string | null): string | null {
   return stores.graph.findNodeFor("session", sessionId)?.id ?? null;
 }
 
+/**
+ * The operator's own gestures, enforced by the actor rather than by the
+ * catalog's flag alone — the same way the claim verbs are: a flag describes, and
+ * this is the gate. Triaging the queue and configuring where notifications go
+ * are decisions about what the human sees and where, and a session making one
+ * would be deciding that for them.
+ */
+function operatorOnly(actor: Author, gesture: string): void {
+  if (actor.kind === "human") return;
+  throw forbidden(
+    `${gesture} is the operator's own gesture; a session doing it would be deciding what the human sees (§7, principle 1)`,
+  );
+}
+
 export function attentionRoutes(
   stores: ApiStores,
   attention: AttentionService,
@@ -146,6 +161,9 @@ export function attentionRoutes(
 
   for (const verb of ["acknowledge", "snooze", "mute"] as const) {
     app.post(`/attention/:id/${verb}`, validateJsonBody(triageBody), (c) => {
+      const actor = actorOf(c);
+      operatorOnly(actor, `${verb} on an attention item`);
+
       const input = body<z.infer<typeof triageBody>>(c);
       if (verb !== "snooze" && input.snoozedUntil !== undefined) {
         throw badRequest(
@@ -157,7 +175,7 @@ export function attentionRoutes(
         attention.triage({
           itemId: param(c, "id"),
           verb,
-          by: actorOf(c),
+          by: actor,
           ...(input.snoozedUntil === undefined
             ? {}
             : { snoozedUntil: input.snoozedUntil }),
@@ -168,6 +186,7 @@ export function attentionRoutes(
 
   /** Undo a triage decision (§4.5): a mute you regret is recoverable. */
   app.delete("/attention/:id/triage", (c) => {
+    operatorOnly(actorOf(c), "undoing a triage decision");
     attention.clearTriage(param(c, "id"), actorOf(c));
     return c.json({ itemId: param(c, "id"), triage: null });
   });
@@ -215,6 +234,7 @@ export function attentionRoutes(
   );
 
   app.post("/notification-routes", validateJsonBody(routeBody), (c) => {
+    operatorOnly(actorOf(c), "adding a notification route");
     const input = body<z.infer<typeof routeBody>>(c);
     const route = stores.attention.createRoute({
       id: `nroute_${randomUUID()}`,
@@ -238,6 +258,7 @@ export function attentionRoutes(
     "/notification-routes/:id",
     validateJsonBody(routePatchBody),
     (c) => {
+      operatorOnly(actorOf(c), "changing a notification route");
       const input = body<z.infer<typeof routePatchBody>>(c);
       const route = stores.attention.updateRoute(param(c, "id"), {
         ...(input.name === undefined ? {} : { name: input.name }),
@@ -260,6 +281,7 @@ export function attentionRoutes(
   );
 
   app.delete("/notification-routes/:id", (c) => {
+    operatorOnly(actorOf(c), "removing a notification route");
     const routeId = param(c, "id");
     stores.attention.deleteRoute(routeId);
     stores.bus.publish({

@@ -399,7 +399,7 @@ export class AttentionService {
   private healthSources(now: number): AttentionSources["health"] {
     return deriveHealthAlerts({
       now,
-      sessions: this.sessionObservations(now),
+      sessions: this.sessionObservations(),
       pendingAsks: this.pendingAsks(),
       claimWaits: this.claimWaits(now),
       workstreams: this.workstreamActivity(),
@@ -407,9 +407,7 @@ export class AttentionService {
     });
   }
 
-  private sessionObservations(
-    now: number,
-  ): readonly HealthSessionObservation[] {
+  private sessionObservations(): readonly HealthSessionObservation[] {
     const stores = this.deps.stores;
     const observations: HealthSessionObservation[] = [];
 
