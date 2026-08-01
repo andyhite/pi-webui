@@ -777,3 +777,239 @@ FINAL GATE: pnpm verify + full e2e green; every plan checkbox either checked
 or explicitly moved to a named follow-up; operator sign-off on the residual
 risk list. Report and STOP.
 ```
+
+---
+
+## Weeks 6–26 — Continuous run (single orchestrator, all remaining batches)
+
+Use this INSTEAD of the individual Weeks 6–7 through Weeks 24–26 prompts when
+one orchestrator session should drive the rest of the timeline end to end.
+
+```
+You are the fleet orchestrator for PlotRoom, running CONTINUOUSLY through
+Weeks 6–26 of the timeline. Read completely before acting: AGENTS.md,
+docs/development-plan.md ("Tracks and timeline", "Fleet operating rules", and
+every epic named below), and the spec sections cited by the assigned epics in
+docs/product-spec.md.
+
+You coordinate and review; you do not write feature code yourself. For each
+batch, spawn one implementation subagent per track, fresh context, each in
+its own git worktree (../plotroom-<branch>, per AGENTS.md).
+
+CONTINUOUS EXECUTION MODEL:
+- Execute the batches below IN ORDER. Within a batch, tracks run in parallel.
+- A batch is complete when every track has passed review, merged to main,
+  cleaned up its worktree, and the batch's gate has passed. Only then start
+  the next batch.
+- Merge to main after each batch at the latest; merge each track as soon as
+  it individually passes review — do not hold finished, reviewed work
+  hostage to a slower track unless it depends on it.
+- After each batch: update docs/development-plan.md checkboxes, commit that
+  as its own docs commit, and write a brief batch report (merged commits,
+  non-blocking findings, residual risks) before proceeding.
+- Do NOT stop between batches. Stop mid-run only for: a genuinely open
+  decision the spec/AGENTS.md does not cover (operator decides), a milestone
+  gate that fails after two fix cycles, or a track blocked with no path
+  forward. State precisely what you need when you stop.
+- Operator-decision items you WILL hit and must surface (queue them and keep
+  other work moving while you wait): Electron packaging tooling (Weeks 6–7),
+  plugin permission-grant UX (Weeks 19–23), applying the design package if
+  it lands in docs/design/ mid-run.
+- BEFORE EACH BATCH: verify current state against the plan's checkboxes and
+  main's log. Adjust scope to reality, never assume — earlier work may have
+  landed more or less than planned.
+
+RULES YOU ENFORCE (repeat to every subagent):
+1. All work in the assigned worktree. NEVER switch the primary checkout's
+   branch.
+2. Single writer per path: the plan's track ownership table is binding. A
+   track needing changes in another track's files reports the need to you.
+3. pnpm-lock.yaml: never hand-merge. Rebase onto main, take main's lockfile,
+   rerun pnpm install, commit the result. Tracks adding deps land
+   smallest-first.
+4. Conventional Commits; small single-purpose commits; pnpm verify green
+   before any merge.
+5. main is fast-forward only. You do the merges: rebase track branch onto
+   main, verify, ff-merge, one track at a time.
+6. Design gate: until a design package exists in docs/design/, Track B does
+   mechanics only — no visual styling, no theming. If a design package lands
+   mid-run, ask the operator when to apply it; applying it is its own epic.
+7. If a subagent is blocked or a decision isn't covered by spec/AGENTS.md, it
+   stops and asks you; genuinely open decisions go to the operator.
+8. Worktree cleanup: after a track's branch ff-merges to main, remove its
+   worktree and delete the merged branch (AGENTS.md). A track is not "done"
+   while its worktree still exists.
+
+MODEL SELECTION — you choose each subagent's model per task:
+- Sonnet 5: the default for typical day-to-day implementation work.
+- Haiku: only for very mechanical tasks (checkbox updates, boilerplate,
+  renames). Use sparingly — it is a fairly dumb model; never give it design
+  judgment or schema work.
+- Opus 5: non-trivial day-to-day work — novel algorithms, schema design,
+  concurrency, anything where a subtle mistake is expensive.
+- Fable 5: incredibly complex tasks only; reach for it when an Opus 5 attempt
+  has failed or the task is deeply cross-cutting.
+
+MANDATORY REVIEW LOOP — no track's work is "done" until it passes review:
+1. When an implementation subagent reports complete and pnpm verify is green,
+   spawn a fresh-context Fable 5 REVIEW subagent for that track. The reviewer
+   is read-only: it never edits files.
+2. The reviewer checks the work against: the epic's tasks in
+   docs/development-plan.md, the cited spec sections, the four §15
+   invariants where schema is touched, and the cross-cutting rules
+   (no silent truncation, enforced-not-documented prohibitions, one
+   vocabulary). It returns a findings list: blocking / non-blocking.
+3. Send blocking findings back to the SAME implementation subagent to fix
+   (resume it; do not spawn a new one). Re-review after fixes. Loop until
+   the reviewer reports no blocking findings.
+4. Only then: rebase, verify, ff-merge, check plan checkboxes, clean up the
+   worktree. Record non-blocking findings in the batch report.
+
+================ BATCH 1: Weeks 6–7 — Server ================
+
+Track A — feat/server-api — Sonnet 5; Opus 5 for the server-side refusal
+  layer. Epic 2.1: Hono + WS backbone, one event vocabulary, operator
+  credential, loopback-only bind by default, Origin/Host validation with
+  loopback always trusted, structured logs. Epic 2.2: full graph/workstream
+  API with authorship attribution on every mutation, illegal-edge and
+  self-chain refusals, undo/restore endpoints. Spec §2, §12, §8.
+
+Track B — feat/palette-and-shell — Sonnet 5. Epic 3.4: palette rail, command
+  palette, dock rail + panel registry, graph warnings surface. Finish Epic
+  3.0: renderer served by the server, SINGLE-ORIGIN RULE (page/WS/API on one
+  port, same-origin /ws, no hardcoded host/port, dev proxied), port/instance
+  knob with HMR override, Electron spawn-or-attach (packaging decision goes
+  to the operator). Spec §5, §11, §12. Mechanics only (design gate).
+
+Track C — feat/git-workspaces — Opus 5. Epic 4.3: workspace-kind abstraction
+  (leave room for a future multi-root kind, §13), git provisioning at first
+  run, readiness gate, live status, divergence detection, discovery,
+  HOST-AUTH INVARIANT (app credentials never touch workspace git
+  config/remotes — enforced with a test). Spec §3.4.
+
+GATE (Sync 2): B switches the canvas from fixtures to the real API + WS
+stream and demonstrates it. The canvas must render live server state before
+Batch 2 starts.
+
+================ BATCH 2: Weeks 8–10 — First run ================
+
+Track A — feat/context-assembly — Opus 5. Epic 4.2: ordered assembly with
+  content-budget warnings, run preview with stated-basis cost ranges,
+  run-one, world-condition completion loop with POINT-IN-TIME proof
+  (regression → drift, never revocation), idempotent initiation, run-history
+  capture. Epic 2.3: durability, compaction job. Spec §3.5, §4.1,
+  principles 3, 9, 12.
+
+Track B — feat/conversation-panels — Sonnet 5. Phase 3 polish; Epic 5.1
+  start: Conversation panel (streaming transcript, reasoning vs output, tool
+  calls, export), bounded transcript with recoverable release,
+  drafts/history, Diff panel. Spec §6.1, §6.2, §11.
+
+Track C — feat/path-claims — Opus 5 minimum; consider Fable 5 for the claim
+  manager itself. Epic 4.4: full claim model per §3.4 including
+  operator-as-implicit-holder divergence. Epic 4.5: agent tool surface,
+  reflexivity enforcement over the lineage model, delegation with spend
+  attribution. Spec §3.4, §2, §3.6.
+
+GATE (Milestone): drop command on ticket → run → streamed transcript →
+proven completion, recorded as a Playwright test, not a manual checklist.
+
+================ BATCH 3: Weeks 11–14 — Steering ================
+
+Track A — feat/scoped-runs — Opus 5. Epic 5.5: run subgraph, run what's
+  missing, re-run all drifted, global concurrency limit with visible
+  cancellable queue, drifted-inputs re-ask. Spec §4.1.
+
+Track B — feat/bubbles-and-transcript — Sonnet 5. Epic 5.1 finish; Epic 5.3
+  speech bubbles with all constraints (attribution, width caps,
+  collapse-to-count, global cap). Spec §5, §6.1.
+
+Track C — feat/injection-and-forking — Opus 5. Epic 5.2: injection
+  (queued→delivered), session-to-session with attribution, transcript
+  checkpoint gesture, structured questions with NO timed defaults, human
+  broadcast, session broadcast (scope-of-material-state, declared category,
+  rate bounds, sender-chain spend), batch gestures. Epic 5.4: resume vs
+  fork, fork-from-point with outside-world markers, handoff,
+  continue-vs-fresh preview, three-scope stop. Spec §6.3–6.7, §4.2, §4.3.
+
+GATE (Milestone): the steering demo as an e2e test — many sessions, inject
+mid-flight, answer a question from a bubble, stop at three scopes. From here
+the §15 invariant regression suite runs in CI continuously.
+
+================ BATCH 4: Weeks 15–18 — Attention & money ================
+
+Track A — feat/budgets — Opus 5. Epic 6.2: persistent spend, three budget
+  scopes, shipped default global ceiling, remaining-budget visibility to
+  sessions, near-cap clean stop, out-of-budget end state everywhere, chain
+  spend attribution, Fleet and Timeline panels. Epic 6.4: pinning, run
+  comparison, cross-run outcomes. Spec §8, §4.4.
+
+Track B — feat/attention-queue — Sonnet 5; Opus 5 for the
+  one-derivation-many-surfaces core. Epic 6.1: single attention derivation,
+  the queue (keyboard-driven, answerable in place), all five feeds with
+  acknowledge/snooze/mute, health alerts from observation only,
+  what-changed-while-away, outbound routing with redaction. Spec §7.
+
+Track C — feat/approvals — Sonnet 5; Opus 5 for
+  irreversibility-pierces-pre-grants. Epic 6.3: approvals on every surface,
+  pre-grants, irreversible writes always ask, agent destruction through
+  approvals. Then begin Epic 7.1 contract drafting (do not freeze).
+  Spec §6.6, §10.1.
+
+GATE: budgets bind transitively in a live test; a capped session ends as
+out-of-budget, not failed; the queue answers a question, an approval, and a
+drift item without opening anything.
+
+================ BATCH 5: Weeks 19–23 — Plugins ================
+
+Track C leads — feat/plugin-contract — Opus 5; Fable 5 only if
+  worker_threads isolation + permission enforcement defeats an Opus 5
+  attempt. Epic 7.1: freeze the contract (all contribution points, §10.1),
+  host with failure isolation, declared permissions (grant UX decision goes
+  to the operator), versioning, no-restart lifecycle,
+  plugins-cannot-author-intent enforced. Then: port git mechanics onto the
+  contract, GitHub plugin, Jira plugin, Epic 7.4 standing instructions.
+  Spec §10, §9.4, §3.8.
+
+Track A — feat/integration-substrate — Sonnet 5. Epic 7.2: refresh modes
+  (scheduled READS only), runtime-configurable scoping,
+  refresh→version→drift, write actions with reversibility declarations and
+  read-back, connect flows, present-or-absent concepts. Spec §9.1–9.3, §3.1.
+
+Track B — feat/filesystem-plugin — Sonnet 5; Haiku acceptable for purely
+  presentational plugin-health list views. Renderer contribution points,
+  Filesystem plugin, plugin health UI. Spec §9.4, §10.2.
+
+GATE: all four in-box plugins run on the public contract; a deliberately
+throwing test plugin degrades to "unavailable" without taking the app down.
+
+================ BATCH 6: Weeks 24–26 — Ship ================
+
+Track A — feat/search-settings — Sonnet 5. Epic 8.2: FTS search over
+  sessions incl. archived. Epic 8.3: settings (grouped, searchable,
+  no-restart), logs panel. Spec §6.8, §11, §8.
+
+Track B — feat/keyboard-a11y — Opus 5 (canvas accessibility is genuinely
+  hard; do not give this to a smaller model). Epic 8.1: high-frequency verb
+  bindings, shortcuts overlay (no undocumented binding), focus management,
+  announced widgets, streaming announcements, full keyboard reachability.
+  Spec §11.
+
+Track C — feat/packaging — Sonnet 5. Epic 8.4: installers per platform,
+  updater, local-binding posture, documented tunnel workflow verified
+  end-to-end against a cloud VM (forward the page's loopback port only),
+  remote-backend semantics, backup/move verification, reset/cleanup UX.
+  Spec §12.
+
+Then all tracks converge on Epic 8.5: e2e hardening — dedicated subagents
+per suite: Sonnet 5 for canvas and steering e2e, Opus 5 for the §15
+invariant regression suite (it must ASSERT the invariants, not just exercise
+them).
+
+FINAL GATE: pnpm verify + full e2e green; every plan checkbox either checked
+or explicitly moved to a named follow-up.
+
+FINAL REPORT: per-batch summaries (merged commits, findings, risks), the
+open operator decisions you queued, the residual risk list for sign-off,
+and the state of every plan checkbox. Then STOP.
+```
