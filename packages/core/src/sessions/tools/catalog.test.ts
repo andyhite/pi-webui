@@ -126,7 +126,36 @@ function matches(route: MountedRoute, tool: AgentTool): boolean {
 const OPERATOR_ONLY_ROUTES: readonly {
   readonly path: string;
   readonly why: string;
-}[] = [];
+}[] = [
+  {
+    path: "/api/maintenance/state",
+    why: "§12's backup-and-move story: the operator's own machinery for the store they administer, not a gesture agent work mirrors.",
+  },
+  {
+    path: "/api/reset/plan",
+    why: "the plan half of a destructive verb (§12). It removes nothing, but it exists to be read by whoever is about to confirm the removal — and that is the operator.",
+  },
+  {
+    path: "/api/reset",
+    why: "§12's reset verb. §6.6 already routes destruction of authored state through the operator; an agent emptying the store is not a gesture the product mirrors at all.",
+  },
+  {
+    path: "/api/maintenance/compact",
+    why: "the §15-3 sweep on demand: retention is the product's own housekeeping, and the schedule is the operator's setting (§12).",
+  },
+  {
+    path: "/api/runs/:id/pin",
+    why: '§4.4: pinning is "the human\'s word for never compact this". A run kept forever because an agent asked would be the retention rule answering to the thing it is meant to bound.',
+  },
+  {
+    path: "/api/nodes/:id/position",
+    why: "the arrangement is the operator's authored spatial work (§5): an agent rearranging the canvas somebody else is reading is not a wanted gesture, and nothing an agent does depends on where a node sits.",
+  },
+  {
+    path: "/api/arrangement",
+    why: "the same as a single position, in bulk (§5) — one drag of a selection is one gesture, and it is the operator's.",
+  },
+];
 
 describe("the mounted routes", () => {
   it("are found at all — a silent zero here would make this suite vacuous", () => {

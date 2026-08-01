@@ -814,6 +814,16 @@ const runTools: readonly AgentTool[] = [
     "/api/commands/:id/runs",
     { id: ID },
   ),
+  // A tool rather than operator-only: previewing before spending is exactly the
+  // gesture principle 8 says both surfaces get, and it is a pure read — it
+  // provisions nothing, starts nothing, and records nothing (§4.1).
+  read(
+    "command_preview",
+    "Preview a run: the ordered content it would assemble, what history says it would cost, and everything that would refuse it (§4.1).",
+    "the run preview before confirming a run",
+    "/api/commands/:id/preview",
+    { id: ID },
+  ),
   mutate({
     name: "session_submit",
     summary:
