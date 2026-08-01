@@ -283,10 +283,12 @@ export class BudgetService {
       kind,
       scope: budget.scope,
       id,
+      // Named rather than just "workstream": a chain can cross several, and a
+      // refusal has to say which one to raise.
       label:
         kind === "global"
           ? `global ${budget.period === "day" ? "daily " : ""}ceiling`
-          : "workstream",
+          : `workstream ${id}`,
       limitMicros: budget.limitMicros,
       spentMicros: this.spentAgainst(budget),
       warnFraction: budget.warnFraction,
