@@ -204,6 +204,58 @@ describe("resume (§6.3, §4.3)", () => {
     expect(at(again.body, "replayed")).toBe(true);
   });
 
+  it("does not inherit the previous handle's end (the drain race)", async () => {
+    // The race, named: a stop writes the outcome **before** it touches the runtime,
+    // so the `session-ended` observation is always behind it — and a record reopened
+    // underneath the old pump inherits that end, reporting a running session as
+    // finished (§3.6). Resuming immediately after a stop is the window, so this
+    // resumes without waiting for anything beyond the record's own end.
+    const harness = await bootWith(twoTurns);
+    const fixture = await command(harness, { lifecycle: "open" });
+    const sessionId = str(
+      await run(harness, fixture.commandId, twoTurns),
+      "session.id",
+    );
+
+    await harness.ok(`/sessions/${sessionId}/stop`, {
+      method: "POST",
+      body: {},
+    });
+
+    const resumed = await harness.ok(`/sessions/${sessionId}/resume`, {
+      method: "POST",
+      body: { initiationKey: "resume-into-the-race" },
+    });
+    expect(at(resumed, "session.end")).toBeNull();
+
+    // And it *stays* live: the assertion that matters is that the old pump's end
+    // does not land afterwards. Read repeatedly over a window longer than the drain
+    // takes, because the failure mode is an end that arrives late.
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const read = await harness.ok(`/sessions/${sessionId}`);
+      expect(
+        at(read, "session.end"),
+        `the resumed session was ended again on attempt ${attempt}`,
+      ).toBeNull();
+    }
+
+    // Its node is running too, which is what §3.7 checks before wiring anything into
+    // it — a resumed session that could not be steered would be resumed in name only.
+    const node = list(await harness.ok("/snapshot"), "nodes").find(
+      (candidate) =>
+        at(candidate, "role") === "session" &&
+        at(candidate, "refId") === sessionId,
+    );
+    expect(at(node, "running")).toBe(true);
+
+    const steered = await harness.call(`/sessions/${sessionId}/inject`, {
+      method: "POST",
+      body: { text: "carry on" },
+    });
+    expect(steered.status).toBe(201);
+  });
+
   it("refuses resuming a session that never stopped", async () => {
     const harness = await bootWith(twoTurns);
     const fixture = await command(harness, { lifecycle: "open" });
@@ -329,6 +381,177 @@ describe("fork (§6.3)", () => {
   });
 });
 
+describe("the lineage rule these gestures declare (§4.1, principle 1)", () => {
+  /**
+   * `session_resume` and `session_fork` both declare `target-session` reflexivity,
+   * and neither was enforcing it: a child could resume or fork its own ancestor,
+   * which is principle 1 bypassed with money behind it. A declaration nothing calls
+   * is exactly the failure cross-cutting rule 3 exists to prevent.
+   */
+  it("refuses a child resuming its own ancestor, and allows an out-of-chain peer", async () => {
+    const harness = await bootWith(twoTurns);
+    const parent = await endedTwoTurnSession(harness);
+
+    // A child of the parent: delegation is `POST /api/runs` with a session actor.
+    const childFixture = await command(harness, {
+      lifecycle: "open",
+      name: "Delegated",
+    });
+    const child = str(
+      await run(harness, childFixture.commandId, twoTurns, {
+        actor: `session:${parent.sessionId}`,
+      }),
+      "session.id",
+    );
+
+    const ownChain = await harness.call(
+      `/sessions/${parent.sessionId}/resume`,
+      {
+        method: "POST",
+        body: { initiationKey: "child-resumes-parent" },
+        actor: `session:${child}`,
+      },
+    );
+
+    expect(ownChain.status).toBe(409);
+    expect(at(ownChain.body, "error.details.reason")).toBe("own_chain");
+
+    // An out-of-chain peer is collaboration, and is allowed (principle 1).
+    const peer = await endedTwoTurnSession(harness);
+    const allowed = await harness.call(`/sessions/${peer.sessionId}/resume`, {
+      method: "POST",
+      body: { initiationKey: "peer-resumes-peer" },
+      actor: `session:${child}`,
+    });
+    expect(allowed.status).toBe(201);
+  });
+
+  it("refuses a child forking its own ancestor, and allows an out-of-chain peer", async () => {
+    const harness = await bootWith(twoTurns);
+    const parent = await endedTwoTurnSession(harness);
+
+    const childFixture = await command(harness, {
+      lifecycle: "open",
+      name: "Delegated",
+    });
+    const child = str(
+      await run(harness, childFixture.commandId, twoTurns, {
+        actor: `session:${parent.sessionId}`,
+      }),
+      "session.id",
+    );
+
+    const ownChain = await harness.call(`/sessions/${parent.sessionId}/fork`, {
+      method: "POST",
+      body: { turn: 1, initiationKey: "child-forks-parent" },
+      actor: `session:${child}`,
+    });
+
+    expect(ownChain.status).toBe(409);
+    expect(at(ownChain.body, "error.details.reason")).toBe("own_chain");
+    // Refused before anything was recorded, so the key is still free.
+    expect(
+      at(
+        (
+          await harness.call(`/sessions/${parent.sessionId}/fork`, {
+            method: "POST",
+            body: { turn: 1, initiationKey: "child-forks-parent" },
+          })
+        ).body,
+        "session.id",
+      ),
+    ).toBeTruthy();
+
+    // The catalog's resolution is "the session named by the id, and NEVER the
+    // session the fork is about to create" — so a peer's fork goes through.
+    const peer = await endedTwoTurnSession(harness);
+    const allowed = await harness.call(`/sessions/${peer.sessionId}/fork`, {
+      method: "POST",
+      body: { turn: 1, initiationKey: "peer-forks-peer" },
+      actor: `session:${child}`,
+    });
+    expect(allowed.status).toBe(201);
+  });
+});
+
+describe("initiation keys name one gesture (principle 9)", () => {
+  it("refuses a key already spent on a different kind of gesture", async () => {
+    const harness = await bootWith(twoTurns);
+    const { sessionId } = await endedTwoTurnSession(harness);
+
+    await harness.ok(`/sessions/${sessionId}/fork`, {
+      method: "POST",
+      body: { turn: 1, initiationKey: "one-key" },
+    });
+
+    // A resume of the same session names the same command, so the command
+    // comparison alone let this through and answered it as a retry of the fork.
+    // A run and a fork of one of that command's sessions are not the same act.
+    const reused = await harness.call(`/sessions/${sessionId}/resume`, {
+      method: "POST",
+      body: { initiationKey: "one-key" },
+    });
+
+    expect(reused.status).toBe(409);
+    expect(at(reused.body, "error.details.reason")).toBe(
+      "initiation_key_reused",
+    );
+    expect(String(at(reused.body, "error.message"))).toContain("fork");
+  });
+
+  it("refuses a resume key reused for a different session", async () => {
+    const harness = await bootWith(twoTurns);
+    const first = await endedTwoTurnSession(harness);
+    const second = await endedTwoTurnSession(harness);
+
+    await harness.ok(`/sessions/${first.sessionId}/resume`, {
+      method: "POST",
+      body: { initiationKey: "shared-resume-key" },
+    });
+
+    // The settled branch used to return **the session this call asked about** with
+    // replayed:true, so one key reported a resumption of a session it never
+    // touched — a retry saying "already done" about the wrong thing.
+    const reused = await harness.call(`/sessions/${second.sessionId}/resume`, {
+      method: "POST",
+      body: { initiationKey: "shared-resume-key" },
+    });
+
+    expect(reused.status).toBe(409);
+    expect(at(reused.body, "error.details.reason")).toBe(
+      "initiation_key_reused",
+    );
+    expect(
+      at(await harness.ok(`/sessions/${second.sessionId}`), "session.end"),
+    ).not.toBeNull();
+  });
+
+  it("refuses a fork key reused for a different source", async () => {
+    const harness = await bootWith(twoTurns);
+    const first = await endedTwoTurnSession(harness);
+    const second = await endedTwoTurnSession(harness);
+
+    await harness.ok(`/sessions/${first.sessionId}/fork`, {
+      method: "POST",
+      body: { turn: 1, initiationKey: "shared-fork-key" },
+    });
+
+    // Two sessions of one command share a commandId, so the command comparison
+    // would have handed this the other fork and called it a retry. The provenance
+    // edge is the record of which source a fork came from, and that is what is
+    // checked.
+    const reused = await harness.call(`/sessions/${second.sessionId}/fork`, {
+      method: "POST",
+      body: { turn: 1, initiationKey: "shared-fork-key" },
+    });
+
+    expect(reused.status).toBe(409);
+    expect(at(reused.body, "error.details.reason")).toBe(
+      "initiation_key_reused",
+    );
+  });
+});
+
 describe("handoff (§6.3)", () => {
   it("drafts, reviews, and sends — and refuses sending an unreviewed brief", async () => {
     const harness = await bootWith(twoTurns);
@@ -415,6 +638,127 @@ describe("handoff (§6.3)", () => {
     });
     expect(twice.status).toBe(409);
     expect(at(twice.body, "error.details.reason")).toBe("already_sent");
+  });
+
+  it("refuses a session sending a handoff — the operator's alone", async () => {
+    const harness = await bootWith(twoTurns);
+    const { sessionId } = await endedTwoTurnSession(harness);
+    const target = await command(harness, {
+      lifecycle: "open",
+      name: "Receiving",
+    });
+
+    const drafted = await harness.ok(`/sessions/${sessionId}/handoff-brief`, {
+      method: "POST",
+      body: { text: "here is where I got to" },
+    });
+    const briefId = str(drafted, "brief.id");
+    await harness.ok(`/handoff-briefs/${briefId}/review`, {
+      method: "POST",
+      body: {},
+    });
+
+    // `session_handoff` is declared `humanOnly` and nothing was checking the actor:
+    // a session could send a brief a human had reviewed, which is the deciding step
+    // not being taken by whoever decided (§6.3).
+    const bySession = await harness.call("/handoffs", {
+      method: "POST",
+      body: {
+        briefId,
+        workstreamId: target.workstream,
+        initiationKey: "session-sends",
+      },
+      actor: `session:${sessionId}`,
+    });
+
+    expect(bySession.status).toBe(409);
+    expect(at(bySession.body, "error.details.reason")).toBe("human_only");
+
+    // Refused, not half-done: the brief is still unsent and still sendable by the
+    // operator.
+    const briefs = list(
+      await harness.ok(`/sessions/${sessionId}/handoff-briefs`),
+      "briefs",
+    );
+    expect(at(briefs[0], "state")).toBe("reviewed");
+    const sent = await harness.ok("/handoffs", {
+      method: "POST",
+      body: {
+        briefId,
+        workstreamId: target.workstream,
+        initiationKey: "operator-sends",
+      },
+    });
+    expect(at(sent, "session.id")).toBeTruthy();
+  });
+
+  it("completes the brief's graph writes on a replayed send (crash window)", async () => {
+    const harness = await bootWith(twoTurns);
+    const { sessionId } = await endedTwoTurnSession(harness);
+    const target = await command(harness, {
+      lifecycle: "open",
+      name: "Receiving",
+    });
+
+    const briefId = str(
+      await harness.ok(`/sessions/${sessionId}/handoff-brief`, {
+        method: "POST",
+        body: { text: "the state of things" },
+      }),
+      "brief.id",
+    );
+    await harness.ok(`/handoff-briefs/${briefId}/review`, {
+      method: "POST",
+      body: {},
+    });
+
+    const first = await harness.ok("/handoffs", {
+      method: "POST",
+      body: {
+        briefId,
+        workstreamId: target.workstream,
+        initiationKey: "handoff-replay",
+      },
+    });
+
+    // The same gesture again. The session is already started and its key settled, so
+    // this takes the replay path — which used to skip the brief's graph writes and
+    // `markSent` entirely. A crash between the settle and those writes therefore made
+    // every retry skip them permanently: a handoff whose brief was never wired into
+    // the session it seeded, and a brief still marked unsent.
+    const again = await harness.call("/handoffs", {
+      method: "POST",
+      body: {
+        briefId,
+        workstreamId: target.workstream,
+        initiationKey: "handoff-replay",
+      },
+    });
+
+    expect(again.status).toBe(200);
+    expect(at(again.body, "replayed")).toBe(true);
+    expect(at(again.body, "session.id")).toBe(str(first, "session.id"));
+    expect(at(again.body, "briefNodeId")).toBe(str(first, "briefNodeId"));
+
+    // Exactly one of each write, and every one of them present: the replay completed
+    // the settled state rather than duplicating it.
+    const snapshot = await harness.ok("/snapshot");
+    const contextEdges = list(snapshot, "edges").filter(
+      (edge) =>
+        at(edge, "kind") === "context" &&
+        at(edge, "from") === str(first, "briefNodeId"),
+    );
+    expect(contextEdges).toHaveLength(1);
+
+    const provenance = list(snapshot, "edges").filter(
+      (edge) => at(edge, "relation") === "session_handoff",
+    );
+    expect(provenance).toHaveLength(1);
+
+    const nodes = list(snapshot, "nodes").filter(
+      (node) => at(node, "id") === str(first, "briefNodeId"),
+    );
+    expect(nodes).toHaveLength(1);
   });
 
   it("derives a brief from the log when the session wrote none", async () => {

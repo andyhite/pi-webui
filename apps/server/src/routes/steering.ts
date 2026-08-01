@@ -287,8 +287,10 @@ export function steeringRoutes(
         /** Whose budgets the induced turns are charged to (§6.5, principle 2). */
         spendChargedTo: result.plan.spendChargedTo,
         contentNodeId: result.plan.content.nodeId,
+        /** True when this key had already sent it: the same answer, not a second send. */
+        replayed: result.replayed,
       },
-      201,
+      result.replayed ? 200 : 201,
     );
   });
 

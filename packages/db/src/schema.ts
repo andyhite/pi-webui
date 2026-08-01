@@ -776,6 +776,16 @@ export const runInitiations = sqliteTable(
     sessionId: text("session_id").references(() => sessions.id, {
       onDelete: "set null",
     }),
+    /**
+     * Which gesture spent this key (§6.3, §4.1). Compared on every claim, because a
+     * key is one *gesture* and a run of a command is not a fork of one of its
+     * sessions however much they agree about the command.
+     */
+    kind: text("kind", {
+      enum: ["run", "resume", "fork", "handoff"],
+    })
+      .notNull()
+      .default("run"),
     createdAt: integer("created_at").notNull(),
     settledAt: integer("settled_at"),
   },

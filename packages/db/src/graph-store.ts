@@ -274,6 +274,21 @@ export class GraphStore {
    * initiation chain (principle 1).
    */
   addContextEdge(input: ContextEdgeInput): EdgeRow {
+    // A caller-supplied id that already exists is **this same gesture arriving
+    // twice**, which is the one case that short-circuits every check below: the
+    // gesture already happened and was already judged legal, so re-judging it would
+    // refuse the retry as a duplicate of itself. The gestures that supply edge ids
+    // (injection, broadcast, handoff) are all retryable, and a retry must wire the
+    // content once — the same reasoning `place` applies to a node (principle 9).
+    if (input.edgeId !== undefined) {
+      const already = this.state.db
+        .select()
+        .from(edges)
+        .where(eq(edges.id, input.edgeId))
+        .get();
+      if (already) return already;
+    }
+
     const fromRow = this.node(input.from);
     const toRow = this.node(input.to);
     const from = this.toGraphNode(fromRow);
@@ -368,11 +383,35 @@ export class GraphStore {
    * legality and lineage checks — a delegation's result returning to its
    * delegator is intent the delegator already authored.
    */
+  /**
+   * Record a provenance edge (§3.7). Recorded as work happens, never authored.
+   *
+   * **Idempotent in the fact it states.** A provenance edge is a fact — this session
+   * was forked from that one — and recording the same fact twice does not make two
+   * facts, it draws one relationship twice on the board. That matters because the
+   * gestures that record provenance are retryable (a fork, a handoff, a delegation),
+   * and a retry that got as far as this line the first time must not leave a second
+   * edge behind (principle 9).
+   */
   recordProvenance(
     from: string,
     to: string,
     relation: ProvenanceKind,
   ): EdgeRow {
+    const existing = this.state.db
+      .select()
+      .from(edges)
+      .where(
+        and(
+          eq(edges.kind, "provenance"),
+          eq(edges.fromNode, from),
+          eq(edges.toNode, to),
+          eq(edges.relation, relation),
+        ),
+      )
+      .get();
+    if (existing) return existing;
+
     const id = newEdgeId();
 
     this.state.db

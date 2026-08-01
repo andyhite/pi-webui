@@ -23,6 +23,7 @@ import {
   broadcasts,
   broadcastSends,
   handoffBriefs,
+  sessionInjections,
   type BroadcastRow,
   type HandoffBriefRow,
 } from "./schema.js";
@@ -208,33 +209,48 @@ export class BroadcastStore {
     readonly senderSessionId: SessionId;
     readonly baselineCostMicros: number;
   }[] {
-    return this.state.db
-      .select({
-        broadcastId: broadcastRecipients.broadcastId,
-        senderSessionId: broadcasts.senderSessionId,
-        baselineCostMicros: broadcastRecipients.baselineCostMicros,
-      })
-      .from(broadcastRecipients)
-      .innerJoin(broadcasts, eq(broadcasts.id, broadcastRecipients.broadcastId))
-      .where(
-        and(
-          eq(broadcastRecipients.sessionId, sessionId),
-          isNull(broadcastRecipients.inducedMicros),
-          eq(broadcasts.origin, "session"),
-        ),
-      )
-      .all()
-      .flatMap((row) =>
-        row.senderSessionId === null
-          ? []
-          : [
-              {
-                broadcastId: row.broadcastId,
-                senderSessionId: row.senderSessionId as SessionId,
-                baselineCostMicros: row.baselineCostMicros,
-              },
-            ],
-      );
+    return (
+      this.state.db
+        .select({
+          broadcastId: broadcastRecipients.broadcastId,
+          senderSessionId: broadcasts.senderSessionId,
+          baselineCostMicros: broadcastRecipients.baselineCostMicros,
+        })
+        .from(broadcastRecipients)
+        .innerJoin(
+          broadcasts,
+          eq(broadcasts.id, broadcastRecipients.broadcastId),
+        )
+        // The ledger entry the delivery became, so a **refused** one charges nobody.
+        // An injection that never reached the runtime induced no turn, and billing the
+        // sender for it would charge them for work their broadcast did not cause —
+        // which is the same hole in principle 2's transitive guarantee, pointing the
+        // other way (§6.5).
+        .innerJoin(
+          sessionInjections,
+          eq(sessionInjections.id, broadcastRecipients.injectionId),
+        )
+        .where(
+          and(
+            eq(broadcastRecipients.sessionId, sessionId),
+            isNull(broadcastRecipients.inducedMicros),
+            eq(broadcasts.origin, "session"),
+            isNull(sessionInjections.refusedAt),
+          ),
+        )
+        .all()
+        .flatMap((row) =>
+          row.senderSessionId === null
+            ? []
+            : [
+                {
+                  broadcastId: row.broadcastId,
+                  senderSessionId: row.senderSessionId as SessionId,
+                  baselineCostMicros: row.baselineCostMicros,
+                },
+              ],
+        )
+    );
   }
 
   /** Record what a recipient's induced turn cost. Charged once, never re-charged. */
@@ -253,6 +269,27 @@ export class BroadcastStore {
         ),
       )
       .run();
+  }
+
+  /**
+   * One broadcast's recipients as they were recorded, for a replayed gesture to
+   * answer from rather than re-deliver (principle 9).
+   */
+  deliveriesOf(broadcastId: string): readonly {
+    readonly sessionId: SessionId;
+    readonly workstreamId: WorkstreamId;
+    readonly injectionId: string;
+  }[] {
+    return this.state.db
+      .select()
+      .from(broadcastRecipients)
+      .where(eq(broadcastRecipients.broadcastId, broadcastId))
+      .all()
+      .map((row) => ({
+        sessionId: row.sessionId as SessionId,
+        workstreamId: row.workstreamId as WorkstreamId,
+        injectionId: row.injectionId,
+      }));
   }
 
   /** Which sessions received a broadcast — what the induced spend is charged for. */

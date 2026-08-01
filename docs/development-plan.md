@@ -1094,7 +1094,9 @@ rather than a counter, because a counter cannot answer "how many in the last hou
 after a restart. Induced spend is charged from the session stream with **the grain
 stated**: the recipient's spend between delivery and the next time its accounting
 moved, charged once, with the baseline in a column so a restart between the two does
-not lose it. Charging the recipient's whole session would bill the sender for work
+not lose it — and a delivery the runtime never received is excluded outright, since an
+injection that induced no turn must not bill the sender for work their broadcast did
+not cause. Charging the recipient's whole session would bill the sender for work
 it never caused; charging nothing would be the hole §6.5 names.
 
 One place the server **departs from a core shape, deliberately**: `InjectionContent`
@@ -1103,6 +1105,32 @@ broadcast, whose one content object is wired into sessions across workstreams �
 §3.3 refuses a local object outside its own. A broadcast's content is therefore
 world-scoped. `InjectionContent` carries no workstream at all, so there is no single
 workstream it could belong to; §3.2's promotion is the same idea.
+
+**Every steering gesture replays; none of them refuse a retry.** Injection, broadcast,
+resume, fork, and handoff all answer a repeated key with what the first attempt
+produced (principle 9). Broadcast briefly refused instead, with `already_sent`, and
+the divergence was accidental rather than argued: a caller retrying after a dropped
+response would have been told its broadcast failed when it had landed, which is the
+failure principle 9 exists to prevent. A replayed broadcast is reconstructed from its
+recipient rows rather than re-planned, because re-planning would evaluate the scope
+against the world _now_ and a session that started since would appear as a recipient
+the first send never reached.
+
+The idempotency that makes those replays safe is **id-stable writes**, and two of them
+had to become so: `GraphStore.addContextEdge` returns the existing edge when the
+caller supplies an id that already exists — short-circuiting every legality check,
+because the gesture already happened and was already judged legal, and re-judging it
+refuses the retry as a duplicate of itself — and `recordProvenance` is idempotent in
+the fact it states, since a fork recorded twice does not make two forks, it draws one
+relationship twice.
+
+**A key names one gesture, not one command** (migration 18). Comparing the command
+alone let a key be reused across kinds: a run of command X and a fork of one of that
+command's sessions both named X, so the second was handed the first one's answer and
+called it a retry. The kind is compared too now, and each gesture checks that what the
+settled key produced is what _this_ call is about — resume compares the session id,
+and fork checks the provenance edge, because two sessions of one command share a
+command id and the command comparison alone would hand a fork key the other fork.
 
 _Deferred, honestly: §7.3's per-workstream activity is a **query** over
 `broadcast_recipients` (the workstream is on the row) rather than a second table,
@@ -1314,6 +1342,18 @@ the caller** and re-run as `start({ seedTranscript })`, and whichever branch ran
 the mode recorded (migration 16 adds `sessions.runtime_mode`). The adapter's refusal
 to substitute one for the other is what makes that column trustworthy.
 
+**Both §6.3 gestures enforce §4.1's lineage rule, and the handoff enforces its own
+`humanOnly`.** `session_resume` and `session_fork` declare `target-session`
+reflexivity and briefly enforced nothing, which let a child resume or fork its own
+ancestor — principle 1 bypassed with money behind it. Both call `checkRunGesture`
+before anything is recorded, and before the idempotency lookup: a caller that may not
+make the gesture may not retry it either, and a retry is not a way to launder one. The
+fork's check sees the **source** and never the descendant it is about to create, which
+is what the catalog's own resolution says in capitals. `session_handoff` declares
+`humanOnly` and now refuses a session actor at the service, for the same reason the
+review step does: the brief exists because a human decided this work should move, and
+a session sending it is that decision not being made.
+
 Resume reopens **the same record**, which is the whole difference from a fork, and
 two things about it were only discovered by testing it. The previous handle's pump
 has an end still to record — a stop writes the outcome before it touches the runtime,
@@ -1332,6 +1372,17 @@ than a field on the run preview: it needs the workspace fingerprinted and the pr
 session's transcript measured, and the run preview is a cheap read that provisions
 nothing. Both required inputs are real — the window comes from the command's declared
 model window, and the divergence from the workspace as it stands.
+
+A handoff's completion is **part of its settled state**, not a step after it. The
+brief's graph writes and `markSent` used to run only on the first attempt, which left a
+crash window with teeth: the session is started and its key settled inside
+`startHandoffSession`, so a process that died between that and the writes made every
+retry take the replay path and skip them **permanently** — a handoff whose brief was
+never wired into the session it seeded, and a brief still marked unsent and therefore
+re-sendable. They run on every attempt now, each idempotent in an id the plan supplied,
+and `markSent` is last so a crash before it leaves the brief re-sendable rather than
+sent with nothing to show for it. The `already_sent` refusal is checked **after** the
+key, so it still refuses a second gesture and no longer refuses a retry of the first.
 
 _Deferred, honestly: a command definition carries **no** default continuation mode
 yet, so the comparison uses the shipped default and says so rather than guessing per

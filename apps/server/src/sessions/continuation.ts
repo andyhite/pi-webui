@@ -40,6 +40,7 @@ import {
   toWorkstream,
 } from "../routes/mappers.js";
 import type { RunService } from "../runs/service.js";
+import { checkRunGesture } from "../runs/delegation.js";
 import type { SteeringService } from "./steering.js";
 
 /**
@@ -166,6 +167,19 @@ export class ContinuationService {
     const { stores } = this.deps;
     const stored = stores.sessions.get(input.sessionId);
 
+    // §4.1's lineage rule, which `session_resume` declares and nothing was
+    // enforcing: "a session may not run, resume, or re-run itself or anything in its
+    // own initiation chain." A child resuming its ancestor is principle 1 bypassed
+    // with money behind it, so this is checked **first** — before the idempotency
+    // lookup, because a caller that may not make the gesture at all may not retry it
+    // either, and a retry is not a way to launder one.
+    checkRunGesture(stores, {
+      actor: input.actor,
+      tool: "session_resume",
+      commandIds: [],
+      sessionIds: [input.sessionId],
+    });
+
     // Idempotency is checked **before** the rules that would refuse a second
     // attempt, and the order is the point: once a resumption has happened the
     // session is running, so `planResume` would answer `already_running` — which is
@@ -245,16 +259,50 @@ export class ContinuationService {
     const source = stores.sessions.get(input.sessionId);
     const point: TranscriptPoint = { turn: input.turn };
 
+    // §4.1's lineage rule, which `session_fork` declares and nothing was enforcing.
+    // The catalog's own resolution is "the session named by the id, and nothing
+    // else. NEVER the session the fork is about to create" — so the check sees the
+    // source and not the descendant it is about to make, which is what lets a
+    // session fork a peer while refusing it a fork of its own ancestor.
+    checkRunGesture(stores, {
+      actor: input.actor,
+      tool: "session_fork",
+      commandIds: [],
+      sessionIds: [input.sessionId],
+    });
+
     // Null where the source ran no command: a fork spends a key and produces no
     // run of its own (§6.3), which is what migration 17 made representable.
     const claim = stores.runs.claimInitiation(
       input.initiationKey,
       source.session.commandId,
+      "fork",
     );
     if (claim.state === "settled") {
       const existing = stores.sessions.get(
         claim.initiation.sessionId as string,
       );
+
+      // A settled key answers with what it produced, and what it produced has to be
+      // a fork of *this* source. Two sessions of one command share a `commandId`, so
+      // the command comparison alone would let a key spent forking one of them
+      // report that fork as a retry of forking the other. The provenance edge is the
+      // record of which source it came from, so that is what is checked.
+      const forkedFrom = stores.graph
+        .provenance(stores.graph.nodeFor("session", existing.session.id).id)
+        .some(
+          (edge) =>
+            edge.relation === "session_forked_from" &&
+            edge.fromNode ===
+              stores.graph.nodeFor("session", source.session.id).id,
+        );
+      if (!forkedFrom) {
+        throw refused({
+          reason: "initiation_key_reused",
+          message: `initiation key ${input.initiationKey} already forked a different session; use a new key (principle 9)`,
+        });
+      }
+
       return {
         plan: await this.planFork(source, point, input.actor),
         session: existing,
@@ -495,6 +543,19 @@ export class ContinuationService {
     readonly replayed: boolean;
   }> {
     const { stores, bus } = this.deps;
+
+    // `session_handoff` is declared `humanOnly`, and a flag describes while a gate
+    // refuses. Sending is the operator's act by the same reasoning the review step
+    // is: the brief exists because a human decided this work should move, and a
+    // session sending its own brief is that decision not being made (§6.3).
+    if (input.actor.kind !== "human") {
+      throw refused({
+        reason: "human_only",
+        message:
+          "a handoff is sent by the user: the brief is reviewed and sent by whoever decided the work should move, and a session sending its own is that decision not happening (§6.3)",
+      });
+    }
+
     const row = stores.broadcasts.brief(input.briefId);
     const brief = stores.broadcasts.toBrief(row);
 
@@ -507,7 +568,17 @@ export class ContinuationService {
           "this brief has not been reviewed; the user edits a handoff brief before it is sent (§6.3)",
       });
     }
-    if (row.sentAt !== null) {
+    // "Already sent" and "sent by this very gesture" are different facts, and the
+    // order below is what tells them apart. A brief may be sent once — a second
+    // handoff of the same brief would seed a second session from one decision — but a
+    // **retry of the gesture that sent it** must answer with what that gesture
+    // produced, exactly as inject, resume, and fork do (principle 9). Checking
+    // `sentAt` first refused the retry, which is how the crash window below became
+    // unrecoverable: the retry could never reach the writes it needed to complete.
+    const spent = stores.runs.initiation(input.initiationKey);
+    const isRetry = spent?.settledAt != null && spent.sessionId !== null;
+
+    if (!isRetry && row.sentAt !== null) {
       throw refused({
         reason: "already_sent",
         message: `brief ${input.briefId} was already sent; draft a new one to hand off again (principle 9)`,
@@ -541,7 +612,18 @@ export class ContinuationService {
       at: stores.clock(),
     });
 
-    if (!started.replayed) {
+    // Unconditionally, replay or not, and every write below is idempotent in an id
+    // the plan supplied.
+    //
+    // These used to run only on the first attempt, which left a crash window with
+    // teeth: the session is started and its key settled inside
+    // `startHandoffSession`, so a process that died between that and here made every
+    // retry take the replay path and skip the brief's graph writes and `markSent`
+    // **permanently** — a handoff whose brief was never wired into the session it
+    // seeded, and a brief still marked unsent and therefore re-sendable. Completing
+    // them on every attempt is what makes the settled state whole rather than
+    // hoping the two halves never come apart (principle 9, principle 12).
+    {
       const written = stores.objects.write({
         objectId: plan.content.objectId,
         kind: plan.content.kind,
@@ -604,6 +686,9 @@ export class ContinuationService {
         author: input.actor,
       });
 
+      // Last, so a crash before it leaves the brief re-sendable rather than sent
+      // with nothing to show for it: the graph writes above are the handoff, and
+      // this is the record that it happened.
       stores.broadcasts.markSent(brief.id, stores.clock());
     }
 

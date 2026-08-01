@@ -59,6 +59,26 @@ const takesInjections: RuntimeScript = {
   ],
 };
 
+/**
+ * Live, and spends nothing: no `costUsd` and no usage at all, so a recipient's
+ * accounting never moves and no induced charge fires.
+ */
+const costsNothing: RuntimeScript = {
+  acts: [
+    {
+      on: "start",
+      steps: [
+        { observation: { kind: "turn-started", turn: 1 } },
+        { observation: { kind: "output-delta", text: "working" } },
+      ],
+    },
+    {
+      on: "injection",
+      steps: [{ observation: { kind: "output-delta", text: "noted" } }],
+    },
+  ],
+};
+
 /** Asks the operator a question and stops there — which is what asking is. */
 const asks: RuntimeScript = {
   acts: [
@@ -531,6 +551,151 @@ describe("broadcast (§6.5)", () => {
     const fourth = await send(4);
     expect(fourth.status).toBe(409);
     expect(at(fourth.body, "error.details.reason")).toBe("rate_limited");
+  });
+});
+
+describe("a broadcast replays rather than refusing (principle 9)", () => {
+  it("answers a repeated key from what the first send recorded", async () => {
+    const harness = await bootWith(takesInjections);
+    const first = await liveSession(harness, takesInjections, { name: "A" });
+    await liveSession(harness, takesInjections, { name: "B" });
+
+    const sent = await harness.call("/broadcasts", {
+      method: "POST",
+      body: {
+        text: "pausing deploys",
+        target: { kind: "everything-running" },
+        broadcastId: "bcast-one-gesture",
+      },
+    });
+    expect(sent.status).toBe(201);
+    expect(at(sent.body, "replayed")).toBe(false);
+
+    // The same gesture again. This used to be refused `already_sent`, which is a
+    // different rule from the one inject, resume, and fork keep — so a caller
+    // retrying after a dropped response was told its broadcast failed when it had
+    // landed, which is the failure principle 9 exists to prevent.
+    const again = await harness.call("/broadcasts", {
+      method: "POST",
+      body: {
+        text: "pausing deploys",
+        target: { kind: "everything-running" },
+        broadcastId: "bcast-one-gesture",
+      },
+    });
+
+    expect(again.status).toBe(200);
+    expect(at(again.body, "replayed")).toBe(true);
+    expect(at(again.body, "broadcastId")).toBe("bcast-one-gesture");
+    expect(list(again.body, "recipients")).toHaveLength(2);
+
+    // And nothing was re-delivered: the same content is still exactly one turn for
+    // every recipient.
+    for (const sessionId of [first.sessionId]) {
+      const ledger = list(
+        await harness.ok(`/sessions/${sessionId}/injections`),
+        "injections",
+      );
+      expect(ledger).toHaveLength(1);
+    }
+
+    const edges = list(await harness.ok("/snapshot"), "edges").filter(
+      (edge) => at(edge, "from") === str(again.body, "contentNodeId"),
+    );
+    expect(edges).toHaveLength(2);
+  });
+
+  it("excludes a refused delivery from what the sender is charged for", async () => {
+    // A delivery the runtime never received induced no turn, so billing the sender
+    // for it would charge them for work their broadcast did not cause — the same
+    // hole in principle 2's transitive guarantee, pointing the other way (§6.5).
+    //
+    // The script costs nothing, deliberately: an induced charge fires as soon as a
+    // recipient's accounting moves, so a priced turn would settle both deliveries
+    // before there was anything to exclude. With nothing spent, both rows are still
+    // uncharged and the query's exclusion is the only thing that distinguishes them.
+    const harness = await bootWith(costsNothing);
+    const sender = await liveSession(harness, costsNothing, { name: "A" });
+    const second = await liveSession(harness, costsNothing, { name: "B" });
+
+    const repositoryId = String(
+      list(await harness.ok("/broadcast-world"), "members")
+        .filter((member) => at(member, "sessionId") === sender.sessionId)
+        .flatMap((member) => list(member, "repositoryIds"))[0],
+    );
+
+    const sent = await harness.ok("/broadcasts", {
+      method: "POST",
+      body: {
+        text: "the shared branch moved",
+        scope: { kind: "everyone-in-repository", repositoryId },
+        category: "material-state-changed",
+      },
+      actor: `session:${sender.sessionId}`,
+    });
+
+    const recipients = list(sent, "recipients").map((one) =>
+      at(one, "sessionId"),
+    );
+    expect(recipients).toEqual([second.sessionId]);
+
+    // Started after the send, so it is not a recipient of it and its row below is
+    // the only one this test writes by hand.
+    const third = await liveSession(harness, costsNothing, { name: "C" });
+
+    const { openDatabase, BroadcastStore, SessionStore } =
+      await import("@plotroom/db");
+    const state = openDatabase({ stateDir: harness.stateDir });
+    try {
+      const broadcasts = new BroadcastStore(state);
+      const sessions = new SessionStore(state);
+      const broadcastId = str(sent, "broadcastId");
+
+      // The delivered one is uncharged and outstanding: nothing was spent, so there
+      // is nothing to charge yet and the row is still waiting for a turn.
+      expect(broadcasts.unchargedFor(second.sessionId)).toHaveLength(1);
+
+      // A delivery that was refused rather than delivered. Constructed rather than
+      // provoked, because the scripted runtime accepts every injection: a delivered
+      // injection cannot *become* refused (`markRefused` refuses to un-deliver one,
+      // correctly), so the state under test only exists where the runtime was gone
+      // at delivery time — which is what `deliver` records and what a restart
+      // produces. The rows are the same rows either way, and the query is what is
+      // being tested.
+      const contentNodeId = str(sent, "contentNodeId");
+      const refusedInjectionId = `inj_${broadcastId}_refused`;
+      sessions.queueInjection({
+        id: refusedInjectionId as never,
+        sessionId: third.sessionId,
+        origin: "steering",
+        author: { kind: "session", sessionId: sender.sessionId as never },
+        nodeId: contentNodeId,
+        text: "the shared branch moved",
+        queuedAt: Math.floor(Date.now() / 1000),
+      });
+      sessions.markRefused(
+        refusedInjectionId,
+        Math.floor(Date.now() / 1000),
+        "no live runtime is attached to this session",
+      );
+      state.sqlite
+        .prepare(
+          "INSERT INTO broadcast_recipients (broadcast_id, session_id, workstream_id, injection_id, baseline_cost_micros, induced_micros) VALUES (?, ?, ?, ?, 0, NULL)",
+        )
+        .run(
+          broadcastId,
+          third.sessionId,
+          third.workstream,
+          refusedInjectionId,
+        );
+
+      // The refused one charges nobody; the one that arrived is still the sender's
+      // to pay for.
+      expect(broadcasts.unchargedFor(third.sessionId)).toHaveLength(0);
+      expect(broadcasts.unchargedFor(second.sessionId)).toHaveLength(1);
+    } finally {
+      state.close();
+    }
   });
 });
 

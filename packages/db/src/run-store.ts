@@ -148,6 +148,14 @@ export interface RecordSubmissionInput {
   readonly feedback?: string | null;
 }
 
+/**
+ * The gestures that spend an initiation key. `run` is a command run; the other
+ * three are §6.3's, and each produces a session rather than a run.
+ */
+export const INITIATION_KINDS = ["run", "resume", "fork", "handoff"] as const;
+
+export type InitiationKind = (typeof INITIATION_KINDS)[number];
+
 export type InitiationClaim =
   | { readonly state: "claimed" }
   | { readonly state: "settled"; readonly initiation: RunInitiationRow }
@@ -574,6 +582,13 @@ export class RunStore {
      * in a column named `command_id` is what the foreign key correctly refused.
      */
     commandId: string | null,
+    /**
+     * Which gesture is spending it. Compared as strictly as the command is, because
+     * a key names one **gesture**: a run of command X and a fork of a session of
+     * command X agree about X and are not the same act, and handing the second the
+     * first one's answer would call it a retry of something it never was.
+     */
+    kind: InitiationKind = "run",
   ): InitiationClaim {
     return this.state.db.transaction(() => {
       const existing = this.initiation(key);
@@ -583,6 +598,12 @@ export class RunStore {
           throw new RunRefused({
             reason: "initiation_key_reused",
             message: `initiation key ${key} already started a run of a different command; use a new key`,
+          });
+        }
+        if (existing.kind !== kind) {
+          throw new RunRefused({
+            reason: "initiation_key_reused",
+            message: `initiation key ${key} already spent on a ${existing.kind} gesture; a ${kind} is a different gesture and needs its own key (principle 9)`,
           });
         }
         // Settled means the key produced what it was going to produce. A run-less
@@ -595,7 +616,7 @@ export class RunStore {
 
       this.state.db
         .insert(runInitiations)
-        .values({ initiationKey: key, commandId, createdAt: this.now() })
+        .values({ initiationKey: key, commandId, kind, createdAt: this.now() })
         .run();
 
       return { state: "claimed" as const };

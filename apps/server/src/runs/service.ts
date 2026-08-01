@@ -558,12 +558,25 @@ export class RunService {
     }
 
     // Null where the session ran no command: a resume spends a key and produces no
-    // run (§6.3), which migration 17 made representable rather than smuggled.
+    // run (§6.3), which migration 17 made representable rather than smuggled. The
+    // kind is compared too, so a key already spent on a run or a fork is refused
+    // rather than answered as if it were this resumption.
     const claim = stores.runs.claimInitiation(
       input.initiationKey,
       stored.session.commandId,
+      "resume",
     );
     if (claim.state === "settled") {
+      // A settled key answers with **what it produced**, not with what this call
+      // asked about. Returning the input session on any settled key would let one
+      // key report a resumption of a session it never touched — a retry that says
+      // "already done" about the wrong thing is worse than a refusal.
+      if (claim.initiation.sessionId !== input.sessionId) {
+        throw refused({
+          reason: "initiation_key_reused",
+          message: `initiation key ${input.initiationKey} already resumed session ${String(claim.initiation.sessionId)}; use a new key for a different session (principle 9)`,
+        });
+      }
       return { session: stores.sessions.get(input.sessionId), replayed: true };
     }
     if (claim.state === "in_flight") {
@@ -763,7 +776,11 @@ export class RunService {
   }> {
     const { stores } = this.deps;
 
-    const claim = stores.runs.claimInitiation(input.initiationKey, null);
+    const claim = stores.runs.claimInitiation(
+      input.initiationKey,
+      null,
+      "handoff",
+    );
     if (claim.state === "settled") {
       return {
         session: stores.sessions.get(claim.initiation.sessionId as string),

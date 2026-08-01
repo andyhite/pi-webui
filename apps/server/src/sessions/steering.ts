@@ -44,7 +44,7 @@ import {
   type StopScope,
   type WorkspaceId,
 } from "@plotroom/core";
-import type { StoredSession } from "@plotroom/db";
+import type { BroadcastRow, StoredSession } from "@plotroom/db";
 import type { EventBus } from "../events/bus.js";
 import { badRequest, refused } from "../http/errors.js";
 import type { Logger } from "../logging/logger.js";
@@ -467,6 +467,8 @@ export class SteeringService {
   }): Promise<{
     readonly plan: BroadcastPlan;
     readonly deliveries: readonly InjectResult[];
+    /** True when this key had already sent this broadcast (principle 9). */
+    readonly replayed: boolean;
   }> {
     const { stores } = this.deps;
     const broadcastId = input.broadcastId ?? `bcast_${randomUUID()}`;
@@ -489,12 +491,18 @@ export class SteeringService {
       }),
     };
 
+    // The same gesture twice is the same gesture, and it answers from what the
+    // first one recorded rather than refusing.
+    //
+    // This used to refuse with `already_sent`, which is a different rule from the one
+    // injection, resume, and fork keep — and the divergence was accidental rather
+    // than argued: a caller retrying after a dropped response would have been told
+    // its broadcast failed when it had landed, which is the failure principle 9
+    // exists to prevent. Nothing is re-delivered: the recipients are read back, so
+    // the same content is still exactly one turn for every one of them.
     const existing = stores.broadcasts.found(broadcastId);
     if (existing !== undefined) {
-      throw refused({
-        reason: "already_sent",
-        message: `broadcast ${broadcastId} was already sent; the same content twice would be two turns for every recipient (principle 9)`,
-      });
+      return this.replayBroadcast(existing);
     }
 
     const result =
@@ -574,7 +582,109 @@ export class SteeringService {
       author: plan.author,
     });
 
-    return { plan, deliveries };
+    return { plan, deliveries, replayed: false };
+  }
+
+  /**
+   * A broadcast that already happened, answered from its rows.
+   *
+   * The plan is reconstructed rather than re-planned: re-planning would evaluate the
+   * scope against the world *now*, and a session that started since would appear as
+   * a recipient the first send never reached. What was sent is what the recipient
+   * rows say was sent.
+   */
+  private replayBroadcast(existing: BroadcastRow): {
+    readonly plan: BroadcastPlan;
+    readonly deliveries: readonly InjectResult[];
+    readonly replayed: boolean;
+  } {
+    const { stores } = this.deps;
+    const recorded = stores.broadcasts.deliveriesOf(existing.id);
+    const author: Author =
+      existing.authorKind === "session"
+        ? {
+            kind: "session",
+            sessionId: existing.authorSession as SessionId,
+          }
+        : { kind: "human" };
+
+    const ledger = new Map(
+      recorded.flatMap((delivery) =>
+        stores.sessions
+          .injections(delivery.sessionId)
+          .filter((entry) => entry.id === delivery.injectionId)
+          .map((entry) => [delivery.injectionId, entry] as const),
+      ),
+    );
+
+    return {
+      plan: {
+        broadcastId: existing.id,
+        origin: existing.origin,
+        senderSessionId:
+          existing.senderSessionId === null
+            ? null
+            : (existing.senderSessionId as SessionId),
+        category: existing.category,
+        scope: stores.broadcasts.scopeOf(existing),
+        target:
+          existing.targetJson === null
+            ? null
+            : (JSON.parse(existing.targetJson) as HumanBroadcastTarget),
+        author,
+        text: existing.text,
+        content: {
+          objectId: existing.objectId as ObjectId,
+          nodeId: existing.nodeId as NodeId,
+          kind: "note",
+          scope: "local",
+          title: existing.text,
+          body: existing.text,
+          createdAt: existing.at,
+        },
+        deliveries: recorded.map((delivery) => ({
+          sessionId: delivery.sessionId,
+          workstreamId: delivery.workstreamId,
+          edge: {
+            id: `edge_${existing.id}_${delivery.sessionId}` as EdgeId,
+            kind: "context",
+            from: existing.nodeId as NodeId,
+            to: existing.nodeId as NodeId,
+            author,
+            ordinal: 1,
+            createdAt: existing.at,
+          },
+          ledgerEntry: {
+            id: delivery.injectionId as InjectionId,
+            sessionId: delivery.sessionId,
+            author,
+            nodeId: existing.nodeId as NodeId,
+            text: existing.text,
+            queuedAt: existing.at,
+          },
+        })),
+        spendChargedTo:
+          existing.senderSessionId === null
+            ? []
+            : attributionChain(stores, existing.senderSessionId),
+        at: existing.at,
+      },
+      deliveries: recorded.map((delivery) => {
+        const entry = ledger.get(delivery.injectionId);
+        return {
+          injectionId: delivery.injectionId,
+          nodeId: existing.nodeId,
+          edgeId: `edge_${existing.id}_${delivery.sessionId}`,
+          objectId: existing.objectId,
+          // The status the ledger recorded, not a fresh guess: a delivery that was
+          // refused the first time is still refused (§6.5).
+          status: entry?.refusedAt == null ? "queued" : "refused",
+          refusedReason: entry?.refusedReason ?? null,
+          replayed: true,
+        };
+      }),
+      replayed: true,
+    };
   }
 
   /**

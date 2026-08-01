@@ -1356,4 +1356,25 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX run_initiations_command_idx ON run_initiations (command_id);
     `,
   },
+  {
+    id: 18,
+    name: "initiation_kind",
+    sql: `
+      -- Which gesture spent this key.
+      --
+      -- The key was compared by command alone, which made it possible to reuse one
+      -- across *kinds*: a run of command X and a fork of a session of command X both
+      -- named X, so the second gesture was handed the first one's answer and called
+      -- it a retry. "One gesture creates one thing" (principle 9) is about the
+      -- gesture, not about the command it happens to mention.
+      --
+      -- Existing rows are runs: every initiation before this column existed was one.
+      --
+      -- No CHECK, deliberately: constraining it needs a table rebuild, and this
+      -- table has been rebuilt twice already (migrations 17 and 15's neighbour).
+      -- The vocabulary is enforced by the store's typed parameter instead, which is
+      -- weaker than a CHECK and is recorded as such rather than implied.
+      ALTER TABLE run_initiations ADD COLUMN kind TEXT NOT NULL DEFAULT 'run';
+    `,
+  },
 ];
