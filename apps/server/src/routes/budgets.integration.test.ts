@@ -289,6 +289,60 @@ describe("a session reads what binds it (§8)", () => {
     expect(at(batch, "limitMicros")).toBe(5_000_000);
   });
 
+  it("counts what a batch entry delegated against the batch's cap", async () => {
+    // The evasion this closes: a batch cap that counted only its entries' *own*
+    // spend is a cap any entry can walk around by delegating — three entries under
+    // one $5 cap could hand $5 each to a child and the batch would never move.
+    // A batch cap binds transitively for the same reason a run cap does (§3.6).
+    const harness = await bootWithScript(spends(0.01));
+    const fixture = await command(harness, { lifecycle: "open" });
+
+    const initiated = await harness.ok("/run-scopes", {
+      method: "POST",
+      body: {
+        scope: "one",
+        scopeId: fixture.commandId,
+        initiationKey: "batch-delegation",
+        spendCapMicros: 5_000_000,
+      },
+    });
+
+    const entrySession = await waitFor(async () => {
+      const batch = await harness.ok(
+        `/run-batches/${str(initiated, "batch.id")}`,
+      );
+      const found = list(batch, "entries").find(
+        (entry) => at(entry, "sessionId") !== null,
+      );
+      return found === undefined ? null : str(found, "sessionId");
+    }, "the scoped run to be admitted");
+
+    // The entry delegates $2 of work to a child that is not in the batch at all.
+    const delegated = await command(harness, {
+      lifecycle: "open",
+      name: "Delegated by a batch entry",
+    });
+    const child = str(
+      await run(harness, delegated.commandId, spends(2), {
+        actor: `session:${entrySession}`,
+      }),
+      "session.id",
+    );
+
+    const batch = await waitFor(async () => {
+      const read = await harness.ok(`/sessions/${entrySession}/budget`);
+      const binding = list(read, "budget.bindings").find(
+        (one) => at(one, "kind") === "batch",
+      );
+      return at(binding, "spentMicros") === 0 ? null : (binding ?? null);
+    }, "the delegated spend to reach the batch's cap");
+
+    // The child's $2 plus the entry's own $0.01: the batch sees money it never
+    // spent itself, which is the whole point of a cap over a gesture.
+    expect(at(batch, "spentMicros")).toBe(2_010_000);
+    expect(child).not.toBe(entrySession);
+  });
+
   it("reports a workstream's own budget beside the ceiling", async () => {
     const harness = await boot(repository());
     const fixture = await command(harness, { lifecycle: "open" });

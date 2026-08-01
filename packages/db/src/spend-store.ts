@@ -54,6 +54,23 @@ export interface SpendWindow {
   readonly since?: number | undefined;
 }
 
+/**
+ * Why a row exists, and therefore what its amount means (migration 22).
+ *
+ * The ledger has two writers with two different grains, and the key has to tell
+ * them apart. An accounting row restates a spender's **cumulative** total every
+ * time the fold moves; a broadcast's induced charge is an **increment** for one
+ * broadcast. Sharing a key, the second of anything replaced the first, and a
+ * cumulative total could overwrite an increment (or the reverse) with a number
+ * that meant something else entirely.
+ */
+export const ACCOUNTING_CAUSE = "accounting";
+
+/** §6.5's induced charge, one cause per broadcast so two are two charges. */
+export function broadcastCause(broadcastId: string): string {
+  return `broadcast:${broadcastId}`;
+}
+
 /** One session's own spend, for §8's "the biggest spender". */
 export interface SessionSpendTotal {
   readonly sessionId: SessionId;
@@ -71,18 +88,30 @@ export class SpendStore {
   /**
    * Attribute one session's observed spend to every session in its chain.
    *
-   * Idempotent per (charged session, spender): a session whose total grew is
-   * re-attributed by *replacing* its rows, never by adding a second one — the
-   * accounting fold recomputes a total from the log, so the same spend observed
-   * twice must not be charged twice (principle 9, applied to money).
+   * Idempotent per (charged session, spender, **cause**): a session whose total
+   * grew is re-attributed by *replacing* its rows, never by adding a second one —
+   * the accounting fold recomputes a total from the log, so the same spend
+   * observed twice must not be charged twice (principle 9, applied to money).
+   *
+   * The cause is part of the key because two different things write here and they
+   * mean different amounts. {@link ACCOUNTING_CAUSE} rows carry a spender's
+   * **cumulative** total, folded from its log, and must be replaced as it grows.
+   * A broadcast's induced charge ({@link broadcastCause}) is an **increment** — the
+   * slice of a recipient's turn one broadcast caused (§6.5) — and two broadcasts
+   * from the same sender to the same recipient are two charges, not one restated.
+   * Keyed on the pair alone, the second silently replaced the first, and either
+   * kind could overwrite the other with a number that meant something else.
    */
   attribute(input: {
     readonly chain: readonly SessionId[];
     readonly workstreamId: string;
     readonly spend: SessionSpend;
+    /** Defaults to the accounting fold; §6.5's charges name their broadcast. */
+    readonly cause?: string;
   }): readonly SpendAttributionEntry[] {
     const entries = attributeSpend(input.chain, input.spend);
     if (entries.length === 0) return entries;
+    const cause = input.cause ?? ACCOUNTING_CAUSE;
 
     this.state.db.transaction(() => {
       for (const entry of entries) {
@@ -96,12 +125,14 @@ export class SpendStore {
             basis: entry.basis,
             amountMicros: Math.round(entry.amountUsd * 1_000_000),
             costBasis: entry.costBasis,
+            cause,
             at: entry.at,
           })
           .onConflictDoUpdate({
             target: [
               spendAttributions.sessionId,
               spendAttributions.sourceSessionId,
+              spendAttributions.cause,
             ],
             set: {
               amountMicros: Math.round(entry.amountUsd * 1_000_000),
@@ -170,11 +201,18 @@ export class SpendStore {
   }
 
   /**
-   * What a batch's cap must count: the own spend of every session in it.
+   * What a batch's cap must count: everything **charged to** the sessions in it.
    *
-   * Keyed on the *spender* rather than the charged session, so a batch whose
-   * sessions delegated counts each delegated dollar once rather than once per
-   * ancestor inside the batch.
+   * Charged-to, not spent-by, and that is the whole of it. A batch cap has to bind
+   * transitively for the same reason a run cap does (§3.6, principle 2): an entry
+   * that delegates has its child's spend charged to it, and a batch that counted
+   * only its entries' *own* rows would see none of it — three entries under a $5
+   * batch cap could each delegate $5 away and the cap would never move. Summing
+   * both bases over the batch's sessions is exactly summing each entry's
+   * {@link sessionTotal}.
+   *
+   * No double count: entries of one batch are siblings of each other, never each
+   * other's ancestors, so a delegated dollar lands on exactly one of them.
    */
   sessionsTotal(
     sessionIds: readonly string[],
@@ -182,7 +220,7 @@ export class SpendStore {
   ): SpendTotal {
     if (sessionIds.length === 0) return { amountMicros: 0, sources: 0 };
     return this.total(
-      sql`${inArray(spendAttributions.sourceSessionId, [...sessionIds])} and ${spendAttributions.basis} = 'own'`,
+      sql`${inArray(spendAttributions.sessionId, [...sessionIds])}`,
       window,
     );
   }

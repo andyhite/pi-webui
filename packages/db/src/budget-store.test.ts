@@ -12,6 +12,7 @@ import {
 import { eq } from "drizzle-orm";
 import { manualClock, type ManualClock } from "@plotroom/core/testing";
 import { BudgetStore } from "./budget-store.js";
+import { broadcastCause } from "./spend-store.js";
 import { sessions as sessionRows } from "./schema.js";
 import { openDatabase, type PlotroomDatabase } from "./client.js";
 import { SessionStore } from "./session-store.js";
@@ -259,6 +260,40 @@ describe("spend outlives the sessions that spent it (§8)", () => {
     expect(spend.sessionsTotal([]).amountMicros).toBe(0);
   });
 
+  it("counts what a batch's entries delegated, not only what they spent", () => {
+    // The evasion this closes: three entries under one $5 batch cap, each
+    // delegating its work to a child. Counting only the entries' `own` rows, the
+    // batch would see nothing at all and its cap would never move, however much
+    // the children spent — which is a cap the batch can walk around by delegating
+    // (§3.6's "its spend counts against every budget that binds the initiating
+    // work", which the batch binding is one of).
+    const entries = [startSession(), startSession(), startSession()];
+
+    for (const entry of entries) {
+      const child = startSession();
+      spend.attribute({
+        chain: [child.id, entry.id],
+        workstreamId,
+        spend: {
+          sessionId: child.id,
+          amountUsd: 2,
+          basis: "reported",
+          at: clock.now(),
+        },
+      });
+    }
+
+    const batch = spend.sessionsTotal(entries.map((entry) => entry.id));
+
+    // $6 against a $5 cap: the batch is over, and says so.
+    expect(batch.amountMicros).toBe(6_000_000);
+    // Each entry sees its own child, and only its own — summing the batch is
+    // summing the entries, because siblings are never in each other's chains.
+    for (const entry of entries) {
+      expect(spend.sessionTotal(entry.id).amountMicros).toBe(2_000_000);
+    }
+  });
+
   it("names the biggest spender by who spent, not by who delegated", () => {
     const parent = startSession();
     const child = startSession();
@@ -291,5 +326,113 @@ describe("spend outlives the sessions that spent it (§8)", () => {
     // total counts each dollar once.
     expect(spend.sessionTotal(parent.id).amountMicros).toBe(4_000_000);
     expect(spend.fleetTotal().amountMicros).toBe(4_000_000);
+  });
+});
+
+describe("a charge names its cause (§6.5, migration 22)", () => {
+  it("keeps two broadcasts from one sender as two charges, not one replaced", () => {
+    const sender = startSession();
+    const recipient = startSession();
+
+    // Two broadcasts, each inducing $1 of the same recipient's work. Keyed on
+    // (charged session, spender) alone, the second silently replaced the first and
+    // the sender was billed once for two broadcasts.
+    for (const broadcastId of ["bcast_1", "bcast_2"]) {
+      spend.attribute({
+        chain: [sender.id],
+        workstreamId,
+        spend: {
+          sessionId: recipient.id,
+          amountUsd: 1,
+          basis: "reported",
+          at: clock.now(),
+        },
+        cause: broadcastCause(broadcastId),
+      });
+    }
+
+    expect(spend.sessionTotal(sender.id).amountMicros).toBe(2_000_000);
+    expect(spend.forSession(sender.id)).toHaveLength(2);
+  });
+
+  it("replays one broadcast's charge without adding a second", () => {
+    const sender = startSession();
+    const recipient = startSession();
+
+    // Same cause twice: the same charge restated, which is the idempotency the
+    // pair key gave and the cause key must keep (principle 9, applied to money).
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      spend.attribute({
+        chain: [sender.id],
+        workstreamId,
+        spend: {
+          sessionId: recipient.id,
+          amountUsd: 1,
+          basis: "reported",
+          at: clock.now(),
+        },
+        cause: broadcastCause("bcast_1"),
+      });
+    }
+
+    expect(spend.sessionTotal(sender.id).amountMicros).toBe(1_000_000);
+    expect(spend.forSession(sender.id)).toHaveLength(1);
+  });
+
+  it("never lets an induced slice and a cumulative total overwrite each other", () => {
+    const sender = startSession();
+    const recipient = startSession();
+
+    // The sender is also the recipient's ancestor — the overlap §6.5 accepts. The
+    // fold charges it the recipient's *cumulative* total; a broadcast charges it a
+    // *slice*. Sharing a key, whichever wrote last destroyed the other's number.
+    spend.attribute({
+      chain: [recipient.id, sender.id],
+      workstreamId,
+      spend: {
+        sessionId: recipient.id,
+        amountUsd: 10,
+        basis: "reported",
+        at: clock.now(),
+      },
+    });
+    spend.attribute({
+      chain: [sender.id],
+      workstreamId,
+      spend: {
+        sessionId: recipient.id,
+        amountUsd: 1,
+        basis: "reported",
+        at: clock.now(),
+      },
+      cause: broadcastCause("bcast_1"),
+    });
+
+    // Both survive, and the accounting row still says what the recipient's whole
+    // session cost rather than what one broadcast induced.
+    const rows = spend.forSession(sender.id);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.amountMicros).sort((a, b) => a - b)).toEqual([
+      1_000_000, 10_000_000,
+    ]);
+
+    // The fold restating a grown total still replaces its own row and touches no
+    // other: $10 becomes $12, the induced $1 stays $1.
+    spend.attribute({
+      chain: [recipient.id, sender.id],
+      workstreamId,
+      spend: {
+        sessionId: recipient.id,
+        amountUsd: 12,
+        basis: "reported",
+        at: clock.now(),
+      },
+    });
+
+    expect(spend.sessionTotal(sender.id).amountMicros).toBe(13_000_000);
+    // And the fleet total is unmoved by an induced charge: it sums `own` rows, and
+    // an induced row is always `descendant`, so the recipient's turn is counted
+    // once however many senders caused part of it.
+    expect(spend.fleetTotal().amountMicros).toBe(12_000_000);
   });
 });
