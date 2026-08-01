@@ -18,3 +18,4 @@ export * from "./lineage.js";
 export * from "./workstreams.js";
 export * from "./commands.js";
 export * from "./runs.js";
+export * from "./sessions/index.js";
