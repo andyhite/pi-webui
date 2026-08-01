@@ -78,6 +78,21 @@ export interface ClaimApprovalAnswerer {
     readonly by: Author;
   }): unknown;
   waitExists(waitId: string): boolean;
+  /**
+   * Whether this actor may write this path right now (§3.4). Asked again when an
+   * approval is answered, because **an approval answers whether capability was
+   * granted and never who may write a path** — the same rule that stops a
+   * pre-grant piercing a claim (principle 4). Time passes between a raise and an
+   * answer, and somebody else may hold the path by then.
+   */
+  checkWrite(
+    workstreamId: string,
+    actor: Author,
+    path: string,
+  ): {
+    readonly allowed: boolean;
+    readonly refusal?: { readonly message: string };
+  };
 }
 
 export interface RaiseApprovalRequest {
@@ -472,7 +487,7 @@ export class ApprovalService {
    * `SteeringService.answer` reports for a question.
    */
   private async settle(approval: Approval): Promise<boolean> {
-    const outcome = approvalOutcome(approval);
+    const outcome = this.settlingOutcome(approval);
     const live = this.deps.hub.get(approval.sessionId);
     if (approval.requestId === null || outcome === null || live === null) {
       return false;
@@ -489,6 +504,40 @@ export class ApprovalService {
       });
       return false;
     }
+  }
+
+  /**
+   * What the blocked call is told — the answer, and then the claim check it
+   * never got.
+   *
+   * A `must-ask` verdict returns before `decideToolPermission`'s claim loop, so
+   * for an ask that declared paths the claim question is still open when the
+   * operator answers. Approving is a decision about **capability** (§6.6); it is
+   * not a decision about who may write a path (§3.4), and an allow that skipped
+   * the check would be a second writer on one path — the exact hole
+   * `evaluatePreGrants` is kept out of (principle 4). Refusing here returns the
+   * claim manager's own words, so the session is told which gate is closed.
+   */
+  private settlingOutcome(approval: Approval) {
+    const outcome = approvalOutcome(approval);
+    if (outcome === null || outcome.kind !== "allow") return outcome;
+
+    const claims = this.deps.claims;
+    if (claims === undefined || approval.ask.paths.length === 0) return outcome;
+
+    const actor = sessionAuthor(approval.sessionId);
+    for (const path of approval.ask.paths) {
+      const check = claims.checkWrite(approval.workstreamId, actor, path);
+      if (check.allowed) continue;
+      return {
+        kind: "deny" as const,
+        reason:
+          check.refusal?.message ??
+          `the operator approved this, but ${path} is held by someone else (§3.4)`,
+      };
+    }
+
+    return outcome;
   }
 
   private publish(approval: Approval, verb: "created" | "updated"): void {
