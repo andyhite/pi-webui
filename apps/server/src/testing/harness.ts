@@ -40,7 +40,18 @@ export interface CallResult {
   readonly body: unknown;
 }
 
-let port = 47100;
+/**
+ * Ports are per worker, not per module.
+ *
+ * Vitest runs suites in parallel workers, each with its own copy of this module,
+ * so a shared starting number means two suites binding the same port — and the
+ * failure is not a clean EADDRINUSE but requests landing on *the other suite's
+ * server*, which looks like an unrelated refusal. Each worker gets its own band.
+ */
+const worker = Number(
+  process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? 1,
+);
+let port = 47100 + (Number.isFinite(worker) ? worker : 1) * 300;
 
 const harnesses: Harness[] = [];
 const scratch: string[] = [];
@@ -303,6 +314,16 @@ export async function command(
 
 let gesture = 0;
 
+/**
+ * A key unique to this worker, so "the same gesture" means the same gesture and
+ * two suites cannot collide on one (principle 9's own mechanism, applied to the
+ * test harness).
+ */
+function nextGesture(): string {
+  gesture += 1;
+  return `gesture-${worker}-${gesture}`;
+}
+
 /** Run one command through the real run path, with a declared script. */
 export async function run(
   harness: Harness,
@@ -310,12 +331,11 @@ export async function run(
   script: RuntimeScript,
   options: { readonly actor?: string } = {},
 ): Promise<unknown> {
-  gesture += 1;
   return harness.ok("/runs", {
     method: "POST",
     body: {
       commandId,
-      initiationKey: `gesture-${gesture}`,
+      initiationKey: nextGesture(),
       runtime: { script },
     },
     ...(options.actor === undefined ? {} : { actor: options.actor }),
