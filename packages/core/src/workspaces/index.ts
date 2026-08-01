@@ -12,6 +12,8 @@
  * mechanism contract; `git/` is the first implementation of it.
  */
 export * from "./divergence.js";
+export * from "./fs.js";
+export * from "./git/index.js";
 /** `EpochMillis` is re-exported by `sessions/runtime.ts`, which owns it. */
 export type {
   MillisClock,
