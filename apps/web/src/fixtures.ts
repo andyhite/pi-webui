@@ -497,6 +497,14 @@ export const FIXTURE_INJECTIONS: InjectionLedger = (() => {
 
 export const FIXTURE_WORKSPACE_DIFF: WorkspaceDiff = {
   workspaceId: "workspace-oxy-2982",
+  state: "ready",
+  reason: null,
+  base: {
+    ref: "main",
+    resolved: "deadbeef",
+    description:
+      "everything this workspace changed since it branched from main",
+  },
   files: [
     {
       path: "apps/server/src/routes/tickets.ts",

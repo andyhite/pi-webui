@@ -21,10 +21,13 @@ import {
   NotePanel,
   PaletteRail,
   PlotCanvas,
+  StopControls,
   beginRun,
   browserWebSocketFactory,
   createApiActions,
+  createApiDiffDataSource,
   createApiGraphDataSource,
+  createApiQuestionDataSource,
   createApiSessionDataSource,
   createFixtureDiffDataSource,
   createFixtureGraphDataSource,
@@ -47,7 +50,7 @@ import {
   pruneMember,
   useSelectionRoute,
 } from "@plotroom/ui";
-import type { WarningGraphNode } from "@plotroom/ui";
+import type { InjectionLedgerEntry, WarningGraphNode } from "@plotroom/ui";
 
 import {
   FIXTURE_COLLECTION,
@@ -112,32 +115,35 @@ const sessionDataSource = LIVE
     });
 
 /**
- * Injection (§6.5) has no server endpoint yet (Track A: Batch 3 scope) —
- * disabled with this reason rather than the composer pretending a click
- * delivered something it did not, live or fixture-fed alike.
+ * Injection (§6.5): live over Track A's Stage 2 steering endpoints
+ * (`POST /sessions/:id/inject`, now merged to main) — offline/fixture mode
+ * still names why it cannot act, the same pattern `CHECKPOINT_DISABLED_
+ * REASON` below already uses.
  */
-const SEND_DISABLED_REASON =
-  "session injection has no server endpoint yet (Batch 3 scope)";
+const SEND_DISABLED_REASON = LIVE
+  ? undefined
+  : "offline mode: sending was not saved";
 
 /**
- * The Diff panel's data seam (spec §11, Epic 5.1 finish): no
- * workspace/diff server endpoint exists on `main` yet (`diff/data-source.ts`
- * states the exact swap point), so this is fixture-fed either way — unlike
- * the graph/session seams above, there is no live implementation to switch
- * to yet.
+ * The Diff panel's data seam (spec §11, Epic 5.1 finish): live over Track
+ * A's `GET /api/workstreams/:id/diff` (now merged to main), addressed by
+ * workstream id.
  */
-const diffDataSource = createFixtureDiffDataSource(
-  new Map([[FIXTURE_WORKSPACE_DIFF.workspaceId, FIXTURE_WORKSPACE_DIFF]]),
-);
+const diffDataSource = LIVE
+  ? createApiDiffDataSource({ http: httpClient })
+  : createFixtureDiffDataSource(
+      new Map([["workstream-oxy-2982", FIXTURE_WORKSPACE_DIFF]]),
+    );
 
 /**
- * Structured questions as bubbles (§6.4): no stream carries an open
- * question yet (`bubbles/question-source.ts` states the exact gap), so
- * this fixture is what answers one today, live or fixture-fed graph alike.
+ * Structured questions as bubbles (§6.4): live over Track A's Stage 2
+ * steering endpoints (`GET /api/sessions`, `GET /sessions/:id/questions`,
+ * `POST /questions/:id/answer`, the `session_question` `/ws` entity), now
+ * merged to main.
  */
-const questionDataSource = createFixtureQuestionDataSource(
-  FIXTURE_OPEN_QUESTIONS,
-);
+const questionDataSource = LIVE
+  ? createApiQuestionDataSource({ http: httpClient, createSocket: wsFactory })
+  : createFixtureQuestionDataSource(FIXTURE_OPEN_QUESTIONS);
 
 /**
  * The transcript checkpoint gesture (§3.6, §6.1) has a real server endpoint
@@ -181,6 +187,15 @@ export function App() {
   const [runsInFlight, setRunsInFlight] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  // A run admitted but waiting under the concurrency limit (§4.1, Batch 3's
+  // decision): "queued" is not a refusal, so it gets its own state rather
+  // than folding into runsInFlight's binary "is a request outstanding".
+  const [queuedRuns, setQueuedRuns] = useState<
+    ReadonlyMap<
+      string,
+      { readonly queueEntryId: string; readonly position: number | null }
+    >
+  >(new Map());
   const { selectedNodeId, select } = useSelectionRoute();
 
   const [graph, setGraph] = useState<GraphSnapshot | null>(null);
@@ -193,6 +208,17 @@ export function App() {
     if (!graph || !selectedNodeId) return null;
     const node = graph.nodes.find((n) => n.id === selectedNodeId);
     return node?.role === "session" ? (node.refId as SessionId) : null;
+  }, [graph, selectedNodeId]);
+
+  // The workstream the selected node lives inside, if any — a container's
+  // own id *is* its workstream's id (`build-snapshot.ts` sets them equal),
+  // so this is a plain lookup rather than a second id space. Both the Diff
+  // panel and the stop controls read it: "a workstream's changes" and
+  // "stop this workstream" are both about the same container.
+  const selectedWorkstreamId = useMemo(() => {
+    if (!graph || !selectedNodeId) return null;
+    const node = graph.nodes.find((n) => n.id === selectedNodeId);
+    return node?.containerId ?? null;
   }, [graph, selectedNodeId]);
 
   const [collapsedContainerIds, setCollapsedContainerIds] = useState<
@@ -239,20 +265,28 @@ export function App() {
 
   const attentionNodeIds = useMemo<readonly string[]>(() => [], []);
 
-  // Speech bubbles (§5): session sayings/tool-in-flight are fed live off
-  // the same `SessionDataSource` the Conversation panel already uses — one
-  // subscription per session-role node currently on the graph, kept live
-  // exactly the way `subscribeSession`/`subscribeTranscript` already are
-  // elsewhere. Structured questions and injections have no live stream yet
-  // (see `bubbles/question-source.ts`, `FIXTURE_INJECTIONS`), so those stay
-  // fixture-fed until Track A/C land the endpoints.
+  // Speech bubbles (§5): session sayings/tool-in-flight and the injection
+  // ledger are fed live off the same `SessionDataSource` the Conversation
+  // panel already uses — one subscription per session-role node currently
+  // on the graph, kept live exactly the way `subscribeSession`/
+  // `subscribeTranscript`/`subscribeInjections` already are elsewhere.
+  // Structured questions have their own live source (`questionDataSource`
+  // above); offline/fixture mode falls back to `FIXTURE_INJECTIONS`, since
+  // there is no live ledger to subscribe to without a server.
   const sessionNodeIds = useMemo(
     () =>
       (graph?.nodes ?? []).filter((n) => n.role === "session").map((n) => n.id),
     [graph],
   );
   const [sessionBubbleData, setSessionBubbleData] = useState<
-    ReadonlyMap<string, { transcript: Transcript; phase: SessionPhase }>
+    ReadonlyMap<
+      string,
+      {
+        transcript: Transcript;
+        phase: SessionPhase;
+        injections: readonly InjectionLedgerEntry[];
+      }
+    >
   >(new Map());
 
   useEffect(() => {
@@ -260,10 +294,11 @@ export function App() {
       const sessionId = nodeId as SessionId;
       let transcript: Transcript = { sessionId, turns: [] };
       let phase: SessionPhase = { kind: "idle" };
+      let injections: readonly InjectionLedgerEntry[] = [];
       function apply(): void {
         setSessionBubbleData((current) => {
           const next = new Map(current);
-          next.set(nodeId, { transcript, phase });
+          next.set(nodeId, { transcript, phase, injections });
           return next;
         });
       }
@@ -281,9 +316,17 @@ export function App() {
           apply();
         },
       );
+      const unsubscribeInjections = sessionDataSource.subscribeInjections(
+        sessionId,
+        (event) => {
+          injections = event.injections;
+          apply();
+        },
+      );
       return () => {
         unsubscribeTranscript();
         unsubscribeSession();
+        unsubscribeInjections();
       };
     });
     return () => {
@@ -325,17 +368,29 @@ export function App() {
       });
     });
 
-    // Fixture-fed (§6.5, see `diffDataSource`'s sibling note above): rendered
-    // on whichever session node(s) the fixture ledger names, live graph or
-    // not.
-    const injectedNodeIds = new Set(
-      [...FIXTURE_INJECTIONS.values()].map((entry) => entry.nodeId as string),
-    );
-    const injectionSources = sessionNodeIds.flatMap((nodeId) =>
-      injectedNodeIds.has(nodeId)
-        ? deriveInjectionBubbleSources(nodeId, FIXTURE_INJECTIONS)
-        : [],
-    );
+    // Live (§6.5): each session node's own ledger, off the same
+    // subscription that feeds sessionSources above. Offline/fixture mode
+    // has no live ledger to read, so it falls back to the fixture one,
+    // rendered on whichever session node(s) it names.
+    const injectionSources = LIVE
+      ? sessionNodeIds.flatMap((nodeId) => {
+          const data = sessionBubbleData.get(nodeId);
+          if (!data || data.injections.length === 0) return [];
+          return deriveInjectionBubbleSources(
+            nodeId,
+            new Map(data.injections.map((entry) => [entry.id, entry])),
+          );
+        })
+      : sessionNodeIds.flatMap((nodeId) => {
+          const injectedNodeIds = new Set(
+            [...FIXTURE_INJECTIONS.values()].map(
+              (entry) => entry.nodeId as string,
+            ),
+          );
+          return injectedNodeIds.has(nodeId)
+            ? deriveInjectionBubbleSources(nodeId, FIXTURE_INJECTIONS)
+            : [];
+        });
 
     const questionSources: BubbleSource[] = openQuestions.map((question) => ({
       id: `${question.nodeId}:question:${question.id}`,
@@ -457,6 +512,21 @@ export function App() {
               dataSource={sessionDataSource}
               draftsStore={sessionDraftsStore}
               sendDisabledReason={SEND_DISABLED_REASON}
+              onSend={(sessionId, text) => {
+                void actions
+                  .injectIntoSession({ sessionId, text })
+                  .then((result) => {
+                    if (!result.ok) {
+                      log(
+                        `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                      );
+                      return;
+                    }
+                    log(
+                      `injected into ${sessionId}: ${result.value.status}${result.value.refusedReason ? ` (${result.value.refusedReason})` : ""}`,
+                    );
+                  });
+              }}
               checkpointDisabledReason={CHECKPOINT_DISABLED_REASON}
               onCheckpointTranscript={(sessionId) => {
                 void actions.checkpointTranscript(sessionId).then((result) => {
@@ -489,16 +559,42 @@ export function App() {
         id: "diff",
         title: "Diff",
         initialState: null,
+        render: () =>
+          selectedWorkstreamId ? (
+            <DiffPanel
+              workstreamId={selectedWorkstreamId}
+              dataSource={diffDataSource}
+            />
+          ) : (
+            <div>select a node inside a workstream to see its diff</div>
+          ),
+      }),
+    );
+    registry.register(
+      definePanel<null>({
+        id: "stop",
+        title: "Stop",
+        initialState: null,
         render: () => (
-          <DiffPanel
-            workspaceId={FIXTURE_WORKSPACE_DIFF.workspaceId}
-            dataSource={diffDataSource}
+          <StopControls
+            selectedSessionId={selectedSessionId}
+            selectedWorkstreamId={selectedWorkstreamId}
+            previewStop={actions.previewStop}
+            stopScope={actions.stopScope}
+            onStopped={(scope, stoppedSessionIds) =>
+              log(
+                `stopped (${scope.scope}): ${stoppedSessionIds.length ? stoppedSessionIds.join(", ") : "nothing was running"}`,
+              )
+            }
+            onRefused={(scope, message) =>
+              log(`refused to stop (${scope.scope}): ${message}`)
+            }
           />
         ),
       }),
     );
     return registry;
-  }, [initialNote, warnings, select, selectedSessionId]);
+  }, [initialNote, warnings, select, selectedSessionId, selectedWorkstreamId]);
 
   if (placements === null || graph === null) {
     return null;
@@ -704,8 +800,23 @@ export function App() {
                   );
                   return;
                 }
+                const outcome = result.value;
+                if (outcome.kind === "queued") {
+                  setQueuedRuns((current) => {
+                    const next = new Map(current);
+                    next.set(commandNodeId, {
+                      queueEntryId: outcome.queueEntryId,
+                      position: outcome.position,
+                    });
+                    return next;
+                  });
+                  log(
+                    `run for ${commandNodeId} queued at position ${outcome.position ?? "?"} (concurrency limit reached)`,
+                  );
+                  return;
+                }
                 log(
-                  `run ${result.value.runId} started; session ${result.value.sessionId}`,
+                  `run ${outcome.runId} started; session ${outcome.sessionId}`,
                 );
               });
           }}
@@ -787,6 +898,51 @@ export function App() {
               ))}
             </ul>
           ) : null}
+        </section>
+
+        <section>
+          <h2>queued runs (§4.1)</h2>
+          {queuedRuns.size === 0 ? (
+            <div>nothing waiting on the concurrency limit</div>
+          ) : (
+            <ul>
+              {[...queuedRuns.entries()].map(([commandNodeId, queued]) => (
+                <li
+                  key={commandNodeId}
+                  data-testid={`queued-run-${commandNodeId}`}
+                >
+                  {commandNodeId}: position {queued.position ?? "?"}{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void actions
+                        .cancelQueuedRun(queued.queueEntryId)
+                        .then((result) => {
+                          setQueuedRuns((current) => {
+                            const next = new Map(current);
+                            next.delete(commandNodeId);
+                            return next;
+                          });
+                          if (!result.ok) {
+                            log(
+                              `refused to cancel queued run: ${result.refusal.message}`,
+                            );
+                            return;
+                          }
+                          log(
+                            result.value.cancelled
+                              ? `cancelled queued run for ${commandNodeId}`
+                              : `queued run for ${commandNodeId} had already started or settled`,
+                          );
+                        });
+                    }}
+                  >
+                    cancel
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <section>
