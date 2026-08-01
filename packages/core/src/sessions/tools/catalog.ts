@@ -198,6 +198,13 @@ const workstreamTools: readonly AgentTool[] = [
     },
   }),
   read(
+    "workspace_diff_read",
+    "Read a workspace's changes: the file tree and the patch per file, read-only (§11).",
+    "the Diff panel",
+    "/api/workstreams/:id/diff",
+    { id: ID },
+  ),
+  read(
     "workstream_spend_read",
     "Read a workstream's total spend — every session in it, counted once (§8).",
     "the spend line on a workstream card",

@@ -30,6 +30,7 @@ import { runRoutes } from "./routes/runs.js";
 import { sessionRoutes } from "./routes/sessions.js";
 import { snapshotRoutes } from "./routes/snapshot.js";
 import { spendRoutes } from "./routes/spend.js";
+import { workspaceRoutes } from "./routes/workspaces.js";
 import { workstreamRoutes } from "./routes/workstreams.js";
 import { RunQueueService } from "./runs/queue.js";
 import { RunService } from "./runs/service.js";
@@ -166,6 +167,15 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", sessionRoutes(stores, runs, claims));
   app.route("/api", claimRoutes(claims));
   app.route("/api", spendRoutes(stores));
+  app.route(
+    "/api",
+    // The diff read (§11). Read-only git through the same host-allowlisted seam
+    // provisioning uses: app credentials never reach a workspace (§3.4).
+    workspaceRoutes(stores, {
+      exec: nodeCommandExec(),
+      hostEnvironment: process.env,
+    }),
+  );
   app.route(
     "/api",
     maintenanceRoutes(stores, config, compaction, workspaceKinds, logger),
