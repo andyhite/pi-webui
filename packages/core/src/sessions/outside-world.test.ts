@@ -178,6 +178,29 @@ describe("fork-before-clean, fork-after-dirty (§6.3)", () => {
     expect(atThree.description).toContain("irreversible");
   });
 
+  it("counts a declared-unknown reversibility as irreversible (principle 7)", () => {
+    // §9.2 lets an action declare that it cannot say. Reading that as reversible
+    // would be the guess principle 7 forbids, on the one axis where guessing wrong
+    // is unrecoverable — so `isIrreversibleWrite` collapses it the safe way, and a
+    // fork after it inherits a write nobody can promise to undo.
+    const unsure = declareToolWorld({
+      jira_transition: {
+        kind: "outside-world",
+        system: "jira",
+        action: "transition",
+        reversibility: "unknown",
+      },
+    });
+    const unsureMarkers = deriveOutsideWorldMarkers(
+      [turn(1, 1_000), ...call("jira_transition", "c9", 1_010)],
+      unsure,
+    );
+    const cleanliness = forkCleanlinessAt(unsureMarkers, 1);
+    expect(cleanliness.state).toBe("dirty");
+    expect(cleanliness.irreversible).toHaveLength(1);
+    expect(cleanliness.description).toContain("reversibility undeclared");
+  });
+
   it("marks every observed turn, so the transcript can draw them", () => {
     expect(
       forkPointMarkers(markers).map((marker) => [marker.turn, marker.state]),

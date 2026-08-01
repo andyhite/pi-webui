@@ -1,7 +1,15 @@
 import { sessionAuthor } from "../../author.js";
 import type { ClaimManager } from "../../claims/manager.js";
 import type { ClaimState } from "../../claims/model.js";
-import type { SessionId } from "../../ids.js";
+import type { SessionId, WorkstreamId } from "../../ids.js";
+import { toolCallAsk, type ApprovalAsk } from "../approvals/ask.js";
+import { decideApproval } from "../approvals/decide.js";
+import type { PiercedPreGrant, PreGrant } from "../approvals/pre-grants.js";
+import type { ApprovalAuthority } from "../approvals/decide.js";
+import {
+  NO_TOOL_WORLD_DECLARATIONS,
+  type ToolWorldDeclarations,
+} from "../outside-world.js";
 import type { RequestOutcome, RuntimeRequest } from "../runtime.js";
 
 /**
@@ -15,6 +23,24 @@ import type { RequestOutcome, RuntimeRequest } from "../runtime.js";
  * Fail-safe by construction: a tool whose write extent cannot be determined is
  * `unbounded`, and unbounded needs an approval. Nothing is allowed because it was
  * not recognized.
+ *
+ * ## Two axes, and only one of them is claims (§6.6)
+ *
+ * A call is answered along two independent axes, because the two questions are
+ * independent:
+ *
+ * - **How far it writes** (`WriteIntent`) — claims territory (§3.4). One writer per
+ *   path, and an extent nobody could bound raises an approval.
+ * - **What it does to the world** (`ToolWorldDeclaration`) — approvals territory
+ *   (§6.6, §9.2). A declared **irreversible** integration write *always* asks,
+ *   whatever was pre-granted, and this is where that rule bites: an outside-world
+ *   write typically writes no workspace path at all, so before this the intent-`none`
+ *   shortcut allowed a merge outright. Building the ask first is what closed that.
+ *
+ * A pre-grant answers the *approval* question and never the claim one: a covered
+ * call still goes through the claim manager, because isolation is a guarantee rather
+ * than a convention (principle 4) and a pre-grant that pierced a claim would be a
+ * second writer on one path.
  */
 
 export type WriteIntent =
@@ -44,13 +70,22 @@ export interface ToolGateContext {
   readonly manager: ClaimManager;
   readonly intents: WriteIntentDeclaration;
   /**
-   * An approval PlotRoom already holds for this call — pre-granted per session or
-   * per workstream, or answered from the queue (§6.6). Absent means not answered,
-   * which is a denial, not a pass.
+   * An approval PlotRoom already holds for this call — answered from the queue
+   * (§6.6). Absent means not answered, which is a denial, not a pass.
    */
   readonly approvedCallIds?: ReadonlySet<string>;
   /** Identifies this call for the approval above; adapters supply their call id. */
   readonly callId?: string;
+  /**
+   * What this adapter's tools do to the outside world (§9.2). Absent means nothing
+   * is declared, which costs certainty about fork cleanliness (§6.3) and never
+   * grants anything: an undeclared tool is still bounded by its write extent.
+   */
+  readonly world?: ToolWorldDeclarations;
+  /** Standing decisions made in advance (§6.6). Empty is the safe default. */
+  readonly preGrants?: readonly PreGrant[];
+  /** Which workstream's pre-grants bind, alongside the session's own. */
+  readonly workstreamId?: WorkstreamId;
 }
 
 export interface ToolGateDecision {
@@ -59,6 +94,15 @@ export interface ToolGateDecision {
   readonly raisesApproval: boolean;
   /** The paths that decided it, for the transcript and the claims panel. */
   readonly paths: readonly string[];
+  /**
+   * What is being asked, structured — non-null whenever this was a tool call, so a
+   * raise has the record's content without rebuilding it (§6.6, answerable in place).
+   */
+  readonly ask: ApprovalAsk | null;
+  /** Set when a standing decision answered it: the log line for a silent allow. */
+  readonly coveredBy: ApprovalAuthority | null;
+  /** Set when a pre-grant would have covered it and irreversibility pierced it. */
+  readonly piercedPreGrant: PiercedPreGrant | null;
 }
 
 /**
@@ -74,64 +118,107 @@ export function decideToolPermission(
 ): ToolGateDecision {
   if (request.kind !== "tool-permission") {
     return {
+      ...bare,
       outcome: {
         kind: "deny",
         reason:
           "this gate answers tool permissions; a question is answered by a human (§6.4)",
       },
-      raisesApproval: false,
-      paths: [],
     };
   }
 
   const intent = context.intents.intentOf(request.toolName, request.input);
+  const paths = intent.kind === "paths" ? intent.paths : [];
+  const ask = toolCallAsk({
+    toolName: request.toolName,
+    summary: summarize(request.toolName, intent),
+    intent,
+    world: (context.world ?? NO_TOOL_WORLD_DECLARATIONS).forTool(
+      request.toolName,
+    ),
+  });
 
-  if (intent.kind === "none") {
-    return { outcome: { kind: "allow" }, raisesApproval: false, paths: [] };
+  const actor = sessionAuthor(context.sessionId);
+  const approved =
+    context.callId !== undefined &&
+    context.approvedCallIds?.has(context.callId) === true;
+
+  // §6.6, in one call: an answered approval settles it, an irreversible ask can
+  // never be covered in advance, deny wins among what was, and an ask nothing
+  // would have raised needs no approval at all. `decideApproval` is the only place
+  // any of that is decided — the destruction path asks the same function.
+  const verdict = decideApproval(ask, {
+    actor,
+    sessionId: context.sessionId,
+    // A pre-grant with no workstream to bind is a pre-grant that matches nothing,
+    // which is the safe reading of a caller that did not say.
+    workstreamId: (context.workstreamId ?? "") as WorkstreamId,
+    preGrants: context.preGrants ?? [],
+  });
+
+  if (verdict.kind === "denied") {
+    return { ...bare, outcome: { kind: "deny", reason: verdict.reason }, ask };
   }
 
-  if (intent.kind === "unbounded") {
-    const approved =
-      context.callId !== undefined &&
-      context.approvedCallIds?.has(context.callId) === true;
-    if (approved) {
-      return { outcome: { kind: "allow" }, raisesApproval: false, paths: [] };
-    }
+  if (verdict.kind === "must-ask" && !approved) {
     return {
-      outcome: {
-        kind: "deny",
-        reason: `${request.toolName} could write anywhere (${intent.reason}); PlotRoom raises an approval for it (§6.6)`,
-      },
+      ...bare,
+      outcome: { kind: "deny", reason: verdict.reason },
       raisesApproval: true,
-      paths: [],
+      ask,
+      piercedPreGrant: verdict.pierced,
     };
   }
 
-  const actor = sessionAuthor(context.sessionId);
+  const coveredBy =
+    verdict.kind === "allowed" && verdict.by.kind === "pre-grant"
+      ? verdict.by
+      : null;
+
+  // The claim check still runs. A pre-grant answers whether an approval is needed;
+  // it never answers who may write a path (principle 4).
   const denials: string[] = [];
-  for (const path of intent.paths) {
+  for (const path of paths) {
     const check = context.manager.checkWrite(context.claims, actor, path);
     if (!check.allowed) denials.push(check.refusal.message);
   }
 
   if (denials.length > 0) {
     return {
-      outcome: {
-        kind: "deny",
-        reason: denials.join(" "),
-      },
+      ...bare,
+      outcome: { kind: "deny", reason: denials.join(" ") },
       // A claim conflict is not an approval: the holder or the waitlist clears
       // it, and §3.4's own tools are how the session asks.
-      raisesApproval: false,
-      paths: intent.paths,
+      paths,
+      ask,
     };
   }
 
-  return {
-    outcome: { kind: "allow" },
-    raisesApproval: false,
-    paths: intent.paths,
-  };
+  return { ...bare, outcome: { kind: "allow" }, paths, ask, coveredBy };
+}
+
+const bare = {
+  raisesApproval: false,
+  paths: [] as readonly string[],
+  ask: null,
+  coveredBy: null,
+  piercedPreGrant: null,
+} satisfies Omit<ToolGateDecision, "outcome">;
+
+/**
+ * One line about the input, for a row the operator answers without opening the
+ * session (§6.6). Built from the *declared* extent rather than from the raw input,
+ * because the raw input is where a credential would be (§9.3) and a summary that
+ * leaked one would leak it to every outbound notification route (§7.3).
+ */
+function summarize(toolName: string, intent: WriteIntent): string {
+  switch (intent.kind) {
+    case "none":
+    case "paths":
+      return toolName;
+    case "unbounded":
+      return `${toolName} (${intent.reason})`;
+  }
 }
 
 /**

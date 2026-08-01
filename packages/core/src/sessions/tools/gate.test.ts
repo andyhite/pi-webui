@@ -16,6 +16,12 @@ import {
 import type { SessionId } from "../../ids.js";
 import type { RuntimeRequest } from "../runtime.js";
 import { createPiWriteIntents } from "../adapters/pi/write-intents.js";
+import { declareToolWorld } from "../outside-world.js";
+import type { PreGrantId } from "../approvals/ids.js";
+import {
+  ALL_APPROVAL_EXTENTS,
+  type PreGrant,
+} from "../approvals/pre-grants.js";
 import {
   decideToolPermission,
   UNKNOWN_WRITE_INTENTS,
@@ -42,6 +48,50 @@ const writesFile: WriteIntentDeclaration = {
 
 function toolCall(toolName: string, input: unknown): RuntimeRequest {
   return { kind: "tool-permission", toolName, input };
+}
+
+const W = ws();
+
+/** §9.2's declarations: one reversible, one irreversible, one that cannot tell. */
+const worldDeclarations = declareToolWorld({
+  github_merge_pr: {
+    kind: "outside-world",
+    system: "github",
+    action: "merge",
+    reversibility: "irreversible",
+  },
+  github_comment: {
+    kind: "outside-world",
+    system: "github",
+    action: "comment",
+    reversibility: "reversible",
+  },
+  jira_transition: {
+    kind: "outside-world",
+    system: "jira",
+    action: "transition",
+    reversibility: "unknown",
+  },
+});
+
+const writesNothing: WriteIntentDeclaration = {
+  adapterId: "test",
+  intentOf: () => ({ kind: "none" }),
+};
+
+function preGrant(overrides: Partial<PreGrant> = {}): PreGrant {
+  return {
+    id: "pregrant_001" as PreGrantId,
+    scope: { kind: "session", sessionId: A },
+    effect: "allow",
+    kinds: ["tool-permission"],
+    toolPattern: "**",
+    extents: [...ALL_APPROVAL_EXTENTS],
+    grantedBy: humanAuthor,
+    grantedAt: 1,
+    withdrawnAt: null,
+    ...overrides,
+  };
 }
 
 function setup(): {
@@ -210,6 +260,127 @@ describe("decideToolPermission", () => {
       intents: both,
     });
     expect(decision.outcome.kind).toBe("deny");
+  });
+
+  it("takes a pre-grant for an unbounded tool instead of raising, and says which one (§6.6)", () => {
+    const { state, manager } = setup();
+    const decision = decideToolPermission(toolCall("bash", { command: "ls" }), {
+      sessionId: A,
+      claims: state,
+      manager,
+      intents: writesFile,
+      workstreamId: W,
+      preGrants: [preGrant({ toolPattern: "bash" })],
+    });
+    expect(decision.outcome.kind).toBe("allow");
+    expect(decision.raisesApproval).toBe(false);
+    expect(decision.coveredBy).toEqual({
+      kind: "pre-grant",
+      preGrantId: "pregrant_001",
+    });
+  });
+
+  it("still asks the claim manager about a pre-granted write — a pre-grant never pierces a claim (principle 4)", () => {
+    const { state, manager } = setup();
+    const decision = decideToolPermission(
+      toolCall("write_file", { path: "src/auth.ts" }),
+      {
+        sessionId: B,
+        claims: state,
+        manager,
+        intents: writesFile,
+        workstreamId: W,
+        preGrants: [
+          preGrant({ scope: { kind: "workstream", workstreamId: W } }),
+        ],
+      },
+    );
+    expect(decision.outcome.kind).toBe("deny");
+    if (decision.outcome.kind === "deny") {
+      expect(decision.outcome.reason).toContain("sess_a");
+    }
+    expect(decision.raisesApproval).toBe(false);
+  });
+
+  it("denies what a standing decision refused, without asking again", () => {
+    const { state, manager } = setup();
+    const decision = decideToolPermission(
+      toolCall("read_file", { path: "src/auth.ts" }),
+      {
+        sessionId: A,
+        claims: state,
+        manager,
+        intents: writesFile,
+        workstreamId: W,
+        preGrants: [preGrant({ effect: "deny", toolPattern: "read_file" })],
+      },
+    );
+    expect(decision.outcome.kind).toBe("deny");
+    expect(decision.raisesApproval).toBe(false);
+  });
+
+  it("raises for a declared irreversible write that touches no workspace path at all (§6.6, §9.2)", () => {
+    const { state, manager } = setup();
+    const decision = decideToolPermission(toolCall("github_merge_pr", {}), {
+      sessionId: A,
+      claims: state,
+      manager,
+      // The write extent is `none`, which on its own allows outright — which is why
+      // §6.6's rule cannot be a branch of the claim check.
+      intents: writesNothing,
+      world: worldDeclarations,
+      workstreamId: W,
+      preGrants: [preGrant({ kinds: ["integration-write"] })],
+    });
+    expect(decision.outcome.kind).toBe("deny");
+    expect(decision.raisesApproval).toBe(true);
+    expect(decision.piercedPreGrant?.preGrantId).toBe("pregrant_001");
+    expect(decision.ask?.kind).toBe("integration-write");
+  });
+
+  it("treats an undeclared reversibility as irreversible (principle 7)", () => {
+    const { state, manager } = setup();
+    const decision = decideToolPermission(toolCall("jira_transition", {}), {
+      sessionId: A,
+      claims: state,
+      manager,
+      intents: writesNothing,
+      world: worldDeclarations,
+      workstreamId: W,
+      preGrants: [preGrant({ kinds: ["integration-write"] })],
+    });
+    expect(decision.outcome.kind).toBe("deny");
+    expect(decision.raisesApproval).toBe(true);
+  });
+
+  it("lets a reversible integration write through on a pre-grant", () => {
+    const { state, manager } = setup();
+    const decision = decideToolPermission(toolCall("github_comment", {}), {
+      sessionId: A,
+      claims: state,
+      manager,
+      intents: writesNothing,
+      world: worldDeclarations,
+      workstreamId: W,
+      preGrants: [preGrant({ kinds: ["integration-write"] })],
+    });
+    expect(decision.outcome.kind).toBe("allow");
+    expect(decision.raisesApproval).toBe(false);
+  });
+
+  it("allows an irreversible write once its own call was approved from the queue", () => {
+    const { state, manager } = setup();
+    const decision = decideToolPermission(toolCall("github_merge_pr", {}), {
+      sessionId: A,
+      claims: state,
+      manager,
+      intents: writesNothing,
+      world: worldDeclarations,
+      workstreamId: W,
+      callId: "call_1",
+      approvedCallIds: new Set(["call_1"]),
+    });
+    expect(decision.outcome.kind).toBe("allow");
   });
 
   it("re-decides after the claim moves, without any state of its own", () => {

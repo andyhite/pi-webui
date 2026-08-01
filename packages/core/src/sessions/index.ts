@@ -7,11 +7,14 @@
  * injection ledger, accounting, and fork planning — plus Epic 5.2's steering
  * surface (injection as a graph act, structured questions, broadcast, batch
  * gestures, the three-scope stop) and Epic 5.4's continuation surface (resume vs
- * fork, outside-world markers, handoff, continue vs fresh). Adapters live under
+ * fork, outside-world markers, handoff, continue vs fresh) and Epic 6.3's
+ * approvals (`approvals/`: the record, pre-grants, and the rule that
+ * irreversibility pierces them). Adapters live under
  * `adapters/` and translate one runtime's surface into observations
  * (docs/decisions/0001-session-runtime-abstraction.md).
  */
 export * from "./accounting.js";
+export * from "./approvals/index.js";
 export * from "./batch.js";
 export * from "./broadcast.js";
 export * from "./checkpoint.js";

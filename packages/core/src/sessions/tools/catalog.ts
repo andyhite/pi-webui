@@ -72,6 +72,33 @@ export const TOOL_REFLEXIVITY_CLASSES = [
 
 export type ToolReflexivityClass = (typeof TOOL_REFLEXIVITY_CLASSES)[number];
 
+/**
+ * The authored state a destruction-class tool removes (§6.6, principle 10).
+ *
+ * "Destructive gestures against authored state requested by an agent go through
+ * this same channel." *Which* gestures those are is data on the tool rather than a
+ * list somewhere else, so the wiring is a lookup and not a judgement: a session
+ * calling a tool with `destroys` set routes through `decideDestruction`, and every
+ * other tool does not.
+ *
+ * The kinds are the authored things — "the arrangement and the topology are
+ * authored work nobody can recreate" (principle 10). A claim yielded, a queued run
+ * cancelled, or a waitlist place withdrawn is also a `DELETE`, and none of them is
+ * authored state: nothing is destroyed, capability is handed back. That is why this
+ * is declared per tool instead of derived from the HTTP method, and why
+ * `catalog.test.ts` pins it against `approval: "always"` in both directions.
+ */
+export const DESTRUCTION_TARGET_KINDS = [
+  "workstream",
+  "object",
+  "node",
+  "edge",
+  "command",
+  "command-definition",
+] as const;
+
+export type DestructionTargetKind = (typeof DESTRUCTION_TARGET_KINDS)[number];
+
 export interface ToolRequirements {
   readonly reflexivity: ToolReflexivityClass;
   /**
@@ -89,6 +116,11 @@ export interface ToolRequirements {
   readonly claimOnInput?: string;
   /** Whether it raises an approval (§6.6). */
   readonly approval: "never" | "outside-policy" | "always";
+  /**
+   * Set on the destruction-class tools: what a session calling this would remove.
+   * Absent means the tool destroys no authored state.
+   */
+  readonly destroys?: DestructionTargetKind;
   readonly mutates: boolean;
 }
 
@@ -268,7 +300,7 @@ const workstreamTools: readonly AgentTool[] = [
     method: "DELETE",
     endpoint: "/api/workstreams/:id",
     input: { id: ID },
-    requires: { approval: "always" },
+    requires: { approval: "always", destroys: "workstream" },
   }),
   mutate({
     name: "workstream_restore",
@@ -358,7 +390,7 @@ const objectTools: readonly AgentTool[] = [
     method: "DELETE",
     endpoint: "/api/objects/:id",
     input: { id: ID },
-    requires: { approval: "always" },
+    requires: { approval: "always", destroys: "object" },
   }),
   mutate({
     name: "object_restore",
@@ -443,7 +475,7 @@ const graphTools: readonly AgentTool[] = [
     method: "DELETE",
     endpoint: "/api/nodes/:id",
     input: { id: ID },
-    requires: { approval: "always" },
+    requires: { approval: "always", destroys: "node" },
   }),
   mutate({
     name: "node_restore",
@@ -517,6 +549,7 @@ const graphTools: readonly AgentTool[] = [
     requires: {
       reflexivity: "target-session",
       approval: "always",
+      destroys: "edge",
       targetResolution: NODE_TARGETS,
     },
   }),
@@ -656,7 +689,7 @@ const commandTools: readonly AgentTool[] = [
     method: "DELETE",
     endpoint: "/api/command-definitions/:id",
     input: { id: ID },
-    requires: { approval: "always" },
+    requires: { approval: "always", destroys: "command-definition" },
   }),
   mutate({
     name: "command_definition_restore",
@@ -711,7 +744,7 @@ const commandTools: readonly AgentTool[] = [
     method: "DELETE",
     endpoint: "/api/commands/:id",
     input: { id: ID },
-    requires: { approval: "always" },
+    requires: { approval: "always", destroys: "command" },
   }),
   mutate({
     name: "command_restore",
@@ -1792,6 +1825,26 @@ export function liveTools(): readonly AgentTool[] {
 /** What a session may call at all — the operator's own gestures are refused. */
 export function sessionCallableTools(): readonly AgentTool[] {
   return AGENT_TOOL_CATALOG.filter((tool) => !tool.requires.humanOnly);
+}
+
+/**
+ * The destruction-class tools (§6.6): a session calling one raises an approval
+ * instead of executing. Derived from the catalog rather than listed again, so a new
+ * destructive verb joins this set by declaring `destroys` and nothing else.
+ */
+export function destructionTools(): readonly AgentTool[] {
+  return AGENT_TOOL_CATALOG.filter(
+    (tool) => tool.requires.destroys !== undefined,
+  );
+}
+
+/** Narrows a tool to one whose `destroys` is set, so the kind is not optional. */
+export function isDestructionTool(tool: AgentTool): tool is AgentTool & {
+  readonly requires: ToolRequirements & {
+    readonly destroys: DestructionTargetKind;
+  };
+} {
+  return tool.requires.destroys !== undefined;
 }
 
 /** The path parameters an endpoint pattern declares, in order. */

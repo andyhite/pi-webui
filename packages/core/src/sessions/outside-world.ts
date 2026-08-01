@@ -16,7 +16,32 @@ import type { EpochMillis, RuntimeObservation } from "./runtime.js";
  * costs certainty rather than being read as harmless (principle 7).
  */
 
-export type WriteReversibility = "reversible" | "irreversible";
+/**
+ * What undoing this write would take (§9.2).
+ *
+ * Three values, not two. `"unknown"` is what a plugin author writes when the
+ * action's reversibility genuinely depends on the target system's configuration —
+ * and it is **treated as irreversible everywhere** (`isIrreversibleWrite`,
+ * principle 7). A two-valued type forced that author to pick, and the picked
+ * value would have been `"reversible"`, because that is the one that does not
+ * interrupt anybody. Declaring the doubt is the honest option, so the type has to
+ * have one.
+ */
+export type WriteReversibility = "reversible" | "irreversible" | "unknown";
+
+/**
+ * The one place the three values collapse to two.
+ *
+ * `"unknown"` counts as irreversible: an undo nobody can promise is not an undo.
+ * Every caller asks this rather than comparing against `"irreversible"`, so a
+ * fourth value could never be quietly read as safe — and §6.6's piercing rule is
+ * stated once (`isIrreversibleAsk`), not once per call site.
+ */
+export function isIrreversibleWrite(
+  reversibility: WriteReversibility,
+): boolean {
+  return reversibility !== "reversible";
+}
 
 /**
  * What one tool does to the world. Two variants and no default: a declaration
@@ -233,8 +258,8 @@ export function forkCleanlinessAt(
   const undeclaredCalls = markers.undeclared.filter(
     (call) => call.turn <= turn,
   );
-  const irreversible = touches.filter(
-    (touch) => touch.reversibility === "irreversible",
+  const irreversible = touches.filter((touch) =>
+    isIrreversibleWrite(touch.reversibility),
   );
   const state: ForkCleanlinessState =
     touches.length > 0
@@ -275,7 +300,13 @@ function describe(
     irreversible.length === 0
       ? ""
       : `, ${irreversible.length} of them irreversible (${[
-          ...new Set(irreversible.map((touch) => touch.action)),
+          ...new Set(
+            irreversible.map((touch) =>
+              touch.reversibility === "unknown"
+                ? `${touch.action} (reversibility undeclared)`
+                : touch.action,
+            ),
+          ),
         ].join(", ")})`;
   // "at least" when some calls up to here declared nothing: the count of known
   // writes is a floor, not a total.
