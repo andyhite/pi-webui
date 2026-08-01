@@ -12,6 +12,14 @@
  * it is structurally distinct from the saying bubble it stacks above/below
  * (§5: "a tool in flight shows as a distinct chip"), and a question bubble
  * renders its options as real `<button>`s, answerable inline (§6.4).
+ *
+ * A rendered bubble's height is fixed to exactly its `rect.height` — the
+ * number `placement.ts` already collision-checked every reserved region
+ * against, using the same `measureLines` estimate — with `overflow: auto`
+ * rather than a `minHeight`: real DOM text can wrap taller than that
+ * estimate, and letting the element grow past its checked rect would let
+ * it spill into a region the engine proved this rect was clear of. Scroll,
+ * not clip, so nothing is silently truncated (principle 12).
  */
 
 import type { BubblePlacement } from "./placement.js";
@@ -99,7 +107,15 @@ export function BubbleLayer({
               left: placement.rect.x,
               top: placement.rect.y,
               width: placement.rect.width,
-              minHeight: placement.rect.height,
+              // Fixed to the exact rect `placement.ts` collision-checked
+              // against every reserved region, not a minHeight: real DOM
+              // content can wrap taller than `measureLines`'s estimate, and
+              // a bubble allowed to grow past its checked rect could spill
+              // into the region the engine proved this rect was clear of.
+              // A scrollable overflow keeps every bit of content reachable
+              // instead of silently truncating it (principle 12).
+              height: placement.rect.height,
+              overflow: "auto",
               zIndex: 6,
             }}
           >
