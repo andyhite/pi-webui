@@ -35,6 +35,35 @@ function emptyRawSnapshot(seq: number): RawSnapshot {
   };
 }
 
+function rawSnapshotWithWorkstream(
+  seq: number,
+  workstreamId: string,
+): RawSnapshot {
+  return {
+    ...emptyRawSnapshot(seq),
+    workstreams: [
+      {
+        id: workstreamId as Workstream["id"],
+        subjectId: null,
+        status: "active",
+        archivedAt: null,
+        createdAt: 0,
+      },
+    ],
+  };
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 const workstream: Workstream = {
   id: "ws_1" as Workstream["id"],
   subjectId: null,
@@ -177,6 +206,47 @@ describe("createApiGraphDataSource.subscribe", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("a stale in-flight resync does not clobber state from a newer one (overlapping reconnects)", async () => {
+    const socket = fakeSocket();
+    const createSocket: WebSocketFactory = vi.fn(() => socket);
+
+    const first = deferred<RawSnapshot>();
+    const second = deferred<RawSnapshot>();
+    let call = 0;
+    const get = vi.fn(async () => {
+      call += 1;
+      return call === 1 ? first.promise : second.promise;
+    });
+    const http = { get } as unknown as HttpClient;
+
+    const source = createApiGraphDataSource({ http, createSocket });
+    const onSnapshot = vi.fn();
+    source.subscribe(onSnapshot);
+
+    // First "open": resync #1 starts, its fetch left pending.
+    socket.onopen?.();
+    // A second "open" before #1 resolved (a reconnect racing it): resync #2
+    // starts and supersedes #1 as `currentBuffer`.
+    socket.onopen?.();
+
+    // #2 (the current one) resolves first.
+    second.resolve(rawSnapshotWithWorkstream(10, "ws_new"));
+    await flush();
+
+    // #1 (stale, superseded) resolves late, with different data. It must
+    // be discarded rather than stomping #2's already-settled state.
+    first.resolve(rawSnapshotWithWorkstream(3, "ws_old"));
+    await flush();
+
+    const last = onSnapshot.mock.calls.at(-1)?.[0];
+    expect(last.containers).toEqual([
+      expect.objectContaining({ id: "ws_new" }),
+    ]);
+    expect(last.containers).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "ws_old" })]),
+    );
   });
 
   it("closes the socket once the last subscriber unsubscribes", async () => {

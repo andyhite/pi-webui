@@ -127,6 +127,12 @@ export function createApiGraphDataSource(
   /** Step 2+3 of the recipe: fetch the snapshot, drop stale buffered events, apply the rest. */
   async function resync(buffer: BufferState): Promise<void> {
     const raw = await http.get<RawSnapshot>("/api/snapshot");
+    // A newer (re)connect started its own resync while this one's fetch was
+    // in flight — `currentBuffer` has already moved on to that one's buffer.
+    // This resync lost the race: applying its (now stale) snapshot here
+    // would stomp whatever the newer resync already settled, or will settle
+    // once its own fetch lands. Bail without touching `state` at all.
+    if (currentBuffer !== buffer) return;
     let next = stateFromSnapshot(raw);
     for (const event of buffer.events) {
       if (event.seq > raw.seq) next = applyEvent(next, event);
