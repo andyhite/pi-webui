@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AGENT_TOOL_CATALOG,
+  destructionTools,
   liveTools,
   pathParametersOf,
   sessionCallableTools,
@@ -317,6 +318,26 @@ describe("the catalog", () => {
       // the requirement flags unusable for deciding approvals.
       expect(tool.requires.mutates, tool.name).toBe(tool.method !== "GET");
     }
+  });
+
+  it("gives every destruction tool exactly one path parameter to name its target", () => {
+    // The destruction guard (`apps/server/src/approvals/guard.ts`) addresses a
+    // session's destructive call by the **one** path parameter its endpoint
+    // names: that parameter is the record §6.6 asks the operator about. A tool
+    // with none has no target to name in the row, and one with two has no single
+    // target at all — either way the guard cannot address it, and the route ships
+    // enforced by nothing.
+    //
+    // Pinned here rather than left to the guard's own skip, because the failure
+    // mode of that skip is silence: a new destructive verb declared with an
+    // awkward endpoint would simply stop being routed through approvals, and
+    // nothing downstream would say so.
+    for (const tool of destructionTools()) {
+      expect(pathParametersOf(tool.endpoint), tool.name).toHaveLength(1);
+      expect(tool.method, tool.name).not.toBe("GET");
+    }
+    // And there really are some, so this cannot pass by matching nothing.
+    expect(destructionTools().length).toBeGreaterThan(0);
   });
 
   it("states how every lineage-checked tool's target must resolve", () => {

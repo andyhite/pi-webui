@@ -1,5 +1,10 @@
-import type { Author, DestructionTargetKind } from "@plotroom/core";
+import {
+  checkDeletion,
+  type Author,
+  type DestructionTargetKind,
+} from "@plotroom/core";
 import type { EventBus } from "../events/bus.js";
+import { forbidden } from "../http/errors.js";
 import { announceRemoval } from "../routes/announce.js";
 import type { ApiStores } from "../routes/api.js";
 import {
@@ -166,6 +171,14 @@ export function destroyCommand(
  * The same effect, dispatched by the catalog's own `destroys` metadata — so a
  * new destructive verb is covered by declaring one, not by being added to a
  * second list (which is the mistake `decideDestruction` avoids upstream).
+ *
+ * **`checkDeletion` is the backstop here, and it is a real one.** The predicate
+ * refuses a session-authored destruction that has no approval behind it, so a
+ * future call site that reaches this function without routing through §6.6 fails
+ * closed rather than deleting. `approved` is the caller *stating* that an
+ * operator answered — `ApprovalService` passes it only inside the
+ * `approve-once` branch — which is why it is a parameter rather than something
+ * inferred from the author: an author cannot tell you whether anybody agreed.
  */
 export function performDestruction(
   stores: ApiStores,
@@ -173,7 +186,11 @@ export function performDestruction(
   kind: DestructionTargetKind,
   targetId: string,
   author: Author,
+  context: { readonly approved: boolean } = { approved: false },
 ): DestructionOutcome {
+  const allowed = checkDeletion(author, { preApproved: context.approved });
+  if (!allowed.allowed) throw forbidden(allowed.refusal.message);
+
   switch (kind) {
     case "object":
       return destroyObject(stores, bus, targetId, author);

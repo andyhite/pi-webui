@@ -453,6 +453,9 @@ export class ApprovalService {
       target.kind as never,
       target.id,
       sessionAuthor(approval.sessionId),
+      // Stated, not inferred: this branch is reached only for an `approve-once`
+      // answer, which is exactly what `checkDeletion` is asking about.
+      { approved: true },
     );
     return outcome.changed;
   }
