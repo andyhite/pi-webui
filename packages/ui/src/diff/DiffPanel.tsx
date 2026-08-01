@@ -4,9 +4,9 @@
  * (`data-source.ts`) rather than a fixture handed to this component
  * directly — the same pattern `ConversationPanel` takes `sessionId` +
  * `SessionDataSource` instead of a snapshot, so a live source is a pure
- * swap at the host, nothing here changes. No workspace/diff server API
- * exists yet (see the seam's own doc comment for the exact swap point);
- * `createFixtureDiffDataSource` is what every host wires today.
+ * swap at the host, nothing here changes. Addressed by **workstream** id
+ * (a workstream has at most one workspace); not-ready is rendered as its
+ * own honest state (§3.4), never as "no changes".
  *
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
  * `<details>`/`<summary>` supplies the tree's expand/collapse mechanics.
@@ -20,7 +20,7 @@ import type { DiffTreeNode } from "./tree.js";
 import type { DiffFile, WorkspaceDiff } from "./types.js";
 
 export interface DiffPanelProps {
-  readonly workspaceId: string;
+  readonly workstreamId: string;
   readonly dataSource: DiffDataSource;
 }
 
@@ -64,25 +64,36 @@ function TreeNodeView({ node }: { readonly node: DiffTreeNode }) {
   );
 }
 
-export function DiffPanel({ workspaceId, dataSource }: DiffPanelProps) {
+export function DiffPanel({ workstreamId, dataSource }: DiffPanelProps) {
   const [diff, setDiff] = useState<WorkspaceDiff | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setDiff(null);
-    const unsubscribe = dataSource.subscribe(workspaceId, (next) => {
+    const unsubscribe = dataSource.subscribe(workstreamId, (next) => {
       if (!cancelled) setDiff(next);
     });
     return () => {
       cancelled = true;
       unsubscribe();
     };
-  }, [workspaceId, dataSource]);
+  }, [workstreamId, dataSource]);
 
   const tree = useMemo(() => buildDiffTree(diff?.files ?? []), [diff]);
 
   if (diff === null) {
-    return <div role="status">loading workspace {workspaceId} diff…</div>;
+    return <div role="status">loading workstream {workstreamId} diff…</div>;
+  }
+
+  // Not-ready is a fact reported, never an empty "no changes" success (§3.4,
+  // principle 12) — a workstream with no workspace, an unprovisioned
+  // record, and a checkout git could not read are three different reasons.
+  if (diff.state !== "ready") {
+    return (
+      <div data-testid="diff-not-ready" data-diff-state={diff.state}>
+        {diff.reason ?? `diff not ready: ${diff.state}`}
+      </div>
+    );
   }
 
   if (diff.files.length === 0) {
@@ -92,6 +103,7 @@ export function DiffPanel({ workspaceId, dataSource }: DiffPanelProps) {
   return (
     <div>
       <div>{diff.files.length} file(s) changed</div>
+      {diff.base ? <div>against: {diff.base.description}</div> : null}
       <ul>
         {tree.map((node) => (
           <TreeNodeView key={node.path} node={node} />
