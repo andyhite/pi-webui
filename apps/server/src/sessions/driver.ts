@@ -132,7 +132,6 @@ export function driveSession(
               sessionId,
               reason: observation.reason,
               at: epochSeconds(observation.at),
-              mode: stored.session.mode,
               proven: completionAlreadyProven(stored),
             });
             break;
@@ -150,7 +149,6 @@ export function driveSession(
         sessionId,
         reason: { kind: "failed", message },
         at: epochSeconds(deps.nowMillis()),
-        mode: sessions.get(sessionId).session.mode,
         proven: false,
       });
     }
@@ -170,7 +168,7 @@ interface EndInput {
   readonly sessionId: string;
   readonly reason: SessionEndReason;
   readonly at: number;
-  readonly mode: "producing" | "open";
+  /** Whether PlotRoom has already proven this session's outcome itself. */
   readonly proven: boolean;
 }
 
@@ -179,19 +177,23 @@ interface EndInput {
  *
  * `classifyEnd` is the only place one becomes the other, and PlotRoom's own
  * state outranks the report. One rule is added here, and it belongs to the
- * product rather than to any runtime: **a producing session's completion is
- * proof, never a claim** (§3.5, principle 3). A runtime that says "completed"
- * for work whose declared conditions PlotRoom never proved did not complete it,
- * so the outcome recorded is a failure that says exactly that.
+ * product rather than to any runtime: **completion is proof, never a claim**
+ * (§3.5, principle 3). A runtime that says "completed" for work PlotRoom never
+ * proved did not complete it, so the outcome recorded is a failure that says
+ * exactly that.
+ *
+ * The rule is not scoped to producing sessions. An open session has no declared
+ * outcome, so there is nothing it could ever have proven — which makes a
+ * `completed` claim from its runtime *more* unfounded, not less, and letting it
+ * through would put `proven: true` on a record nothing checked and leave its run
+ * looking like work still in flight.
  */
 async function endFromObservation(
   deps: SessionDriverDeps,
   input: EndInput,
 ): Promise<void> {
   const reason: SessionEndReason =
-    input.mode === "producing" &&
-    input.reason.kind === "completed" &&
-    !input.proven
+    input.reason.kind === "completed" && !input.proven
       ? {
           kind: "failed",
           message:
