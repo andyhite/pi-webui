@@ -156,6 +156,15 @@ const sessionDraftsStore = createWebStorageSessionDraftsStore(
 );
 
 const now = () => Date.now();
+/**
+ * Bubble timestamps are epoch **seconds** throughout (`BubbleSource.
+ * updatedAt`'s doc comment states the one-unit-throughout rule) — every
+ * other source of a bubble timestamp already is (a transcript turn's
+ * `startedAt`, an injection's `queuedAt`/`deliveredAt`, a question's
+ * `raisedAt`), so this is the one place `now()`'s milliseconds get
+ * converted before feeding the bubble derivation seam.
+ */
+const nowSeconds = () => Math.floor(now() / 1000);
 
 export function App() {
   const [placements, setPlacements] = useState<Placements | null>(null);
@@ -297,7 +306,11 @@ export function App() {
       .map((n) => ({
         nodeId: n.id,
         assembledContent: graph.warningFacts.get(n.id)?.assembledContent ?? "",
-        updatedAt: 0,
+        // No per-command "context last changed" timestamp exists in
+        // WarningFacts yet, so the honest value is "now" (seconds), not a
+        // literal 0 — 0 would permanently lose every recency tie-break
+        // against any session bubble under global-cap pressure.
+        updatedAt: nowSeconds(),
       }));
     const commandSources = deriveCommandBubbleSources(commandInputs);
 
@@ -308,7 +321,7 @@ export function App() {
         nodeId,
         transcript: data.transcript,
         phase: data.phase,
-        now: now(),
+        nowSeconds: nowSeconds(),
       });
     });
 
