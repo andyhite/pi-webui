@@ -74,6 +74,8 @@ import { transcriptFromObservations } from "./session-transcript.js";
  */
 
 export interface StartSessionInput {
+  /** The caller's own id, where a plan supplied one (`planSessionFork`). */
+  readonly sessionId?: string;
   readonly workstreamId: string;
   /** The command that started it; null for an open session (§3.6). */
   readonly commandId?: string | null;
@@ -85,6 +87,11 @@ export interface StartSessionInput {
   readonly launch: SessionLaunchChoices;
   readonly initiatedBy: Author;
   readonly runtime: SessionRuntimeBinding;
+  /**
+   * How a fork came to exist: the branch that ran, `native` or `seeded` (§6.3).
+   * Omitted for a session that is not a fork.
+   */
+  readonly runtimeMode?: "native" | "seeded";
 }
 
 /**
@@ -168,7 +175,7 @@ export class SessionStore {
    * existed without one would make the reflexivity refusal read empty data.
    */
   start(input: StartSessionInput): StoredSession {
-    const id = newSessionId();
+    const id = (input.sessionId as SessionId | undefined) ?? newSessionId();
     const at = this.now();
 
     const session = startSession(
@@ -212,6 +219,7 @@ export class SessionStore {
               : null,
           adapterId: input.runtime.adapterId,
           runtimeRef: input.runtime.ref,
+          runtimeMode: input.runtimeMode ?? null,
           phaseJson: JSON.stringify(phase),
           startedAt: session.startedAt,
           lastActivityAt: session.accounting.lastActivityAt,
@@ -411,6 +419,44 @@ export class SessionStore {
    * session. Called at process start, before anything is served, so an operator
    * never sees a session the product believes is still running.
    */
+  /**
+   * Clear a session's end, because it is running again (§6.3's resume).
+   *
+   * The **same record** continues — that is the whole difference between resuming
+   * and forking — so an end left in place would report a live session as finished
+   * on every surface that shows one. `end` keeps the *first* outcome while a session
+   * is ending (principle 9); reopening is the deliberate act that says the session
+   * is no longer over, and it is reachable only through the resume gesture, which
+   * `planResume` gates on §4.3's divergence rule.
+   */
+  reopen(sessionId: string): StoredSession {
+    const row = this.row(sessionId);
+    if (row.endKind === null) return this.get(sessionId);
+
+    this.state.db
+      .update(sessions)
+      .set({
+        endKind: null,
+        endJson: null,
+        endedAt: null,
+        lastActivityAt: this.now(),
+      })
+      .where(eq(sessions.id, sessionId))
+      .run();
+
+    return this.get(sessionId);
+  }
+
+  /**
+   * How a forked session came to exist: `native`, `seeded`, or null for a session
+   * that is not a fork (§6.3). Read separately from `StoredSession` because it is a
+   * fact about the *fork gesture* rather than about the session, which is exactly
+   * why the adapter refuses to substitute one mode for the other.
+   */
+  runtimeModeOf(sessionId: string): "native" | "seeded" | null {
+    return this.row(sessionId).runtimeMode ?? null;
+  }
+
   interruptInFlight(message: string): StoredSession[] {
     const at = this.now();
     return this.inFlight().map((stored) =>

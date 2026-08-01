@@ -1307,6 +1307,53 @@ export const migrations: readonly Migration[] = [
 
       CREATE INDEX handoff_briefs_session_idx
         ON handoff_briefs (source_session_id, drafted_at);
+
+      -- Which way a fork actually happened (§6.3). The adapter "either does what
+      -- it was asked or raises", and seeding is the caller's own branch, so this
+      -- records the branch that ran rather than the branch that was planned — a
+      -- seeded fork is not bit-identical to a native one, which is the entire
+      -- reason the two are distinguished. NULL for a session that is not a fork.
+      ALTER TABLE sessions ADD COLUMN runtime_mode TEXT;
+    `,
+  },
+  {
+    id: 17,
+    name: "initiations_without_a_run",
+    // `command_id` loses NOT NULL, which SQLite cannot alter in place.
+    rebuildsTable: true,
+    sql: `
+      -- An initiation does not always produce a run.
+      --
+      -- It did when every one was a command run: one gesture, one run, one session
+      -- (principle 9). §6.3's gestures are not that shape — a **fork** produces a
+      -- session inheriting a conversation, a **handoff** produces one seeded by a
+      -- brief, and a **resume** produces no new session at all — and every one of
+      -- them still has to spend a key so a retry answers with what the first
+      -- attempt produced rather than starting a second.
+      --
+      -- The alternative was passing a session id in a column named command_id,
+      -- which the foreign key correctly refused. So the column says what it means:
+      -- the command this initiation ran, or NULL where there was no command.
+      CREATE TABLE run_initiations_new (
+        initiation_key TEXT PRIMARY KEY,
+        command_id     TEXT REFERENCES commands (id) ON DELETE CASCADE,
+        run_id         TEXT REFERENCES runs (id) ON DELETE CASCADE,
+        session_id     TEXT REFERENCES sessions (id) ON DELETE SET NULL,
+        created_at     INTEGER NOT NULL,
+        settled_at     INTEGER
+      );
+
+      INSERT INTO run_initiations_new (
+        initiation_key, command_id, run_id, session_id, created_at, settled_at
+      )
+      SELECT
+        initiation_key, command_id, run_id, session_id, created_at, settled_at
+      FROM run_initiations;
+
+      DROP TABLE run_initiations;
+      ALTER TABLE run_initiations_new RENAME TO run_initiations;
+
+      CREATE INDEX run_initiations_command_idx ON run_initiations (command_id);
     `,
   },
 ];

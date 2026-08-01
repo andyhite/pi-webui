@@ -1346,6 +1346,13 @@ const steeringTools: readonly AgentTool[] = [
 
 /* --------------------------------------- resume, fork, handoff (Epic 5.4) */
 
+/**
+ * Live since Batch 3's stage 2: `apps/server/src/routes/continuation.ts` mounts
+ * these over `planResume`, `planSessionFork`, and the draft/review/send trio, and
+ * the review step is a separate endpoint because "the human edits before sending"
+ * is an interaction rather than a flag (§6.3).
+ */
+
 const continuationTools: readonly AgentTool[] = [
   mutate({
     name: "session_resume",
@@ -1354,7 +1361,7 @@ const continuationTools: readonly AgentTool[] = [
     gesture: "resume, from the explicit resume-or-fork choice",
     method: "POST",
     endpoint: "/api/sessions/:id/resume",
-    availability: "pending",
+
     input: {
       id: id("the session to resume"),
       firstTurn: {
@@ -1383,7 +1390,7 @@ const continuationTools: readonly AgentTool[] = [
     gesture: "fork from a transcript point",
     method: "POST",
     endpoint: "/api/sessions/:id/fork",
-    availability: "pending",
+
     input: {
       id: id("the session to fork from"),
       turn: {
@@ -1412,7 +1419,7 @@ const continuationTools: readonly AgentTool[] = [
     gesture: "the brief a handoff opens with",
     method: "POST",
     endpoint: "/api/sessions/:id/handoff-brief",
-    availability: "pending",
+
     input: {
       id: id("the source session"),
       text: { type: "string", required: true, description: "the brief" },
@@ -1421,6 +1428,51 @@ const continuationTools: readonly AgentTool[] = [
     // and `planHandoff` cannot be called with an unreviewed brief at all.
     requires: { reflexivity: "none" },
   }),
+  read(
+    "session_fork_preview",
+    "What a fork from a point would be: native or seeded, how clean the point is, and whether the seed is complete (§6.3).",
+    "the fork dialog, before anything is spent",
+    "/api/sessions/:id/fork-preview",
+    {
+      id: id("the session to fork from"),
+      turn: {
+        type: "number",
+        required: true,
+        description: "the 1-based transcript turn to fork at",
+      },
+    },
+  ),
+  read(
+    "handoff_briefs_read",
+    "Read the handoff briefs written out of a session, drafted and reviewed alike (§6.3).",
+    "picking up a brief written earlier",
+    "/api/sessions/:id/handoff-briefs",
+    { id: ID },
+  ),
+  mutate({
+    name: "handoff_brief_review",
+    summary:
+      "Review a handoff brief, editing the words before it is sent. The operator's alone — a session approving its own brief is the review not happening (§6.3).",
+    gesture: "editing the brief in the handoff dialog",
+    method: "POST",
+    endpoint: "/api/handoff-briefs/:id/review",
+    input: {
+      id: id("the brief"),
+      text: {
+        type: "string",
+        required: false,
+        description: "the words as they should be sent; omit to send the draft",
+      },
+    },
+    requires: { humanOnly: true },
+  }),
+  read(
+    "command_continuation_preview",
+    "Continue or start fresh, side by side: what each mode sends, each mode's gates, and why a refused one is refused (§4.3).",
+    "the continue-vs-fresh choice on a re-run",
+    "/api/commands/:id/continuation",
+    { id: ID },
+  ),
   mutate({
     name: "session_handoff",
     summary:
@@ -1428,7 +1480,7 @@ const continuationTools: readonly AgentTool[] = [
     gesture: "send, from the handoff brief the operator just edited",
     method: "POST",
     endpoint: "/api/handoffs",
-    availability: "pending",
+
     input: {
       briefId: {
         type: "string",

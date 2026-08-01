@@ -566,7 +566,15 @@ export class RunStore {
    * is claimed but not settled, meaning the first attempt is still in flight and
    * a second must not start a second run.
    */
-  claimInitiation(key: string, commandId: string): InitiationClaim {
+  claimInitiation(
+    key: string,
+    /**
+     * The command being run, or null where there is none: a fork, a handoff, and a
+     * resume each spend a key and produce no run (§6.3), and passing a session id
+     * in a column named `command_id` is what the foreign key correctly refused.
+     */
+    commandId: string | null,
+  ): InitiationClaim {
     return this.state.db.transaction(() => {
       const existing = this.initiation(key);
 
@@ -577,7 +585,10 @@ export class RunStore {
             message: `initiation key ${key} already started a run of a different command; use a new key`,
           });
         }
-        return existing.settledAt === null || existing.runId === null
+        // Settled means the key produced what it was going to produce. A run-less
+        // initiation (§6.3) settles with a session and no run, so "no run" is not
+        // evidence it is still in flight — the settle timestamp is.
+        return existing.settledAt === null
           ? { state: "in_flight" as const, initiation: existing }
           : { state: "settled" as const, initiation: existing };
       }
@@ -592,7 +603,15 @@ export class RunStore {
   }
 
   /** The gesture produced this run and this session; a retry now replays it. */
-  settleInitiation(key: string, runId: string, sessionId: string): void {
+  /**
+   * Bind an initiation key to what it produced.
+   *
+   * `runId` is nullable because not every initiation produces a run: a fork and a
+   * handoff each produce a **session** and no run of their own (§6.3), and the key
+   * still has to be spent so a retry answers with the same session rather than
+   * starting a second one (principle 9).
+   */
+  settleInitiation(key: string, runId: string | null, sessionId: string): void {
     this.state.db
       .update(runInitiations)
       .set({ runId, sessionId, settledAt: this.now() })

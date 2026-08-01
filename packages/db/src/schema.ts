@@ -594,6 +594,11 @@ export const sessions = sqliteTable(
     initiatedBySession: text("initiated_by_session"),
     adapterId: text("adapter_id").notNull(),
     runtimeRef: text("runtime_ref").notNull(),
+    /**
+     * How a forked session came to exist: the branch that actually ran, `native` or
+     * `seeded` (§6.3). Null for a session that is not a fork.
+     */
+    runtimeMode: text("runtime_mode", { enum: ["native", "seeded"] }),
     /** The transcript as content (§3.6): versioned on the checkpoint rule. */
     transcriptObjectId: text("transcript_object_id").references(
       () => objects.id,
@@ -760,9 +765,13 @@ export const runInitiations = sqliteTable(
   "run_initiations",
   {
     initiationKey: text("initiation_key").primaryKey(),
-    commandId: text("command_id")
-      .notNull()
-      .references(() => commands.id, { onDelete: "cascade" }),
+    /**
+     * The command this initiation ran, or null where there was no command: a fork,
+     * a handoff, and a resume each spend a key without producing a run (§6.3).
+     */
+    commandId: text("command_id").references(() => commands.id, {
+      onDelete: "cascade",
+    }),
     runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
     sessionId: text("session_id").references(() => sessions.id, {
       onDelete: "set null",

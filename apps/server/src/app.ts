@@ -19,6 +19,7 @@ import { ClaimService } from "./claims/service.js";
 import { createStores } from "./routes/api.js";
 import { claimRoutes } from "./routes/claims.js";
 import { commandRoutes } from "./routes/commands.js";
+import { continuationRoutes } from "./routes/continuation.js";
 import { graphRoutes } from "./routes/graph.js";
 import { healthRoutes } from "./routes/health.js";
 import { logLevelRoutes } from "./routes/log-level.js";
@@ -37,6 +38,7 @@ import { RunQueueService } from "./runs/queue.js";
 import { RunService } from "./runs/service.js";
 import { createRuntimeRegistry } from "./runtime/index.js";
 import { createSessionGate } from "./sessions/gate.js";
+import { ContinuationService } from "./sessions/continuation.js";
 import { SteeringService } from "./sessions/steering.js";
 import { SessionHub } from "./sessions/hub.js";
 import { serveRenderer } from "./static/serve.js";
@@ -157,6 +159,18 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   // published, and one vocabulary beats a second notification path (§6.5).
   const unsubscribeSteering = steering.subscribe();
 
+  // Resume, fork, and handoff (§6.3, §4.3). The tool-world declarations it needs
+  // for fork cleanliness are empty until Phase 7's integrations declare any, which
+  // is why cleanliness reports `unknown` wherever a session called an undeclared
+  // tool — the honest answer rather than a defect.
+  const continuation = new ContinuationService({
+    stores,
+    bus,
+    logger,
+    runs,
+    steering,
+  });
+
   // A runtime-raised question is the operator's to answer (§6.4), so the driver
   // hands it here to be raised rather than through the permission gate, which
   // would have denied it. Wired as a hook so the run path does not learn about
@@ -195,6 +209,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", claimRoutes(claims));
   app.route("/api", spendRoutes(stores));
   app.route("/api", steeringRoutes(stores, steering));
+  app.route("/api", continuationRoutes(stores, continuation));
   app.route(
     "/api",
     // The diff read (§11). Read-only git through the same host-allowlisted seam

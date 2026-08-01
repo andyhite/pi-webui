@@ -42,6 +42,8 @@ export class WorkspaceRefused extends Error {
 }
 
 export interface CreateWorkspaceInput {
+  /** The caller's own id, where a plan supplied one (`planSessionFork`). */
+  readonly workspaceId?: string;
   readonly workstreamId: string;
   readonly kind: WorkspaceKindName;
   readonly config: WorkspaceKindConfig;
@@ -87,7 +89,7 @@ export class WorkspaceStore {
 
     const record = newWorkspaceRecord(
       {
-        id: newWorkspaceId(),
+        id: (input.workspaceId as WorkspaceId | undefined) ?? newWorkspaceId(),
         workstreamId: input.workstreamId as WorkstreamId,
         kind: input.kind,
         config: input.config,

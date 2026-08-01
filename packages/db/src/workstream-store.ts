@@ -34,6 +34,8 @@ export class LifecycleRefused extends Error {
 }
 
 export interface CreateWorkstreamInput {
+  /** The caller's own id, where a plan supplied one (`planSessionFork`). */
+  readonly workstreamId?: string;
   readonly author: Author;
   /** Optional: a subject-less scratch workstream is legal (§3.3). */
   readonly subjectId?: string;
@@ -63,7 +65,7 @@ export class WorkstreamStore {
   ) {}
 
   create(input: CreateWorkstreamInput): WorkstreamRow {
-    const id = newWorkstreamId();
+    const id = input.workstreamId ?? newWorkstreamId();
 
     this.state.db
       .insert(workstreams)

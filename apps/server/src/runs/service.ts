@@ -9,7 +9,11 @@ import {
   readinessSetupFinished,
   readinessSetupStarted,
   resolveSetup,
+  exportTranscript,
+  PiForkUnavailable,
   systemMillisClock,
+  transcriptPrefix,
+  transcriptRenderings,
   type Author,
   type BudgetScope,
   type CompletionEvidence,
@@ -21,9 +25,13 @@ import {
   type RuntimeRequestId,
   type RuntimeSessionHandle,
   type SessionEnd,
+  type SessionForkPlan,
   type SessionId,
+  type SessionLaunchChoices,
+  type SessionRuntimeAdapter,
   type SessionStatus,
   type Workspace,
+  type WorkspaceKind,
   type WorkspaceKindConfig,
   type WorkspaceKindRegistry,
   type WorkstreamId,
@@ -135,6 +143,20 @@ export interface StopSessionInput {
 
 /** What a graceful close waits for before the database is closed. */
 const SHUTDOWN_DRAIN_MS = 2_000;
+
+/**
+ * The window a session with no command definition behind it is metered against —
+ * a handoff, or a fork whose source's definition is gone. Labelled `estimated` by
+ * the accounting fold either way, so it is a scale rather than a claim.
+ */
+const DEFAULT_HANDOFF_WINDOW_TOKENS = 200_000;
+
+/**
+ * How long a resume waits for the previous handle's pump to finish before letting
+ * go of it. Bounded for the same reason the shutdown drain is: a runtime that will
+ * not end its stream must not hold a gesture open for ever (principle 11).
+ */
+const RESUME_DRAIN_MS = 2_000;
 
 export interface RestartRecovery {
   /** Sessions that were in flight when the last process died (principle 11). */
@@ -462,6 +484,377 @@ export class RunService {
       warning: started.warning,
       replayed: false,
     };
+  }
+
+  /* -------------------------------------------- what continuation needs (§6.3) */
+
+  /**
+   * The workspace kind for a workspace record, or null when the installation has
+   * none registered under that name.
+   *
+   * Null rather than a throw: divergence detection asks this, and "the mechanism is
+   * not available" is a reason to report unknown divergence rather than to fail the
+   * request that asked (principle 7).
+   */
+  workspaceKind(kind: string): WorkspaceKind | null {
+    const lookup = this.deps.workspaceKinds.require(kind);
+    return lookup.available ? lookup.kind : null;
+  }
+
+  /** The adapter a session is bound to — its capabilities decide how a fork works. */
+  adapterFor(adapterId: string): SessionRuntimeAdapter {
+    return this.deps.runtimes.require(adapterId);
+  }
+
+  /** The workspace configuration a fork's own workspace inherits (§3.4). */
+  workspaceConfigFor(workstreamId: string): {
+    readonly kind: string;
+    readonly config: WorkspaceKindConfig;
+  } {
+    return {
+      kind: this.deps.config.workspace.kind,
+      config: this.workspaceConfig(workstreamId),
+    };
+  }
+
+  /**
+   * Resume an ended session (§6.3): the **same record** continues, which is the
+   * whole difference from a fork. The runtime is reopened at its persisted native
+   * ref — "persisted for exactly this" (§3.6) — and the observation pump is
+   * re-attached, so everything downstream is derived exactly as it was before.
+   *
+   * Idempotent in the initiation key: one gesture, one resumption (principle 9).
+   */
+  async resumeSession(input: {
+    readonly sessionId: string;
+    readonly initiationKey: string;
+    readonly actor: Author;
+    readonly launch: SessionLaunchChoices;
+  }): Promise<{ readonly session: StoredSession; readonly replayed: boolean }> {
+    const { stores } = this.deps;
+    const stored = stores.sessions.get(input.sessionId);
+
+    const live = this.deps.hub.get(input.sessionId);
+    if (live !== null) {
+      // Already live and attached: the gesture has nothing to do, which is not the
+      // same as it having failed.
+      if (stored.session.end === null) {
+        return { session: stored, replayed: true };
+      }
+
+      // Ended record, handle still draining. The previous pump has an end still to
+      // record — a stop writes the outcome before it touches the runtime, so the
+      // `session-ended` observation is always behind it — and a record reopened
+      // underneath it would inherit that end and report a running session as
+      // finished. So the old pump is let finish and let go of *before* anything is
+      // reopened. Bounded, because a runtime that will not end its stream must not
+      // hold a resume open for ever (principle 11).
+      await Promise.race([
+        live.pump,
+        new Promise((resolve) => setTimeout(resolve, RESUME_DRAIN_MS).unref()),
+      ]);
+      await live.handle.stop("abort").catch(() => undefined);
+      this.deps.hub.detach(input.sessionId);
+    }
+
+    // Null where the session ran no command: a resume spends a key and produces no
+    // run (§6.3), which migration 17 made representable rather than smuggled.
+    const claim = stores.runs.claimInitiation(
+      input.initiationKey,
+      stored.session.commandId,
+    );
+    if (claim.state === "settled") {
+      return { session: stores.sessions.get(input.sessionId), replayed: true };
+    }
+    if (claim.state === "in_flight") {
+      throw refused({
+        reason: "initiation_in_flight",
+        message: `resumption ${input.initiationKey} is already starting; retry once it has settled`,
+      });
+    }
+
+    try {
+      const workspace = await this.ensureWorkspace(
+        stored.session.workstreamId,
+        input.actor,
+      );
+      const workspacePath = workspace.roots[0]?.path;
+      if (workspacePath === undefined) {
+        throw refused({
+          reason: "workspace_no_root",
+          message: "the workspace reported no root to work in",
+        });
+      }
+
+      const adapter = this.adapterFor(stored.session.runtime.adapterId);
+      const handle = await adapter.resume(stored.session.runtime.ref, {
+        launch: input.launch,
+        workspacePath,
+      });
+
+      // The end is cleared: a resumed session is live again, and a record that kept
+      // its end state would report a session that is running as finished (§3.6).
+      const reopened = stores.sessions.reopen(input.sessionId);
+
+      // And its node goes back to running, which is not cosmetic: §3.7 only lets
+      // content wire into a *running* session, so a resumed session whose node still
+      // said otherwise would refuse the very first turn the resume delivers.
+      const node = stores.graph.nodeFor("session", input.sessionId);
+      stores.graph.setRunning(node.id, true);
+      this.deps.bus.publish({
+        entity: "node",
+        verb: "updated",
+        node: toPlacedNode(stores.graph.node(node.id)),
+        author: input.actor,
+      });
+      stores.runs.settleInitiation(
+        input.initiationKey,
+        stored.runId ?? null,
+        input.sessionId,
+      );
+
+      this.attach(
+        input.sessionId,
+        handle,
+        adapter.id,
+        this.modelWindowFor(stored),
+      );
+      this.publishSession(reopened, input.actor);
+
+      return { session: reopened, replayed: false };
+    } catch (error) {
+      stores.runs.releaseInitiation(input.initiationKey);
+      throw error;
+    }
+  }
+
+  /**
+   * Start the session a fork plans (§6.3).
+   *
+   * **The contract's two lines, verbatim, and the order is the point.** A `native`
+   * verdict calls `adapter.fork`; `PiForkUnavailable` is caught here and re-run as
+   * `start({ seedTranscript })`, because the adapter deliberately does not
+   * substitute one for the other — "a seeded fork is not bit-identical to a native
+   * one, which is the entire reason the two are distinguished". A `seeded` verdict
+   * seeds directly. Whichever branch ran is the mode recorded, so the stored mode
+   * is never a claim nothing did.
+   */
+  async startForkedSession(input: {
+    readonly plan: SessionForkPlan;
+    readonly sourceSessionId: string;
+    readonly initiationKey: string;
+    readonly actor: Author;
+  }): Promise<{
+    readonly session: StoredSession;
+    readonly mode: "native" | "seeded";
+  }> {
+    const { stores } = this.deps;
+    const plan = input.plan;
+    const source = stores.sessions.get(input.sourceSessionId);
+
+    const workspace = await this.ensureWorkspace(
+      plan.session.workstreamId,
+      input.actor,
+    );
+    const workspacePath = workspace.roots[0]?.path;
+    if (workspacePath === undefined) {
+      throw refused({
+        reason: "workspace_no_root",
+        message: "the fork's workspace reported no root to work in",
+      });
+    }
+
+    const adapter = this.adapterFor(source.session.runtime.adapterId);
+    const config = {
+      prompt: "",
+      launch: plan.session.launch,
+      workspacePath,
+    };
+
+    let handle;
+    let mode: "native" | "seeded";
+
+    if (plan.runtime.mode === "native") {
+      try {
+        handle = await adapter.fork(
+          source.session.runtime.ref,
+          plan.point,
+          config,
+        );
+        mode = "native";
+      } catch (error) {
+        if (!(error instanceof PiForkUnavailable)) throw error;
+        // The seeded branch is the caller's, and this is the caller. The prefix is
+        // what a fresh session is started from, and the mode recorded is the one
+        // that actually happened.
+        this.deps.logger.info(
+          "a native fork was unavailable; seeding instead",
+          {
+            sourceSessionId: input.sourceSessionId,
+            turn: plan.point.turn,
+            reason: error.message,
+          },
+        );
+        handle = await adapter.start({
+          ...config,
+          seedTranscript: seedFrom(this.deps.stores, source, plan),
+        });
+        mode = "seeded";
+      }
+    } else {
+      handle = await adapter.start({
+        ...config,
+        seedTranscript: plan.runtime.seed,
+      });
+      mode = "seeded";
+    }
+
+    const session = stores.sessions.start({
+      sessionId: plan.session.id,
+      workstreamId: plan.session.workstreamId,
+      workspaceId: workspace.id,
+      mode: plan.session.mode,
+      launch: plan.session.launch,
+      initiatedBy: plan.session.initiatedBy,
+      runtime: { adapterId: adapter.id, ref: handle.ref },
+      runtimeMode: mode,
+    });
+
+    const node = stores.graph.place({
+      role: "session",
+      refId: session.session.id,
+      workstreamId: plan.session.workstreamId,
+      running: true,
+    });
+    this.deps.bus.publish({
+      entity: "node",
+      verb: "created",
+      node: toPlacedNode(node),
+      author: input.actor,
+    });
+
+    stores.runs.settleInitiation(input.initiationKey, null, session.session.id);
+
+    this.publishSession(session, input.actor);
+    this.attach(
+      session.session.id,
+      handle,
+      adapter.id,
+      this.modelWindowFor(source),
+    );
+
+    return { session, mode };
+  }
+
+  /**
+   * Start the session a handoff seeds (§6.3). An ordinary start — the brief reaches
+   * it as content wired in by the reviewer, which is the gesture, not a runtime
+   * feature.
+   */
+  async startHandoffSession(input: {
+    readonly brief: { readonly text: string; readonly sourceSessionId: string };
+    readonly workstreamId: string;
+    readonly launch: SessionLaunchChoices;
+    readonly initiationKey: string;
+    readonly actor: Author;
+  }): Promise<{
+    readonly session: StoredSession;
+    readonly replayed: boolean;
+  }> {
+    const { stores } = this.deps;
+
+    const claim = stores.runs.claimInitiation(input.initiationKey, null);
+    if (claim.state === "settled") {
+      return {
+        session: stores.sessions.get(claim.initiation.sessionId as string),
+        replayed: true,
+      };
+    }
+    if (claim.state === "in_flight") {
+      throw refused({
+        reason: "initiation_in_flight",
+        message: `handoff ${input.initiationKey} is already starting; retry once it has settled`,
+      });
+    }
+
+    try {
+      const workspace = await this.ensureWorkspace(
+        input.workstreamId,
+        input.actor,
+      );
+      const workspacePath = workspace.roots[0]?.path;
+      if (workspacePath === undefined) {
+        throw refused({
+          reason: "workspace_no_root",
+          message: "the workspace reported no root to work in",
+        });
+      }
+
+      const adapter = this.deps.runtimes.require(
+        this.deps.config.runtime.adapterId,
+      );
+      const handle = await adapter.start({
+        prompt: input.brief.text,
+        launch: input.launch,
+        workspacePath,
+      });
+
+      const session = stores.sessions.start({
+        workstreamId: input.workstreamId,
+        workspaceId: workspace.id,
+        // Open: a handoff opens a conversation, and the receiving session's own
+        // outcome is whatever it is later given to produce (§3.5).
+        mode: "open",
+        launch: input.launch,
+        initiatedBy: input.actor,
+        runtime: { adapterId: adapter.id, ref: handle.ref },
+      });
+
+      const node = stores.graph.place({
+        role: "session",
+        refId: session.session.id,
+        workstreamId: input.workstreamId,
+        running: true,
+      });
+      this.deps.bus.publish({
+        entity: "node",
+        verb: "created",
+        node: toPlacedNode(node),
+        author: input.actor,
+      });
+
+      stores.runs.settleInitiation(
+        input.initiationKey,
+        null,
+        session.session.id,
+      );
+      this.publishSession(session, input.actor);
+      this.attach(
+        session.session.id,
+        handle,
+        adapter.id,
+        DEFAULT_HANDOFF_WINDOW_TOKENS,
+      );
+
+      return { session, replayed: false };
+    } catch (error) {
+      stores.runs.releaseInitiation(input.initiationKey);
+      throw error;
+    }
+  }
+
+  /** The model window a session's accounting meter is measured against. */
+  private modelWindowFor(stored: StoredSession): number {
+    if (stored.session.commandId === null) return DEFAULT_HANDOFF_WINDOW_TOKENS;
+    try {
+      const command = this.deps.stores.commands.command(
+        stored.session.commandId,
+      );
+      return this.deps.stores.commands.definition(command.definitionId).budget
+        .modelWindowTokens;
+    } catch {
+      return DEFAULT_HANDOFF_WINDOW_TOKENS;
+    }
   }
 
   /* ------------------------------------------------------- the completion loop */
@@ -1261,6 +1654,26 @@ export class RunService {
       author,
     });
   }
+}
+
+/**
+ * The transcript prefix a seeded fork starts from, built the same way `planFork`
+ * builds it: released tool output is reloaded first, and what could not be
+ * reloaded is reported rather than silently dropped (principle 12).
+ */
+function seedFrom(
+  stores: ApiStores,
+  source: StoredSession,
+  plan: SessionForkPlan,
+): string {
+  const { transcript } = stores.sessions.transcript(source.session.id);
+  const prefix = transcriptPrefix(transcript, plan.point);
+  const exported = exportTranscript(prefix, () => null);
+  // The document either way: an incomplete export is still the honest prefix, and
+  // `planFork` already reports the incompleteness on the plan (principle 12).
+  return exported.complete
+    ? transcriptRenderings(prefix).agentContent
+    : exported.document;
 }
 
 export type SubmissionResult =
