@@ -61,9 +61,17 @@ export type EventEntity = (typeof EVENT_ENTITIES)[number];
 
 /**
  * "created" and "updated" both carry the full entity so a subscriber never
- * has to reconcile a diff; "deleted" carries only the id, since the entity no
- * longer exists to describe. Soft-deletes and lifecycle changes (archived,
- * ended, etc.) are "updated" — the row still exists and is still addressable.
+ * has to reconcile a diff; "deleted" carries only the id, since there is
+ * nothing left for a subscriber to draw.
+ *
+ * The verb describes what a surface should do, not how the row was stored. A
+ * soft delete is "deleted": the row survives so the gesture can be undone
+ * (principle 10), but the thing is off the board, and a canvas that kept
+ * drawing it would be showing something the human deleted. Undoing one is
+ * "created" — what the subscriber needs is the entity back, in full, and
+ * there is deliberately no "restored" verb to special-case. Changes that
+ * leave the thing on the board — archived, ended, status or subject set —
+ * are "updated".
  */
 export type EventVerb = "created" | "updated" | "deleted";
 
