@@ -1,9 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { humanAuthor } from "@plotroom/core";
-import type { Session, SessionId, Transcript } from "@plotroom/core";
+import { humanAuthor, phaseFacts } from "@plotroom/core";
+import type {
+  DomainEvent,
+  Session,
+  SessionId,
+  SessionStatus,
+  Transcript,
+} from "@plotroom/core";
 import { INHERIT_APP_TOOLS, startSession } from "@plotroom/core";
 
-import { createFixtureSessionDataSource } from "./data-source.js";
+import type { HttpClient } from "../transport/http.js";
+import type { MinimalWebSocket, WebSocketFactory } from "../transport/ws.js";
+import {
+  createApiSessionDataSource,
+  createFixtureSessionDataSource,
+} from "./data-source.js";
 
 function session(id: string): Session {
   return startSession(
@@ -188,5 +199,240 @@ describe("createFixtureSessionDataSource", () => {
         contentHash: "hash",
       }),
     ).toBeNull();
+  });
+
+  it("subscribeSession delivers the fixture session and its status immediately", () => {
+    const running = session("sess-1");
+    const status: SessionStatus = {
+      phase: { kind: "thinking" },
+      facts: phaseFacts({ kind: "thinking" }),
+      health: { silentForMs: 0, possiblyStalled: false },
+    };
+    const source = createFixtureSessionDataSource({
+      sessions: [running],
+      statuses: new Map([["sess-1" as SessionId, status]]),
+      transcripts: new Map(),
+    });
+    const onDetail = vi.fn();
+    source.subscribeSession("sess-1" as SessionId, onDetail);
+    expect(onDetail).toHaveBeenCalledWith({ session: running, status });
+  });
+
+  it("subscribeSession defaults to an idle status when none was given", () => {
+    const source = createFixtureSessionDataSource({
+      sessions: [session("sess-1")],
+      transcripts: new Map(),
+    });
+    const onDetail = vi.fn();
+    source.subscribeSession("sess-1" as SessionId, onDetail);
+    expect(onDetail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: expect.objectContaining({ phase: { kind: "idle" } }),
+      }),
+    );
+  });
+
+  it("subscribeSession never calls back for a session that does not exist yet", () => {
+    const source = createFixtureSessionDataSource({
+      sessions: [],
+      transcripts: new Map(),
+    });
+    const onDetail = vi.fn();
+    source.subscribeSession("sess-missing" as SessionId, onDetail);
+    expect(onDetail).not.toHaveBeenCalled();
+  });
+});
+
+/* ------------------------------------------------------------- live (Stage 2) */
+
+function fakeSocket(): MinimalWebSocket {
+  return {
+    onopen: null,
+    onclose: null,
+    onerror: null,
+    onmessage: null,
+    send: vi.fn(),
+    close: vi.fn(),
+  };
+}
+
+function flush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function sessionEventMessage(
+  seq: number,
+  target: Session,
+  phase: SessionStatus["phase"] = { kind: "thinking" },
+): string {
+  const event: DomainEvent = {
+    id: `evt_${seq}` as DomainEvent["id"],
+    seq,
+    occurredAt: 0,
+    author: humanAuthor,
+    entity: "session",
+    verb: "updated",
+    session: target,
+    status: {
+      phase,
+      facts: phaseFacts(phase),
+      health: { silentForMs: 0, possiblyStalled: false },
+    },
+  };
+  return JSON.stringify({ type: "event", event });
+}
+
+describe("createApiSessionDataSource", () => {
+  it("loadList reads GET /api/sessions, no socket involved", async () => {
+    const target = session("sess-1");
+    const get = vi.fn(async (path: string) => {
+      expect(path).toBe("/api/sessions");
+      return {
+        sessions: [
+          {
+            session: target,
+            runId: null,
+            workspaceId: null,
+            phase: { kind: "idle" },
+            end: null,
+          },
+        ],
+      };
+    });
+    const http = { get } as unknown as HttpClient;
+    const createSocket = vi.fn() as unknown as WebSocketFactory;
+
+    const source = createApiSessionDataSource({ http, createSocket });
+    expect((await source.loadList()).map((s) => s.id)).toEqual(["sess-1"]);
+    expect(createSocket).not.toHaveBeenCalled();
+  });
+
+  it("loadTranscript reads GET /api/sessions/:id/transcript", async () => {
+    const get = vi.fn(async (path: string) => {
+      expect(path).toBe("/api/sessions/sess-1/transcript");
+      return {
+        sessionId: "sess-1",
+        turns: [{ ordinal: 1, startedAt: 1, entries: [] }],
+      };
+    });
+    const http = { get } as unknown as HttpClient;
+    const source = createApiSessionDataSource({
+      http,
+      createSocket: vi.fn() as unknown as WebSocketFactory,
+    });
+    const transcript = await source.loadTranscript("sess-1" as SessionId);
+    expect(transcript.turns).toHaveLength(1);
+  });
+
+  it("loadReleasedContent always resolves null (no server release mechanism yet)", async () => {
+    const source = createApiSessionDataSource({
+      http: {} as HttpClient,
+      createSocket: vi.fn() as unknown as WebSocketFactory,
+    });
+    expect(
+      await source.loadReleasedContent("sess-1" as SessionId, "call-1", {
+        releasedAt: 1,
+        bytes: 1,
+        contentHash: "h",
+      }),
+    ).toBeNull();
+  });
+
+  it("subscribeSession connects, buffers, resyncs off /api/snapshot, then applies the rest", async () => {
+    const target = session("sess-1");
+    const socket = fakeSocket();
+    const createSocket: WebSocketFactory = vi.fn(() => socket);
+    const get = vi.fn(async (path: string) => {
+      expect(path).toBe("/api/snapshot");
+      return {
+        seq: 5,
+        sessions: [{ session: target, runId: null, phase: { kind: "idle" } }],
+      };
+    });
+    const http = { get } as unknown as HttpClient;
+
+    const source = createApiSessionDataSource({ http, createSocket });
+    const onDetail = vi.fn();
+    source.subscribeSession("sess-1" as SessionId, onDetail);
+
+    socket.onopen?.();
+    // Buffered before the snapshot lands: seq 3 is already reflected (<=5),
+    // seq 6 is not and must be applied after.
+    socket.onmessage?.({
+      data: sessionEventMessage(3, target, {
+        kind: "tool-running",
+        toolName: "bash",
+      }),
+    });
+    socket.onmessage?.({
+      data: sessionEventMessage(6, target, { kind: "responding" }),
+    });
+    await flush();
+
+    const phases = onDetail.mock.calls.map((call) => call[0].status.phase.kind);
+    expect(phases.at(-1)).toBe("responding");
+    expect(phases).not.toContain("tool-running");
+  });
+
+  it("subscribeTranscript fetches once, then refetches on a session_observation event", async () => {
+    const socket = fakeSocket();
+    const createSocket: WebSocketFactory = vi.fn(() => socket);
+    let turnCount = 1;
+    const get = vi.fn(async (path: string) => {
+      if (path === "/api/snapshot") return { seq: 0, sessions: [] };
+      expect(path).toBe("/api/sessions/sess-1/transcript");
+      return {
+        sessionId: "sess-1",
+        turns: Array.from({ length: turnCount }, (_, i) => ({
+          ordinal: i + 1,
+          startedAt: i,
+          entries: [],
+        })),
+      };
+    });
+    const http = { get } as unknown as HttpClient;
+
+    const source = createApiSessionDataSource({ http, createSocket });
+    const onEvent = vi.fn();
+    source.subscribeTranscript("sess-1" as SessionId, onEvent);
+    await flush();
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent.mock.calls[0]?.[0].transcript.turns).toHaveLength(1);
+
+    socket.onopen?.();
+    await flush();
+
+    turnCount = 2;
+    const observation: DomainEvent = {
+      id: "evt_1" as DomainEvent["id"],
+      seq: 1,
+      occurredAt: 0,
+      author: humanAuthor,
+      entity: "session_observation",
+      verb: "created",
+      sessionId: "sess-1" as SessionId,
+      seqInSession: 1,
+      observation: { kind: "turn-started", turn: 2, at: 0 },
+    };
+    socket.onmessage?.({
+      data: JSON.stringify({ type: "event", event: observation }),
+    });
+    await flush();
+
+    expect(onEvent.mock.calls.at(-1)?.[0].transcript.turns).toHaveLength(2);
+  });
+
+  it("unsubscribing the last listener closes the socket", async () => {
+    const socket = fakeSocket();
+    const createSocket: WebSocketFactory = vi.fn(() => socket);
+    const http = {
+      get: vi.fn(async () => ({ seq: 0, sessions: [] })),
+    } as unknown as HttpClient;
+
+    const source = createApiSessionDataSource({ http, createSocket });
+    const unsubscribe = source.subscribeSession("sess-1" as SessionId, vi.fn());
+    await flush();
+    unsubscribe();
+    expect(socket.close).toHaveBeenCalledTimes(1);
   });
 });
