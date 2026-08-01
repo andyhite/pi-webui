@@ -9,7 +9,9 @@
  * (docs/decisions/0001-session-runtime-abstraction.md).
  */
 export * from "./accounting.js";
+export * from "./checkpoint.js";
 export * from "./deletion.js";
 export * from "./end-states.js";
 export * from "./runtime.js";
 export * from "./session.js";
+export * from "./transcript.js";
