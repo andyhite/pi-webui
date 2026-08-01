@@ -413,6 +413,16 @@ describe("reset states what it removes first (§12)", () => {
     expect(list(await harness.ok("/snapshot"), "nodes")).toHaveLength(1);
   });
 
+  it("names sessions still in flight before it deletes their records", async () => {
+    const harness = await boot();
+    await board(harness);
+
+    // With nothing running, the plan says nothing about sessions.
+    const quiet = await harness.ok("/reset/plan?scope=everything");
+    expect(at(quiet, "plan.counts.liveSessions")).toBe(0);
+    expect(list(quiet, "plan.removes").join(" ")).not.toMatch(/in flight/);
+  });
+
   it("empties the store when everything is confirmed, and stays usable", async () => {
     const harness = await boot();
     await board(harness);

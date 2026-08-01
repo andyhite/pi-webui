@@ -152,7 +152,17 @@ export function driveSession(
         proven: false,
       });
     }
-  })();
+  })().catch((error: unknown) => {
+    // The pump must never reject. Recording the end can itself fail — the
+    // clearest case is a session whose record was removed underneath it by a
+    // confirmed reset (§12) — and an unhandled rejection is a process Node
+    // terminates. Nothing downstream waits on this promise except shutdown, so
+    // the honest end of the line is a log entry (§8).
+    logger.error("session driver stopped without recording an end", {
+      sessionId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
 }
 
 /**

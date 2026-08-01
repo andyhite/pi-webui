@@ -1,5 +1,6 @@
-import { and, isNotNull, sql } from "drizzle-orm";
+import { and, isNotNull, isNull, sql } from "drizzle-orm";
 import {
+  initialReadiness,
   systemClock,
   DEFAULT_COMPACTION_POLICY,
   DEFAULT_RUN_RETENTION_POLICY,
@@ -232,10 +233,16 @@ export class Maintenance {
         counts["blobs"] = this.count(blobs);
 
         const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
+        const live = this.liveSessions();
 
         return {
           scope,
           removes: [
+            ...(live > 0
+              ? [
+                  `${live} ${live === 1 ? "session" : "sessions"} still in flight \u2014 their records go, and their runtimes are not asked to stop first`,
+                ]
+              : []),
             `every row in the store: ${total} in total, including ${counts["runs"]} runs, ${counts["sessions"]} sessions, ${counts["objects"]} objects, and ${counts["workstreams"]} workstreams`,
             `${counts["blobs"]} stored blobs, inline and external alike — the content itself`,
             "every provisioned workspace and the shared git cache",
@@ -243,7 +250,7 @@ export class Maintenance {
           keeps: [
             "the schema: the store is emptied, not deleted, so the app starts clean rather than broken",
           ],
-          counts,
+          counts: { ...counts, liveSessions: live },
         };
       }
     }
@@ -270,13 +277,10 @@ export class Maintenance {
           provisionedAt: null,
           provisionCostJson: null,
           lastFingerprintJson: null,
-          readinessJson: JSON.stringify({
-            state: "unprovisioned",
-            since: this.now() * 1000,
-            setup: null,
-            lastAttempt: null,
-            provisionFailure: null,
-          }),
+          // The record shape is `@plotroom/core`'s, so it is asked for rather
+          // than restated here: a second spelling of "unprovisioned" is a second
+          // thing to keep in step.
+          readinessJson: JSON.stringify(initialReadiness(this.now() * 1000)),
         })
         .where(isNotNull(workspaces.provisionedAt))
         .run();
@@ -337,6 +341,16 @@ export class Maintenance {
       .select({ count: sql<number>`COUNT(*)` })
       .from(nodes)
       .where(and(isNotNull(nodes.x), isNotNull(nodes.y)))
+      .get();
+    return row?.count ?? 0;
+  }
+
+  /** Sessions with no end recorded — work a reset would delete out from under. */
+  private liveSessions(): number {
+    const row = this.state.db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(sessions)
+      .where(isNull(sessions.endKind))
       .get();
     return row?.count ?? 0;
   }
