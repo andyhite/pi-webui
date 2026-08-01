@@ -11,6 +11,7 @@ import {
   type RunBatch,
   type RunId,
   type RunScopeKind,
+  type SessionEnd,
   type SessionId,
   type WorkstreamId,
 } from "@plotroom/core";
@@ -20,7 +21,8 @@ import { refused } from "../http/errors.js";
 import type { Logger } from "../logging/logger.js";
 import type { ApiStores } from "../routes/api.js";
 import type { RunOneInput, RunOneResult, RunService } from "./service.js";
-import { resolveScope, type ScopedCommand } from "./scopes.js";
+import { checkRunGesture } from "./delegation.js";
+import { dependenciesOf, resolveScope, type ScopedCommand } from "./scopes.js";
 
 /**
  * Scoped runs and the queue of work (§4.1, Epic 5.5).
@@ -129,9 +131,23 @@ export class RunQueueService {
     const { stores } = this.deps;
     const resolved = resolveScope(stores, input);
 
+    // The hash each command *would* be admitted under, with the in-batch rule
+    // applied over this very scope — so the preview and the entry it becomes
+    // cannot disagree about what was agreed (§4.1).
+    const inScope = resolved.commands.map((command) => command.commandId);
     const commands = resolved.commands.map((command) => {
       const preview = stores.runs.preview(command.commandId);
-      return { ...command, preview, contractHash: contractHashOf(preview) };
+      const scope = this.contractScope(
+        command.commandId,
+        inScope.filter((other) => other !== command.commandId),
+      );
+      return {
+        ...command,
+        preview,
+        contractHash: contractHashOf(preview, scope),
+        /** True when the batch itself is what makes this command runnable. */
+        satisfiedByBatch: scope.dependsOnBatch === true,
+      };
     });
 
     const blocked = commands
@@ -202,6 +218,17 @@ export class RunQueueService {
       scopeId: input.scopeId,
     });
 
+    // §4.1's lineage rule over the whole scope, before anything is recorded: "a
+    // session cannot run, resume, or re-run itself or anything in its own
+    // initiation chain". Checked here rather than only at each admission, so a
+    // scope a session may not run is refused as one gesture instead of becoming a
+    // batch whose entries fail one at a time.
+    checkRunGesture(this.deps.stores, {
+      actor: input.actor,
+      tool: "run_scope",
+      commandIds: preview.commands.map((command) => command.commandId),
+    });
+
     if (preview.commands.length === 0) {
       // An empty scope is not a refusal and not a batch: "re-run all drifted"
       // with nothing drifted must run nothing at all, and say so.
@@ -222,6 +249,7 @@ export class RunQueueService {
         : { spendCapMicros: input.spendCapMicros }),
     });
 
+    const inScope = preview.commands.map((command) => command.commandId);
     const entries = preview.commands.map((command) =>
       stores.queue.enqueue({
         batchId: batch.id,
@@ -231,7 +259,13 @@ export class RunQueueService {
         initiationKey: `${input.initiationKey}:${command.commandId}`,
         position: command.position,
         contractHash: command.contractHash,
-        contract: contractOf(command.preview),
+        contract: contractOf(
+          command.preview,
+          this.contractScope(
+            command.commandId,
+            inScope.filter((other) => other !== command.commandId),
+          ),
+        ),
         ...(input.spendCapMicros === undefined
           ? {}
           : { spendCapMicros: input.spendCapMicros }),
@@ -341,6 +375,9 @@ export class RunQueueService {
       // path under the same key the caller used, so the gesture stays one gesture.
       initiationKey: input.initiationKey,
       position: 1,
+      // A batch of one produces nothing for itself, so the in-batch rule excludes
+      // nothing here and every input binds — which is what a single command being
+      // queued should mean.
       contractHash: contractHashOf(preview),
       contract: contractOf(preview),
       ...(input.runtime === undefined ? {} : { runtime: input.runtime }),
@@ -353,7 +390,10 @@ export class RunQueueService {
     this.publishBatch(batch, "created", input.actor);
     this.publishEntry(entry, "created", input.actor);
 
-    return { admitted: false, queued: this.toQueuedRun(entry, 0) };
+    // Positioned like everything else in the queue, not hard-coded: "a queued run
+    // is visible as queued, shows its position" (§4.1), and a caller told it is at
+    // position zero has been told something that is not true of any queue.
+    return { admitted: false, queued: this.toQueuedRun(entry) };
   }
 
   /* ------------------------------------------------------------- the queue */
@@ -398,6 +438,12 @@ export class RunQueueService {
   /** "Can be cancelled before it starts" (§4.1) — and only before. */
   cancel(entryId: string, actor: Author): QueuedRun {
     const entry = this.deps.stores.queue.entry(entryId);
+    checkRunGesture(this.deps.stores, {
+      actor,
+      tool: "run_queue_cancel",
+      commandIds: [entry.commandId],
+    });
+
     if (!isQueuedRunCancellable(entry.state as QueuedRunState)) {
       throw refused({
         reason: "already_started",
@@ -423,6 +469,13 @@ export class RunQueueService {
    */
   async confirm(entryId: string, actor: Author): Promise<QueuedRun> {
     const entry = this.deps.stores.queue.entry(entryId);
+    // Confirming is agreeing to run it, so it is checked like running it.
+    checkRunGesture(this.deps.stores, {
+      actor,
+      tool: "run_queue_confirm",
+      commandIds: [entry.commandId],
+    });
+
     if (entry.state !== "needs_reask") {
       throw refused({
         reason: "not_reasking",
@@ -430,20 +483,56 @@ export class RunQueueService {
       });
     }
 
+    // What the batch is doing outranks the entry's own state. Confirming into a
+    // batch that may not run would queue a row nothing is allowed to admit — and
+    // the drain that follows would then keep reading it as "the next thing to
+    // admit" forever.
+    const batch = this.deps.stores.queue.batch(entry.batchId);
+    if (batch.state === "aborted" || batch.state === "completed") {
+      throw refused({
+        reason: "batch_not_running",
+        message: `this run belongs to a batch that is ${batch.state}; there is nothing left for a confirmation to start${batch.state === "aborted" ? " — stopped means stopped (§4.1)" : ""}`,
+      });
+    }
+
     const preview = this.deps.stores.runs.preview(entry.commandId);
+    const contract = this.contractFor(entry, preview);
+
+    // A paused batch keeps the answer and does not act on it: the operator has
+    // agreed to this contract, and resuming the batch is the separate gesture that
+    // starts the remainder (§4.1 — the product never decides to resume).
+    const paused = batch.state === "paused";
     const reconfirmed = this.deps.stores.queue.reconfirm(entryId, {
-      hash: contractHashOf(preview),
-      contract: contractOf(preview),
+      hash: contract.hash,
+      contract: contract.contract,
+      ...(paused
+        ? {
+            state: "paused" as const,
+            detail:
+              "confirmed; it runs when the batch this belongs to is resumed (§4.1)",
+          }
+        : {}),
     });
 
     this.publishEntry(reconfirmed, "updated", actor);
-    await this.drain();
+    if (!paused) await this.drain();
     return this.toQueuedRun(this.deps.stores.queue.entry(entryId));
   }
 
   /** The human gesture that starts a paused batch's remainder (§4.1). */
   async resumeBatch(batchId: string, actor: Author): Promise<RunBatch> {
     const batch = this.deps.stores.queue.batch(batchId);
+    // Resuming is initiating the remainder, so every command still in it is
+    // checked as if it were being run now.
+    checkRunGesture(this.deps.stores, {
+      actor,
+      tool: "run_batch_resume",
+      commandIds: this.deps.stores.queue
+        .entriesForBatch(batchId)
+        .filter((entry) => entry.settledAt === null)
+        .map((entry) => entry.commandId),
+    });
+
     if (batch.state !== "paused") {
       throw refused({
         reason: "not_paused",
@@ -496,8 +585,25 @@ export class RunQueueService {
       return;
     }
 
-    const end = event.session.end;
+    this.settleEntryFor(entry, event.session.end);
 
+    // The slot is free either way, and what is waiting behind this was initiated
+    // by somebody's gesture: pausing or aborting *this* batch is not a reason to
+    // hold up another one. Admission is per entry; the batch verbs decide only
+    // about their own entries.
+    await this.drain();
+  }
+
+  /**
+   * One session end becomes one entry outcome.
+   *
+   * The switch is **exhaustive on purpose** — no `default`. A `default` here is how
+   * a new end kind gets silently recorded as `done`, which is exactly the bug an
+   * interrupted session used to hit: nobody stopped it, it did not fail, and it did
+   * not finish, and the queue reported success. A seventh end kind must fail to
+   * compile rather than be quietly called done (principle 11).
+   */
+  private settleEntryFor(entry: RunQueueRow, end: SessionEnd): void {
     switch (end.kind) {
       case "failed":
       case "out-of-budget":
@@ -510,7 +616,19 @@ export class RunQueueService {
           entry.batchId,
           `a run in this batch ended as ${end.kind}; address it and resume (§4.1)`,
         );
-        break;
+        return;
+
+      case "interrupted":
+        // Its own outcome, and a pause rather than a failure: a restart caught this
+        // in flight, so the remainder waits for the human who decides whether to
+        // resume it (principle 11, and §4.1's pause is the same shape — somebody
+        // has to address it).
+        this.deps.stores.queue.settle(entry.id, "interrupted", end.message);
+        this.pauseBatch(
+          entry.batchId,
+          "a run in this batch was interrupted rather than finishing; address it and resume (§4.1, principle 11)",
+        );
+        return;
 
       case "stopped":
         // "A user stop aborts the remainder rather than pausing it: stopped means
@@ -521,19 +639,156 @@ export class RunQueueService {
           entry.batchId,
           "a run in this batch was stopped; stopped means stopped (§4.1)",
         );
-        break;
+        return;
 
-      default:
+      case "completed":
+      case "ended-by-user":
         this.deps.stores.queue.settle(entry.id, "done", end.kind);
         this.settleBatch(entry.batchId, { kind: "human" });
-        break;
+        return;
+    }
+  }
+
+  /* -------------------------------------------------------- the contract */
+
+  /**
+   * This entry's contract, with the in-batch rule applied (see {@link RunContract}).
+   *
+   * Derived rather than stored, from the batch's own command list — which is stable
+   * for the life of the batch — so the exclusion set computed at enqueue time and
+   * the one computed at admission time cannot disagree. Storing it would be a
+   * second copy of a fact the rows already carry.
+   */
+  private contractFor(
+    entry: RunQueueRow,
+    preview: RunPreview,
+  ): { readonly hash: string; readonly contract: RunContract } {
+    const siblings = this.deps.stores.queue
+      .entriesForBatch(entry.batchId)
+      .map((sibling) => sibling.commandId)
+      .filter((commandId) => commandId !== entry.commandId);
+
+    const scope = this.contractScope(entry.commandId, siblings);
+    return {
+      hash: contractHashOf(preview, scope),
+      contract: contractOf(preview, scope),
+    };
+  }
+
+  /**
+   * Commands in this entry's own batch that it consumes from and that have not
+   * finished yet.
+   *
+   * `done` is the only state that counts: a sibling that failed, was interrupted, or
+   * was cancelled will never produce what this entry needs, and the batch's own
+   * pause or abort is what decides that entry's fate — not a silent admission of
+   * something that cannot run.
+   */
+  private pendingInBatchProducers(entry: RunQueueRow): readonly string[] {
+    const siblings = this.deps.stores.queue
+      .entriesForBatch(entry.batchId)
+      .filter((sibling) => sibling.commandId !== entry.commandId);
+    if (siblings.length === 0) return [];
+
+    const dependencies = dependenciesOf(this.deps.stores, entry.commandId);
+    return siblings
+      .filter(
+        (sibling) =>
+          dependencies.includes(sibling.commandId) && sibling.state !== "done",
+      )
+      .map((sibling) => sibling.commandId);
+  }
+
+  /**
+   * The exclusion set for one command against the others in its scope.
+   *
+   * What "produced by a sibling" means concretely: the sibling's output
+   * placeholders, and whatever object each has bound to. A downstream input node
+   * points at the placeholder before the upstream runs and at the bound object
+   * after it, so both spellings have to be in the set for the rule to hold across
+   * exactly the moment it exists for.
+   */
+  private contractScope(
+    commandId: string,
+    siblingCommandIds: readonly string[],
+  ): ContractScope {
+    if (siblingCommandIds.length === 0) return {};
+
+    const produced = new Set<string>();
+    for (const sibling of siblingCommandIds) {
+      for (const output of this.deps.stores.commands.outputs(sibling)) {
+        produced.add(output.id);
+        if (output.boundObjectId !== null) produced.add(output.boundObjectId);
+      }
     }
 
-    // The slot is free either way, and what is waiting behind this was initiated
-    // by somebody's gesture: pausing or aborting *this* batch is not a reason to
-    // hold up another one. Admission is per entry; the batch verbs decide only
-    // about their own entries.
+    // Whether *this* command consumes any of it — which is what decides whether
+    // `runnable` is part of what was agreed.
+    const dependsOnBatch = dependenciesOf(this.deps.stores, commandId).some(
+      (dependency) => siblingCommandIds.includes(dependency),
+    );
+
+    return { producedInBatch: produced, dependsOnBatch };
+  }
+
+  /* -------------------------------------------------------------- recovery */
+
+  /**
+   * Reconcile the queue with what actually happened, then admit what is waiting.
+   *
+   * Called once at boot, after `RunService.recoverFromRestart` has recorded every
+   * in-flight session as **interrupted**. Two things are true here and nowhere
+   * else:
+   *
+   * - an entry the queue believes is `running` has a session that ended while
+   *   nothing was subscribed to hear it, so its outcome was never applied. Left
+   *   alone, its batch stays `running` forever and the operator is shown work in
+   *   flight that no process is doing (principle 11's whole point);
+   * - nothing is running, so every queued entry is admissible.
+   *
+   * **The drain is not a timer** (§4.1): every entry it admits was already
+   * initiated by a human or a session gesture, and a restart does not un-initiate
+   * one. The system is deciding *when* the work it was told to do happens — never
+   * *whether* — which is what queuing is, and refusing to admit at boot would mean
+   * a restart silently dropped work somebody asked for.
+   */
+  async recoverAfterRestart(): Promise<{
+    readonly reconciled: readonly string[];
+    readonly admitted: number;
+  }> {
+    const { stores } = this.deps;
+    const reconciled: string[] = [];
+
+    for (const entry of stores.queue.inFlightEntries()) {
+      if (entry.sessionId === null) {
+        // Admitted, never bound to a session: the process died between the two.
+        // It goes back to `queued`, where its contract is re-checked like any
+        // other admission rather than assumed still true.
+        const requeued = stores.queue.reconfirmNothing(entry.id);
+        this.publishEntry(requeued, "updated", { kind: "human" });
+        reconciled.push(entry.id);
+        continue;
+      }
+
+      const session = stores.sessions.get(entry.sessionId);
+      const end = session.session.end;
+      if (end === null) continue;
+
+      this.settleEntryFor(entry, end);
+      reconciled.push(entry.id);
+    }
+
+    if (reconciled.length > 0) {
+      this.deps.logger.warn("reconciled queued runs a restart left in flight", {
+        entryIds: reconciled,
+      });
+    }
+
+    const waitingBefore = stores.queue.waiting().length;
     await this.drain();
+    const waitingAfter = stores.queue.waiting().length;
+
+    return { reconciled, admitted: waitingBefore - waitingAfter };
   }
 
   /* ---------------------------------------------------------------- draining */
@@ -561,15 +816,23 @@ export class RunQueueService {
       do {
         this.#drainAgain = false;
 
+        // Every entry this pass has already looked at. The loop advances because
+        // `admit` always moves the row it declines — but relying on that would make
+        // a hung server one forgotten branch away, so the loop is *also* unable to
+        // consider an entry twice. Both belts: the row moves, and a row that
+        // somehow did not move is still never read again.
+        const attempted = new Set<string>();
+
         for (;;) {
           const running = this.runningCount();
           if (running >= this.deps.concurrencyLimit) break;
 
-          const next = this.deps.stores.queue.waiting()[0];
+          const next = this.deps.stores.queue
+            .waiting()
+            .find((candidate) => !attempted.has(candidate.entry.id));
           if (next === undefined) break;
+          attempted.add(next.entry.id);
 
-          // A re-ask does not free the loop to retry the same entry: it moved out
-          // of `queued`, so the next iteration sees whatever is behind it.
           await this.admit(next.entry);
         }
       } while (this.#drainAgain);
@@ -587,19 +850,50 @@ export class RunQueueService {
     const { stores } = this.deps;
     const batch = stores.queue.batch(entry.batchId);
     if (batch.state !== "running") {
-      // Paused or aborted underneath it; the batch's own verbs own those rows.
+      // The batch changed underneath this row. Whatever the reason, the row must
+      // leave `queued`: an admission path that declines without moving the entry
+      // leaves the drain loop reading the same "next" entry forever, which is a
+      // hung server rather than a refusal. So this branch decides the row's fate
+      // rather than deferring it to a verb that may never be called.
+      const declined =
+        batch.state === "paused"
+          ? stores.queue.park(
+              entry.id,
+              batch.pauseReason ??
+                "the batch this belongs to is paused; resume it to run the remainder (§4.1)",
+            )
+          : stores.queue.settle(
+              entry.id,
+              "cancelled",
+              `the batch this belongs to is ${batch.state}`,
+            );
+      this.publishEntry(declined, "updated", actorOfBatch(batch));
+      return false;
+    }
+
+    // Not yet its turn: something this entry consumes is produced by a command in
+    // its own batch that has not finished. This is the other half of the in-batch
+    // rule — excluding those inputs from the contract stops it *re-asking*, and
+    // this stops it *running* before what it consumes exists. Without it a
+    // subgraph under a limit of two would admit the downstream command immediately
+    // and the run path would refuse it for an input nothing had produced yet.
+    //
+    // It stays `queued` on purpose: nothing is wrong with it, and the drain moves
+    // on because it never considers an entry twice in one pass.
+    const pending = this.pendingInBatchProducers(entry);
+    if (pending.length > 0) {
       return false;
     }
 
     const preview = stores.runs.preview(entry.commandId);
-    const hash = contractHashOf(preview);
+    const { hash } = this.contractFor(entry, preview);
 
     if (hash !== entry.contractHash) {
       const reasked = stores.queue.markNeedsReask(
         entry.id,
         describeContractChange(
           JSON.parse(entry.contractJson) as RunContract,
-          contractOf(preview),
+          this.contractFor(entry, preview).contract,
         ),
       );
       this.publishEntry(reasked, "updated", actorOfBatch(batch));
@@ -635,6 +929,22 @@ export class RunQueueService {
         sessionId: started.session.session.id,
       });
       this.publishEntry(running, "updated", actorOfBatch(batch));
+
+      // A session can end *before* the row that names it is written: the runtime's
+      // stream is already draining while `runOne` is still returning, and a
+      // scripted or instantly-failing session gets all the way to its end state
+      // first. The end event then finds no entry for that session and the row sits
+      // in `running` forever — an entry nothing will ever settle, and a batch that
+      // never finishes.
+      //
+      // So the binding is followed by a look at what already happened. Settling
+      // twice is not possible: the event path skips an entry that has a
+      // `settled_at`, and this path only ever runs once per admission.
+      const ended = stores.sessions.get(started.session.session.id).session.end;
+      if (ended !== null) {
+        this.settleEntryFor(stores.queue.entry(entry.id), ended);
+      }
+
       return true;
     } catch (error) {
       // A refusal is the run path's, verbatim: the entry records why rather than
@@ -763,37 +1073,117 @@ export class RunQueueService {
 /**
  * What "the preview is the contract" means, concretely.
  *
- * The assembled body and the configuration, plus the exact versions that went in.
- * The body alone would miss a model change; the versions alone would miss an
- * edit that produced identical bytes. Both, hashed, is the smallest statement of
- * "this is what you agreed to run".
+ * The configuration, plus every input with the exact version and content that went
+ * in, in assembly order. The content hashes alone would miss a model change; the
+ * configuration alone would miss an edited input; the ordinals are what make
+ * "assembly order is edge order" (§3.5) part of what was agreed rather than an
+ * accident of it.
+ *
+ * Per-input hashes rather than one hash over the assembled body, deliberately: the
+ * body is a function of the ordered parts, so it covers nothing extra — and one
+ * opaque hash cannot express **the in-batch rule** below, which needs to leave
+ * some inputs out and keep the rest binding.
+ *
+ * ## The in-batch rule (§4.1)
+ *
+ * A subgraph or what's-missing scope is one gesture over a chain the operator
+ * previewed *as a chain*: they were shown that the downstream command consumes the
+ * upstream command's output. So when the upstream runs and binds that output, the
+ * downstream's input appearing is **the contract executing, not the contract
+ * drifting** — re-asking there would ask the operator to confirm the thing they
+ * just confirmed, and a batch of two could never run unattended.
+ *
+ * Inputs produced by another command *in the same batch* are therefore excluded
+ * from this entry's hash, and so is `runnable`, whose flip from false to true is
+ * caused by exactly that binding. Everything else still binds: an input from
+ * **outside** the batch that changes while this entry waits re-asks exactly as
+ * before, and so does a configuration change.
  */
 export interface RunContract {
-  readonly bodyHash: string;
   readonly configuration: unknown;
   readonly inputs: readonly {
+    readonly ordinal: number;
     readonly objectId: string;
     readonly versionId: string;
+    readonly contentHash: string;
   }[];
-  readonly runnable: boolean;
+  /**
+   * Null when this entry depends on a command in its own batch: whether it is
+   * runnable *now* is not what was agreed, because the batch itself is what makes
+   * it runnable. Boolean otherwise.
+   */
+  readonly runnable: boolean | null;
+  /**
+   * The object ids left out because the batch produces them, listed so the record
+   * says which exclusions were applied rather than leaving them to be re-derived.
+   */
+  readonly producedInBatch: readonly string[];
 }
 
-export function contractOf(preview: RunPreview): RunContract {
+export interface ContractScope {
+  /**
+   * Object and output ids this entry's own batch produces. An input matching one
+   * of these is the chain executing, not drifting.
+   */
+  readonly producedInBatch?: ReadonlySet<string>;
+  /** True when this entry consumes something its own batch produces. */
+  readonly dependsOnBatch?: boolean;
+}
+
+export function contractOf(
+  preview: RunPreview,
+  scope: ContractScope = {},
+): RunContract {
+  const produced = scope.producedInBatch ?? new Set<string>();
+  const excluded: string[] = [];
+
+  const inputs = preview.inputs.filter((input) => {
+    if (!produced.has(input.objectId)) return true;
+    excluded.push(input.objectId);
+    return false;
+  });
+
   return {
-    bodyHash: createHash("sha256").update(preview.body).digest("hex"),
     configuration: preview.configuration,
-    inputs: preview.inputs.map((input) => ({
+    inputs: inputs.map((input) => ({
+      ordinal: input.ordinal,
       objectId: input.objectId,
       versionId: input.versionId,
+      contentHash: input.contentHash,
     })),
-    runnable: preview.runnable,
+    runnable: scope.dependsOnBatch === true ? null : preview.runnable,
+    producedInBatch: [...excluded].sort(),
   };
 }
 
-export function contractHashOf(preview: RunPreview): string {
+export function contractHashOf(
+  preview: RunPreview,
+  scope: ContractScope = {},
+): string {
   return createHash("sha256")
-    .update(JSON.stringify(contractOf(preview)))
+    .update(JSON.stringify(agreedPartOf(contractOf(preview, scope))))
     .digest("hex");
+}
+
+/**
+ * The part of a contract that *is* the agreement, which is what gets hashed.
+ *
+ * `producedInBatch` is deliberately outside it. It is a record of which exclusions
+ * were applied, and it necessarily changes at exactly the moment the in-batch rule
+ * fires — an input the batch produces is absent from the preview before the
+ * upstream runs and present after. Hashing it would make the rule cancel itself
+ * out: every chain would re-ask on the hop the rule exists to allow.
+ */
+function agreedPartOf(contract: RunContract): {
+  readonly configuration: unknown;
+  readonly inputs: RunContract["inputs"];
+  readonly runnable: boolean | null;
+} {
+  return {
+    configuration: contract.configuration,
+    inputs: contract.inputs,
+    runnable: contract.runnable,
+  };
 }
 
 /**
@@ -807,23 +1197,31 @@ function describeContractChange(agreed: RunContract, now: RunContract): string {
   );
   const changed: string[] = [];
 
+  const contentBefore = new Map(
+    agreed.inputs.map((input) => [input.objectId, input.contentHash]),
+  );
+
   for (const input of now.inputs) {
     const previous = before.get(input.objectId);
     if (previous === undefined) {
       changed.push(`${input.objectId} was added`);
     } else if (previous !== input.versionId) {
       changed.push(`${input.objectId} moved to a new version`);
+    } else if (contentBefore.get(input.objectId) !== input.contentHash) {
+      // Same version id, different bytes. It should not happen, and saying so
+      // plainly is better than a re-ask with no reason attached.
+      changed.push(`${input.objectId} changed without a new version`);
     }
     before.delete(input.objectId);
   }
   for (const [objectId] of before) changed.push(`${objectId} was removed`);
 
-  if (changed.length === 0 && agreed.bodyHash !== now.bodyHash) {
-    changed.push("the assembled content changed");
+  if (changed.length === 0 && orderOf(agreed) !== orderOf(now)) {
+    changed.push("its inputs were reordered, which changes what it assembles");
   }
   if (agreed.runnable !== now.runnable) {
     changed.push(
-      now.runnable
+      now.runnable === true
         ? "it is runnable now, where it was not when you asked"
         : "it is no longer runnable",
     );
@@ -831,6 +1229,13 @@ function describeContractChange(agreed: RunContract, now: RunContract): string {
   if (changed.length === 0) changed.push("its configuration changed");
 
   return `this run was previewed before it waited, and its inputs changed since: ${changed.join("; ")}. Confirm to run what it would assemble now (§4.1).`;
+}
+
+/** Assembly order, as one comparable string (§3.5: edge order is assembly order). */
+function orderOf(contract: RunContract): string {
+  return contract.inputs
+    .map((input) => `${input.ordinal}:${input.objectId}`)
+    .join(",");
 }
 
 /* -------------------------------------------------------------- aggregation */

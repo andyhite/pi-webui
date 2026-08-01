@@ -48,9 +48,21 @@ export function startServer(config = loadServerConfig()) {
   // shown a session the product believes is running (principle 11; resuming one
   // is a gesture, never automatic), and an initiation key claimed but never
   // settled is freed, since no attempt can still be holding it (principle 9).
-  const recovered = runtime.runs.recoverFromRestart(
-    "the server restarted while this session was in flight",
-  );
+  //
+  // Then the queue is reconciled against what those sessions actually did and
+  // drained once. Both halves are needed and neither is a timer: an entry the
+  // queue thinks is running has an outcome nothing applied, so its batch would
+  // stay "running" forever; and an entry that was *waiting* was already initiated
+  // by somebody's gesture, which a restart does not un-initiate. Admitting it is
+  // §4.1's "the system is only deciding *when*, never *whether*" — refusing to
+  // would mean a restart silently dropped work somebody asked for.
+  const recovered = (async () => {
+    const recovery = await runtime.runs.recoverFromRestart(
+      "the server restarted while this session was in flight",
+    );
+    await runtime.queue.recoverAfterRestart();
+    return recovery;
+  })();
 
   const server = serve({
     fetch: app.fetch,

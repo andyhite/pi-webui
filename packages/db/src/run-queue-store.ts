@@ -277,7 +277,13 @@ export class RunQueueStore {
       .select()
       .from(runQueue)
       .where(eq(runQueue.state, "queued"))
-      .orderBy(asc(runQueue.position), asc(runQueue.enqueuedAt))
+      // Admission order is **gesture order first**, dependency order within a
+      // gesture second. `position` is per batch, so ordering by it first would let
+      // a batch admitted this minute overtake one admitted an hour ago just
+      // because both have a position 1 — the queue would stop being a queue across
+      // batches. Ties inside one batch fall to `position`, which is the dependency
+      // order the scope resolved (§4.1).
+      .orderBy(asc(runQueue.enqueuedAt), asc(runQueue.position))
       .all();
     return rows.map((entry, index) => ({ entry, position: index + 1 }));
   }
@@ -380,18 +386,45 @@ export class RunQueueStore {
     return this.entry(id);
   }
 
+  /**
+   * Park an entry as `paused` without settling it: the batch it belongs to is not
+   * running, so it may not be admitted, and it has not finished either.
+   *
+   * This is what keeps the drain loop finite. An entry the admission path declined
+   * must leave `queued`, or the loop that reads "the first waiting entry" reads the
+   * same row forever — which is a hung server, not a refusal.
+   */
+  park(id: string, detail: string): RunQueueRow {
+    this.state.db
+      .update(runQueue)
+      .set({ state: "paused", detail })
+      .where(eq(runQueue.id, id))
+      .run();
+    return this.entry(id);
+  }
+
   /** Accept the drifted inputs: the contract is replaced and the entry re-queued. */
   reconfirm(
     id: string,
-    contract: { readonly hash: string; readonly contract: unknown },
+    contract: {
+      readonly hash: string;
+      readonly contract: unknown;
+      /**
+       * Where the confirmed entry lands. `queued` for a running batch; `paused`
+       * for one that is not, so the operator's answer is kept rather than thrown
+       * away and rather than being admitted into a batch that must not run.
+       */
+      readonly state?: Extract<QueuedRunState, "queued" | "paused">;
+      readonly detail?: string | null;
+    },
   ): RunQueueRow {
     this.state.db
       .update(runQueue)
       .set({
-        state: "queued",
+        state: contract.state ?? "queued",
         contractHash: contract.hash,
         contractJson: JSON.stringify(contract.contract),
-        detail: null,
+        detail: contract.detail ?? null,
       })
       .where(eq(runQueue.id, id))
       .run();
@@ -400,12 +433,34 @@ export class RunQueueStore {
 
   settle(
     id: string,
-    state: Extract<QueuedRunState, "done" | "failed" | "cancelled">,
+    state: Extract<
+      QueuedRunState,
+      "done" | "failed" | "interrupted" | "cancelled"
+    >,
     detail: string | null = null,
   ): RunQueueRow {
     this.state.db
       .update(runQueue)
       .set({ state, detail, settledAt: this.now() })
+      .where(eq(runQueue.id, id))
+      .run();
+    return this.entry(id);
+  }
+
+  /**
+   * Put an entry back in the queue without touching its contract: it was admitted
+   * but never bound to a session, so nothing about what it agreed to run has
+   * changed. The contract is re-checked at the next admission like any other, so
+   * a restart cannot be a way to run something the operator did not agree to.
+   */
+  reconfirmNothing(id: string): RunQueueRow {
+    this.state.db
+      .update(runQueue)
+      .set({
+        state: "queued",
+        startedAt: null,
+        detail: "re-queued after a restart interrupted its start",
+      })
       .where(eq(runQueue.id, id))
       .run();
     return this.entry(id);
@@ -436,6 +491,20 @@ export class RunQueueStore {
     }
 
     return stranded;
+  }
+
+  /**
+   * Entries the queue believes are in flight. At boot these are the ones whose
+   * sessions the last process was running, and every one of them needs
+   * reconciling against what actually happened to that session (principle 11).
+   */
+  inFlightEntries(): readonly RunQueueRow[] {
+    return this.state.db
+      .select()
+      .from(runQueue)
+      .where(inArray(runQueue.state, ["running", "starting"]))
+      .orderBy(asc(runQueue.enqueuedAt), asc(runQueue.position))
+      .all();
   }
 
   /** Contract as stored, parsed. */

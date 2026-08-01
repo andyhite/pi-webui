@@ -356,6 +356,12 @@ export const QUEUED_RUN_STATES = [
   "needs_reask",
   "done",
   "failed",
+  /**
+   * A restart caught its session in flight. Its own state, not `done` and not
+   * `failed`: nobody stopped it, it did not fail, and it did not finish
+   * (principle 11) — the same distinction the session and the run already keep.
+   */
+  "interrupted",
   "cancelled",
   "paused",
 ] as const;

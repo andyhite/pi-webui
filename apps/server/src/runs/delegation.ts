@@ -86,28 +86,56 @@ export function checkDelegation(
   stores: ApiStores,
   input: { readonly actor: Author; readonly commandId: string },
 ): void {
+  checkRunGesture(stores, {
+    actor: input.actor,
+    tool: "run_one",
+    commandIds: [input.commandId],
+  });
+}
+
+/**
+ * §4.1's lineage rule for every gesture that runs, re-runs, or resumes work — not
+ * only `run_one`.
+ *
+ * The catalog declares `run_scope`, `run_queue_cancel`, `run_queue_confirm`, and
+ * `run_batch_resume` as lineage-checked with a stated target resolution. A
+ * declaration nothing calls is the failure cross-cutting rule 3 exists to prevent
+ * ("enforced, not documented"), so this is the one function all of them go through,
+ * over every command the gesture reaches: confirming or resuming *is* initiating
+ * the work, and a session must not use the queue as a way round the rule that
+ * refuses it the direct run.
+ */
+export function checkRunGesture(
+  stores: ApiStores,
+  input: {
+    readonly actor: Author;
+    readonly tool: string;
+    readonly commandIds: readonly string[];
+  },
+): void {
   if (input.actor.kind !== "session") return;
 
-  const check = checkToolCall(
-    {
-      actor: input.actor,
-      lineage: stores.graph.lineageIndex(),
-      targets: createToolTargetIndex(stores),
-    },
-    {
-      tool: "run_one",
-      input: { commandId: input.commandId },
-      target: { kind: "command", id: input.commandId },
-    },
-  );
+  const context = {
+    actor: input.actor,
+    lineage: stores.graph.lineageIndex(),
+    targets: createToolTargetIndex(stores),
+  };
 
-  if (!check.allowed) {
-    // The predicate's own reason and message, unchanged, so the refusal an agent
-    // parses is the one the canvas shows (principle 8).
-    throw refused({
-      reason: check.refusal.reason,
-      message: check.refusal.message,
+  for (const commandId of input.commandIds) {
+    const check = checkToolCall(context, {
+      tool: input.tool,
+      input: { commandId },
+      target: { kind: "command", id: commandId },
     });
+
+    if (!check.allowed) {
+      // The predicate's own reason and message, unchanged, so the refusal an agent
+      // parses is the one the canvas shows (principle 8).
+      throw refused({
+        reason: check.refusal.reason,
+        message: check.refusal.message,
+      });
+    }
   }
 }
 

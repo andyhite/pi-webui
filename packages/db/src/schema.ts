@@ -983,6 +983,8 @@ export const runQueue = sqliteTable(
         "needs_reask",
         "done",
         "failed",
+        /** A restart caught its session in flight; not done and not failed. */
+        "interrupted",
         "cancelled",
         "paused",
       ],

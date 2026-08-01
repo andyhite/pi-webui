@@ -558,6 +558,82 @@ describe("a batch pauses and aborts (§4.1)", () => {
   });
 });
 
+describe("a confirmation cannot wedge the queue", () => {
+  it("refuses a confirmation into an aborted batch — stopped means stopped", async () => {
+    const harness = await bootWithScript(staysOpen, 1);
+    const workstream = str(
+      await harness.ok("/workstreams", { method: "POST", body: {} }),
+      "workstream.id",
+    );
+    const producer = await command(harness, {
+      workstreamId: workstream,
+      name: "Produce",
+    });
+    const outputs = list(
+      await harness.ok(`/commands/${producer.commandId}`),
+      "outputs",
+    );
+    const consumer = await command(harness, {
+      workstreamId: workstream,
+      name: "Consume",
+      notes: [{ title: "Brief", body: "as written" }],
+    });
+    const placeholderNode = await harness.ok("/nodes", {
+      method: "POST",
+      body: {
+        role: "content",
+        refId: str(outputs[0], "id"),
+        workstreamId: workstream,
+      },
+    });
+    await harness.ok("/edges", {
+      method: "POST",
+      body: {
+        from: str(placeholderNode, "node.id"),
+        to: consumer.commandNodeId,
+      },
+    });
+
+    const batch = await scope(harness, {
+      scope: "subgraph",
+      scopeId: producer.commandId,
+      initiationKey: "abort-then-confirm",
+    });
+    const batchId = str(batch, "batch.id");
+
+    await harness.ok(`/sessions/${str(batch, "queued.0.sessionId")}/stop`, {
+      method: "POST",
+      body: {},
+    });
+
+    const aborted = await waitFor(async () => {
+      const found = list(await harness.ok("/run-queue"), "batches").find(
+        (candidate) => at(candidate, "id") === batchId,
+      );
+      return at(found, "state") === "aborted" ? found : null;
+    }, "the batch to abort on the stop");
+    expect(at(aborted, "state")).toBe("aborted");
+
+    // Everything in it is cancelled, so there is nothing in `needs_reask` to
+    // confirm — and asking about a cancelled entry says so rather than hanging.
+    const entries = list(
+      await harness.ok(`/run-batches/${batchId}`),
+      "entries",
+    );
+    const cancelled = entries.find(
+      (entry) => at(entry, "commandId") === consumer.commandId,
+    );
+    expect(at(cancelled, "state")).toBe("cancelled");
+
+    const refused = await harness.call(
+      `/run-queue/${String(at(cancelled, "id"))}/confirm`,
+      { method: "POST", body: {} },
+    );
+    expect(refused.status).toBe(409);
+    expect(at(refused.body, "error.details.reason")).toBe("not_reasking");
+  });
+});
+
 describe("re-run all drifted (§4.1)", () => {
   it("runs nothing when nothing has drifted, and says so", async () => {
     const harness = await bootWithScript(staysOpen, 2);
@@ -744,6 +820,388 @@ describe("the limit bounds initiation, not one endpoint (§4.1)", () => {
     expect(started.status).toBe(201);
     expect(at(started.body, "queued")).toBeNull();
     expect(at(started.body, "session.id")).toBeTruthy();
+  });
+});
+
+describe("a restart does not strand admitted work (§4.1, principle 11)", () => {
+  /**
+   * Two things the queue owes a restart, and it owed neither before this:
+   *
+   * - an entry it believes is `running` has a session whose outcome nothing
+   *   applied, because the process that would have heard it died. Left alone the
+   *   batch stays `running` for ever and the operator is shown work in flight that
+   *   nothing is doing (principle 11);
+   * - an entry that was *waiting* was already initiated by somebody's gesture,
+   *   which a restart does not un-initiate. Admitting it is §4.1's "the system is
+   *   only deciding *when*, never *whether*" — not a timer, and not the product
+   *   starting work of its own.
+   */
+  it("admits work that was queued when the process died", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-restart-"));
+    mkdirSync(join(stateDir, "workspaces"), { recursive: true });
+    const scriptPath = join(stateDir, "script.json");
+    writeFileSync(scriptPath, JSON.stringify(staysOpen), "utf8");
+
+    const settings = {
+      ...repository(),
+      concurrencyLimit: 1,
+      runtime: { adapterId: "scripted", scriptPath },
+    };
+
+    const first = await boot(settings, { stateDir });
+    const workstream = str(
+      await first.ok("/workstreams", { method: "POST", body: {} }),
+      "workstream.id",
+    );
+    const holder = await command(first, {
+      workstreamId: workstream,
+      name: "Holder",
+    });
+    const queuedCommand = await command(first, {
+      workstreamId: workstream,
+      name: "Queued",
+    });
+
+    await scope(first, {
+      scope: "one",
+      scopeId: holder.commandId,
+      initiationKey: "restart-holder",
+    });
+    const waiting = await scope(first, {
+      scope: "one",
+      scopeId: queuedCommand.commandId,
+      initiationKey: "restart-waiter",
+    });
+    expect(at(waiting, "queued.0.state")).toBe("queued");
+
+    // The process goes away. Its live session is recorded as interrupted, and the
+    // entry that was waiting for a slot is still waiting.
+    await first.handle.close();
+
+    const second = await boot(settings, { stateDir });
+
+    // One boot-time drain, and the work somebody asked for is running. Nothing here
+    // was decided by the product: the gesture happened before the restart.
+    const admitted = await waitFor(async () => {
+      const entry = list(await second.ok("/run-queue"), "queued").find(
+        (candidate) => at(candidate, "commandId") === queuedCommand.commandId,
+      );
+      return at(entry, "state") === "running" ? entry : null;
+    }, "the queued run to be admitted after the restart");
+
+    expect(at(admitted, "sessionId")).not.toBeNull();
+  });
+
+  it("settles an interrupted run as interrupted, and pauses its batch honestly", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-restart-"));
+    mkdirSync(join(stateDir, "workspaces"), { recursive: true });
+    const scriptPath = join(stateDir, "script.json");
+    writeFileSync(scriptPath, JSON.stringify(staysOpen), "utf8");
+
+    const settings = {
+      ...repository(),
+      concurrencyLimit: 1,
+      runtime: { adapterId: "scripted", scriptPath },
+    };
+
+    const first = await boot(settings, { stateDir });
+    const workstream = str(
+      await first.ok("/workstreams", { method: "POST", body: {} }),
+      "workstream.id",
+    );
+    const producer = await command(first, {
+      workstreamId: workstream,
+      name: "Produce",
+    });
+    const outputs = list(
+      await first.ok(`/commands/${producer.commandId}`),
+      "outputs",
+    );
+    const consumer = await command(first, {
+      workstreamId: workstream,
+      name: "Consume",
+    });
+    const placeholderNode = await first.ok("/nodes", {
+      method: "POST",
+      body: {
+        role: "content",
+        refId: str(outputs[0], "id"),
+        workstreamId: workstream,
+      },
+    });
+    await first.ok("/edges", {
+      method: "POST",
+      body: {
+        from: str(placeholderNode, "node.id"),
+        to: consumer.commandNodeId,
+      },
+    });
+
+    const batch = await scope(first, {
+      scope: "subgraph",
+      scopeId: producer.commandId,
+      initiationKey: "restart-subgraph",
+    });
+    const batchId = str(batch, "batch.id");
+    expect(at(batch, "queued.0.state")).toBe("running");
+
+    await first.handle.close();
+    const second = await boot(settings, { stateDir });
+
+    const read = await waitFor(async () => {
+      const found = await second.ok(`/run-batches/${batchId}`);
+      return at(found, "batch.state") === "running" ? null : found;
+    }, "the interrupted batch to be reconciled");
+
+    const entries = list(read, "entries");
+    const producerEntry = entries.find(
+      (entry) => at(entry, "commandId") === producer.commandId,
+    );
+
+    // **Interrupted, not done.** Nobody stopped it, it did not fail, and it did not
+    // finish — the distinction the session and the run already keep (principle 11),
+    // now kept by the queue too. Recording it as `done` was the old behaviour and it
+    // reported success for work that never happened.
+    expect(at(producerEntry, "state")).toBe("interrupted");
+    expect(at(producerEntry, "settledAt")).not.toBeNull();
+
+    // The batch says so rather than sitting at "running" for ever with nothing
+    // running: paused, which is §4.1's "address it and resume".
+    expect(at(read, "batch.state")).toBe("paused");
+    expect(String(at(read, "batch.pauseReason"))).toContain("interrupted");
+
+    // The session it came from agrees, so the two records tell one story.
+    const session = await second.ok(
+      `/sessions/${String(at(producerEntry, "sessionId"))}`,
+    );
+    expect(at(session, "session.end.kind")).toBe("interrupted");
+  });
+});
+
+describe("the in-batch rule: a chain runs unattended (§4.1)", () => {
+  /**
+   * The rule under test, which is a *decision* about what "the preview is the
+   * contract" means for a chain:
+   *
+   * A subgraph is one gesture over commands the operator previewed **as a chain** —
+   * they were shown that the downstream command consumes the upstream command's
+   * output. So when the upstream runs and binds that output, the downstream's input
+   * appearing is the contract **executing**, not the contract drifting. Re-asking
+   * there would ask the operator to confirm what they just confirmed, and a batch
+   * of two could never finish without a human answering a question about its own
+   * middle. Inputs produced inside the same batch are therefore excluded from that
+   * entry's contract hash, along with the `runnable` flip they cause.
+   *
+   * Drift from **outside** the batch is untouched by this, which the second test
+   * here is for.
+   */
+  it("runs a two-step subgraph to completion with nobody answering anything", async () => {
+    // The produced object is seeded before the server boots, so the shared script
+    // can name it: what makes this test deterministic is that the upstream really
+    // binds its placeholder, which is what unblocks the downstream.
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { openDatabase, ObjectStore } = await import("@plotroom/db");
+
+    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-chain-"));
+    const seed = openDatabase({ stateDir });
+    const produced = new ObjectStore(seed).write({
+      kind: "document",
+      title: "The result",
+      renderings: {
+        card: { text: "produced" },
+        summary: "produced",
+        agentContent: "the upstream command's result",
+      },
+    });
+    seed.close();
+
+    const submits: RuntimeScript = {
+      acts: [
+        {
+          on: "start",
+          steps: [
+            { observation: { kind: "turn-started", turn: 1 } },
+            {
+              submit: {
+                outputs: [
+                  {
+                    name: "result",
+                    objectId: produced.objectId,
+                    versionId: produced.versionId,
+                  },
+                ],
+              },
+            },
+            {
+              observation: {
+                kind: "turn-ended",
+                turn: 1,
+                usage: { inputTokens: 10, outputTokens: 3 },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const scriptPath = join(stateDir, "script.json");
+    writeFileSync(scriptPath, JSON.stringify(submits), "utf8");
+
+    // Two slots, so it is the *chain* holding the downstream back rather than the
+    // concurrency limit — the limit passing this test for the wrong reason is
+    // exactly what an untested rule looks like.
+    const harness = await boot(
+      {
+        ...repository(),
+        concurrencyLimit: 2,
+        runtime: { adapterId: "scripted", scriptPath },
+      },
+      { stateDir },
+    );
+
+    const workstream = str(
+      await harness.ok("/workstreams", { method: "POST", body: {} }),
+      "workstream.id",
+    );
+    const upstream = await command(harness, {
+      workstreamId: workstream,
+      name: "Produce",
+    });
+    const outputs = list(
+      await harness.ok(`/commands/${upstream.commandId}`),
+      "outputs",
+    );
+    const downstream = await command(harness, {
+      workstreamId: workstream,
+      name: "Consume",
+    });
+    const placeholderNode = await harness.ok("/nodes", {
+      method: "POST",
+      body: {
+        role: "content",
+        refId: str(outputs[0], "id"),
+        workstreamId: workstream,
+      },
+    });
+    await harness.ok("/edges", {
+      method: "POST",
+      body: {
+        from: str(placeholderNode, "node.id"),
+        to: downstream.commandNodeId,
+      },
+    });
+
+    // The preview says so up front: the downstream is blocked *now*, and the batch
+    // is what makes it runnable.
+    const preview = await harness.ok(
+      `/run-scopes/preview?scope=subgraph&scopeId=${upstream.commandId}`,
+    );
+    const previewed = list(preview, "commands");
+    expect(previewed.map((entry) => at(entry, "commandId"))).toEqual([
+      upstream.commandId,
+      downstream.commandId,
+    ]);
+    expect(at(previewed[1], "satisfiedByBatch")).toBe(true);
+
+    const batch = await scope(harness, {
+      scope: "subgraph",
+      scopeId: upstream.commandId,
+      initiationKey: "unattended-chain",
+    });
+    const batchId = str(batch, "batch.id");
+
+    // Nobody confirms anything from here on. The batch either finishes or it does
+    // not, and before the in-batch rule it could not.
+    const finished = await waitFor(async () => {
+      const read = await harness.ok(`/run-batches/${batchId}`);
+      return at(read, "batch.state") === "completed" ? read : null;
+    }, "the two-step batch to complete unattended");
+
+    const entries = list(finished, "entries");
+    expect(entries.map((entry) => at(entry, "state"))).toEqual([
+      "done",
+      "done",
+    ]);
+
+    // Never asked. That is the assertion: a chain the operator confirmed as a chain
+    // does not stop halfway to ask about its own middle.
+    expect(
+      entries.filter((entry) => at(entry, "state") === "needs_reask"),
+    ).toHaveLength(0);
+
+    // The downstream really consumed the upstream's output, so this proves the rule
+    // rather than a batch that skipped the input entirely.
+    const downstreamRun = str(entries[1], "runId");
+    const assembled = await harness.ok(`/runs/${downstreamRun}/assembled`);
+    expect(String(at(assembled, "content"))).toContain(
+      "the upstream command's result",
+    );
+
+    // And the batch is done: nothing paused, nothing waiting, nothing asking.
+    expect(at(finished, "batch.state")).toBe("completed");
+    expect(list(await harness.ok("/run-queue"), "queued")).toHaveLength(0);
+  });
+
+  it("still re-asks when an input from outside the batch drifts mid-queue", async () => {
+    // The other half of the rule. Nothing about the in-batch exclusion loosens what
+    // the contract covers: an input the batch does not produce is exactly as binding
+    // as before.
+    const harness = await bootWithScript(staysOpen, 1);
+    const workstream = str(
+      await harness.ok("/workstreams", { method: "POST", body: {} }),
+      "workstream.id",
+    );
+    const holder = await command(harness, {
+      workstreamId: workstream,
+      name: "Holder",
+    });
+    const waiting = await command(harness, {
+      workstreamId: workstream,
+      name: "Waiting",
+      notes: [{ title: "Brief", body: "as it was when you asked" }],
+    });
+
+    const first = await scope(harness, {
+      scope: "one",
+      scopeId: holder.commandId,
+      initiationKey: "outside-holder",
+    });
+    await scope(harness, {
+      scope: "one",
+      scopeId: waiting.commandId,
+      initiationKey: "outside-waiter",
+    });
+
+    // A note nothing in the batch produces. Changing it is drift, not execution.
+    await harness.ok(`/notes/${waiting.noteIds[0] as string}`, {
+      method: "PATCH",
+      body: { body: "rewritten by somebody else while this waited" },
+    });
+
+    await harness.ok(`/sessions/${str(first, "queued.0.sessionId")}/stop`, {
+      method: "POST",
+      body: {},
+    });
+
+    const reasking = await waitFor(async () => {
+      const entry = list(await harness.ok("/run-queue"), "queued").find(
+        (candidate) => at(candidate, "commandId") === waiting.commandId,
+      );
+      return at(entry, "state") === "needs_reask" ? entry : null;
+    }, "the out-of-batch drift to re-ask");
+
+    expect(at(reasking, "sessionId")).toBeNull();
+    expect(String(at(reasking, "detail"))).toContain("changed since");
   });
 });
 

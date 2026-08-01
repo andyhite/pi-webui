@@ -971,9 +971,15 @@ export const migrations: readonly Migration[] = [
       -- the same reasoning as §15-1. Phase 6 enforces; this is the data.
       CREATE TABLE spend_attributions (
         id                TEXT PRIMARY KEY,
-        -- Whose budgets are charged. ON DELETE CASCADE would lose the record of
-        -- what a chain cost the moment a session was deleted, so the link is
-        -- kept and the row survives, like runs.
+        -- Whose budgets are charged.
+        --
+        -- NOTE, recorded rather than fixed: this comment used to claim the row
+        -- survives a deleted session, which CASCADE plainly contradicts. The
+        -- cascade is what shipped and what the code assumes; making spend outlive
+        -- its session needs a rebuild plus a decision about what a total means
+        -- when its spender is gone (§8 with principle 10), so it is a future
+        -- migration and not a comment edit. Today: deleting a session deletes
+        -- what it was charged.
         session_id        TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
         -- Who actually spent it: the same session for an 'own' row, a descendant
         -- for a 'descendant' one.
@@ -1082,6 +1088,62 @@ export const migrations: readonly Migration[] = [
       -- different run. NULL means "the configured runtime", which is what an
       -- ordinary run means when it names none.
       ALTER TABLE run_queue ADD COLUMN runtime_json TEXT;
+    `,
+  },
+  {
+    id: 15,
+    name: "interrupted_queue_entries",
+    // The CHECK on run_queue.state has to change, and SQLite cannot alter one in
+    // place, so the table is rebuilt — see `Migration.rebuildsTable`.
+    rebuildsTable: true,
+    sql: `
+      -- A queued run whose session a restart caught in flight was settled as
+      -- 'done', because the taxonomy had nowhere else to put it. Nothing was
+      -- done: nobody stopped it, it did not fail, and it did not finish
+      -- (principle 11). The same distinction the session and the run already keep
+      -- (§3.6, migration 9) is now representable on the queue entry, so a batch
+      -- that a restart interrupted says so instead of reporting success.
+      CREATE TABLE run_queue_new (
+        id                TEXT PRIMARY KEY,
+        batch_id          TEXT NOT NULL REFERENCES run_batches (id) ON DELETE CASCADE,
+        command_id        TEXT NOT NULL REFERENCES commands (id) ON DELETE CASCADE,
+        initiation_key    TEXT NOT NULL UNIQUE,
+        position          INTEGER NOT NULL,
+        state             TEXT NOT NULL CHECK (state IN
+                            ('queued', 'starting', 'running', 'needs_reask',
+                             'done', 'failed', 'interrupted', 'cancelled',
+                             'paused')),
+        contract_hash     TEXT NOT NULL,
+        contract_json     TEXT NOT NULL,
+        spend_cap_micros  INTEGER,
+        run_id            TEXT REFERENCES runs (id) ON DELETE SET NULL,
+        session_id        TEXT REFERENCES sessions (id) ON DELETE SET NULL,
+        detail            TEXT,
+        enqueued_at       INTEGER NOT NULL,
+        started_at        INTEGER,
+        settled_at        INTEGER,
+        runtime_json      TEXT
+      );
+
+      -- Columns listed explicitly rather than SELECT *: a copy that depended on
+      -- column order would break the first time one was added.
+      INSERT INTO run_queue_new (
+        id, batch_id, command_id, initiation_key, position, state, contract_hash,
+        contract_json, spend_cap_micros, run_id, session_id, detail, enqueued_at,
+        started_at, settled_at, runtime_json
+      )
+      SELECT
+        id, batch_id, command_id, initiation_key, position, state, contract_hash,
+        contract_json, spend_cap_micros, run_id, session_id, detail, enqueued_at,
+        started_at, settled_at, runtime_json
+      FROM run_queue;
+
+      DROP TABLE run_queue;
+      ALTER TABLE run_queue_new RENAME TO run_queue;
+
+      CREATE INDEX run_queue_state_idx ON run_queue (state, position, enqueued_at);
+      CREATE INDEX run_queue_batch_idx ON run_queue (batch_id, position);
+      CREATE INDEX run_queue_command_idx ON run_queue (command_id);
     `,
   },
 ];
