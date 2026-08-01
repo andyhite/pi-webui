@@ -967,9 +967,7 @@ workspace/diff server endpoint had landed on `main` as of this rebase, so
 own doc comment states the exact swap point for `GET
 /api/workstreams/:id/diff`._
 
-### Epic 5.2 — Injection, questions, broadcast (`sessions`)
-
-### Epic 5.2 — Injection, questions, broadcast (`sessions`) — _domain done (server wiring pending Track A stage 2)_
+### Epic 5.2 — Injection, questions, broadcast (`sessions`) — _done_
 
 - [x] Injection as new turn + permanent graph content wired to the session (§6.5, principle 5); queued → delivered states for between-turn delivery — `planInjection` produces the content node, the authored context edge, and the ledger entry; the pi adapter's real between-turn delivery is verified against a live pi
 - [x] Session-to-session injection with attribution (peer gesture, lineage rule applies) — the same plan with a session author, refused into its own chain by `checkInjection`
@@ -978,7 +976,7 @@ own doc comment states the exact swap point for `GET
 - [x] Human broadcast (selection / workstream / everything running) (§6.5) — `planHumanBroadcast`, unconstrained by construction
 - [x] Session broadcast: scope-of-material-state only, mandatory declared category, rate-bounded per window, induced spend charged to sender's budget chain, operator-visible (§6.5) — `planSessionBroadcast` plus `attributeBroadcastSpend`, `broadcastAttention`, `broadcastActivity`
 - [x] Batch gestures: one prompt to many, stop/close/archive on a multi-selection; preset prompts (§4.2) — `planBatch`'s envelope, with per-member keys derived from the batch key
-- [ ] Endpoints, stores, and events for all of the above — Track A's stage 2; the tools are `pending` in the catalog until they exist
+- [x] Endpoints, stores, and events for all of the above — Track A's stage 2; landed, and the catalog's tools are `live` (see the server note below)
 
 _Landed as new modules in `@plotroom/core`'s `sessions/` subtree — `injection.ts`
 (extended), `questions.ts`, `broadcast.ts`, `batch.ts`, `stop.ts` — plus the pi
@@ -1062,6 +1060,60 @@ skipped by default) runs a real pi against a mock provider and shows the
 difference in pi's own events: the bare `steer` produces no request to the model,
 the injection does.
 
+**Server wiring landed (Batch 3, stage 2, Track A).** Migration 16 is the state
+these planners produce at rest — `session_questions`, `broadcasts` /
+`broadcast_recipients` / `broadcast_sends`, `handoff_briefs` — and every decision
+stays in `core`: the services are the writes, the runtime calls, and the events.
+
+**Injection is three writes before the runtime is touched**, in that order, so an
+injection a runtime refuses still left the paper trail §6.5 requires. It answers
+`queued` and never `delivered`: delivery is the separate observed fact the driver
+already folds, which is what lets a surface show one against the other rather than
+inferring it from acceptance. A live runtime that is not attached records the
+injection as **refused** rather than leaving it queued for ever — the content stays
+on the graph, because somebody authored it, and the ledger says it never arrived.
+
+**Questions needed a driver fix, not only a store.** Every `request-raised`
+observation went through the write gate, and that gate's own words are "this gate
+answers tool permissions; a question is answered by a human" — so a structured
+question from a runtime was denied the instant it was asked. A question is now
+raised and left open, keyed by the blocked request so answering settles _that_
+call, and the scripted runtime can raise one (`{ "ask": { … } }`), where the act
+stops until PlotRoom answers because that is what asking is. No timeout exists
+anywhere on the path: the endpoint accepts `escalateAfterSeconds` and passes it to
+`escalateAfter`, whose only outcome is `escalate-attention`.
+
+**Broadcast supplies the two things core deliberately does not own.** The world is
+built from live sessions plus their workspace records, and **a repository's identity
+is its configured source** — a worktree and the checkout it branched from resolve to
+one id, which is exactly the fact "everyone in _this_ repository" is about, and it
+means two workspaces agree without a registry table (`sessions/world.ts` states the
+rule, and `GET /api/broadcast-world` is where a wrong join would be visibly wrong
+rather than silently widening what a session may declare). The rate window is rows
+rather than a counter, because a counter cannot answer "how many in the last hour"
+after a restart. Induced spend is charged from the session stream with **the grain
+stated**: the recipient's spend between delivery and the next time its accounting
+moved, charged once, with the baseline in a column so a restart between the two does
+not lose it. Charging the recipient's whole session would bill the sender for work
+it never caused; charging nothing would be the hole §6.5 names.
+
+One place the server **departs from a core shape, deliberately**: `InjectionContent`
+declares `scope: "local"`, which is right for an injection and wrong for a
+broadcast, whose one content object is wired into sessions across workstreams — and
+§3.3 refuses a local object outside its own. A broadcast's content is therefore
+world-scoped. `InjectionContent` carries no workstream at all, so there is no single
+workstream it could belong to; §3.2's promotion is the same idea.
+
+_Deferred, honestly: §7.3's per-workstream activity is a **query** over
+`broadcast_recipients` (the workstream is on the row) rather than a second table,
+which means it is readable but has no endpoint of its own until Phase 6's
+what-changed-while-away surface needs one; the `broadcast` event carries both the
+attention row and the activity entries, so a subscriber has them now. Preset prompts
+(§4.2) are not implemented — `presetPrompt` exists in core and nothing stores a
+preset yet. And a batch `archive` archives the member's **workstream**, which is
+where §6.8's archive verb lives; archiving one session out of several in a
+workstream has no representation, and that is worth a decision rather than a guess._
+
 ### Epic 5.3 — Speech bubbles on canvas (`canvas`) — _mechanics landed Batch 3 (Weeks 11–14), fixture-fed where noted below_
 
 - [x] Attributed bubbles per sender node; tool-in-flight chips (§5)
@@ -1137,14 +1189,14 @@ contained node's position lands at parent.position + child.position; it
 fails if a type filter is reintroduced anywhere in that pipeline. The gap
 is closed now, where the first pass only closed it on paper._
 
-### Epic 5.4 — Resume, fork, handoff (`sessions`) — _domain done (server wiring pending Track A stage 2)_
+### Epic 5.4 — Resume, fork, handoff (`sessions`) — _done_
 
 - [x] Explicit resume-vs-fork choice, never implicit on typing (§6.3) — `dispositionOfTypedInput` returns `choice-required` for an ended session, and `SessionContinuation` has no third variant
 - [x] Fork from any point → own workstream + workspace; outside-world touchpoints marked (fed by §9.2 reversibility declarations) for fork cleanliness (§6.3, §6.6) — `planSessionFork` plus `outside-world.ts`; the pi adapter's real fork is verified against a live pi
 - [x] Handoff: source-written brief, human-edited before send (§6.3) — `draftHandoffBrief` → `reviewHandoffBrief` → `planHandoff`, where sending an unreviewed brief is a type error
 - [x] Continue-vs-fresh on re-run: side-by-side cost preview; window-fit gate; divergence forces fresh (§4.3) — `compareContinueVsFresh`, which describes the option it refused as well as the one it allows
 - [x] Stop at three scopes with counts and widest-scope confirm (§6.7) — `resolveStop`
-- [ ] Endpoints and UI for all of the above — Track A's stage 2 and Track B's panels
+- [x] Endpoints for all of the above — Track A's stage 2; landed (see the server note below). _The UI is Track B's and still open._
 
 _Landed as `continuation.ts`, `handoff.ts`, `outside-world.ts`, and additions to
 `fork.ts`, plus the pi adapter's real fork._
@@ -1254,6 +1306,42 @@ quietly, so that spike is the thing to run against a new pi. One shape is knowin
 left loose: `senderSharesScope` reads membership from the `BroadcastWorld` Track A
 builds, so a wrong `repositoryIds` join would widen what a session may declare — the
 rule is stated once and enforced once, but its inputs are the server's to get right.
+
+**Server wiring landed (Batch 3, stage 2, Track A).** The contract table above is
+implemented row for row, and the fork row's two lines are the part worth reading
+twice: a `native` verdict calls `adapter.fork`, `PiForkUnavailable` is **caught by
+the caller** and re-run as `start({ seedTranscript })`, and whichever branch ran is
+the mode recorded (migration 16 adds `sessions.runtime_mode`). The adapter's refusal
+to substitute one for the other is what makes that column trustworthy.
+
+Resume reopens **the same record**, which is the whole difference from a fork, and
+two things about it were only discovered by testing it. The previous handle's pump
+has an end still to record — a stop writes the outcome before it touches the runtime,
+so the `session-ended` observation is always behind it — and a record reopened
+underneath it inherits that end, reporting a running session as finished. So the old
+pump is drained (bounded) and let go of before anything is reopened. And a resumed
+session's **node** has to go back to running: §3.7 only lets content wire into a
+running session, so a node left marked otherwise refuses the very first turn the
+resume delivers. Idempotency is checked **before** `planResume`, because once a
+resumption has happened the session is running and `planResume` would answer
+`already_running` — the right answer to a new gesture and the wrong one to a retry of
+the same one (principle 9).
+
+Continue-versus-fresh is its own read (`GET /api/commands/:id/continuation`) rather
+than a field on the run preview: it needs the workspace fingerprinted and the prior
+session's transcript measured, and the run preview is a cheap read that provisions
+nothing. Both required inputs are real — the window comes from the command's declared
+model window, and the divergence from the workspace as it stands.
+
+_Deferred, honestly: a command definition carries **no** default continuation mode
+yet, so the comparison uses the shipped default and says so rather than guessing per
+command — the field is a definition change nobody has needed yet. `ToolWorldDeclaration`
+is empty, so fork cleanliness answers `unknown` wherever a session called an
+undeclared tool, which is the honest answer and not a defect (§9.2 fills it in Phase
+7). A handoff's new session is `open` and metered against a default window, because
+no command definition stands behind it; the meter is labelled estimated either way.
+And `dispositionOfTypedInput` has no endpoint: the choice is explicit in the API's
+shape — two endpoints and no third — rather than a thing a client asks about._
 
 ### Epic 5.5 — Scoped runs and the queue of work (`runs`) — _done_
 
@@ -1618,11 +1706,11 @@ Phase 0 and Epic 1.1 are complete; week 1 starts from the current state of
 
 **Weeks 11–14 — Steering (Phase 5)**
 
-| Track | Work                                                                                                                                                                                                         |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A     | Epic 5.5 scoped runs, concurrency queue, preview-is-the-contract — _landed, with the Epic 4.4/4.5 server carry-overs (claims persistence + enforcement, delegation attribution) and the workspace diff read_ |
-| B     | Epic 5.1 finished ahead of schedule (done at the W10 gate above); Epic 5.3 speech bubbles                                                                                                                    |
-| C     | Epic 5.2 injection/questions/broadcast; Epic 5.4 resume/fork/handoff                                                                                                                                         |
+| Track | Work                                                                                                                                                                                                                                                                     |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A     | Epic 5.5 scoped runs, concurrency queue, preview-is-the-contract — _landed, with the Epic 4.4/4.5 server carry-overs (claims persistence + enforcement, delegation attribution), the workspace diff read, and stage 2's steering endpoints (Epic 5.2/5.4 server halves)_ |
+| B     | Epic 5.1 finished ahead of schedule (done at the W10 gate above); Epic 5.3 speech bubbles                                                                                                                                                                                |
+| C     | Epic 5.2 injection/questions/broadcast; Epic 5.4 resume/fork/handoff                                                                                                                                                                                                     |
 
 **🏁 Milestone (end W14):** the originating-problem demo — many sessions, inject mid-flight, answer a question from a bubble, stop at three scopes.
 

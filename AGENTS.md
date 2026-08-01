@@ -207,6 +207,30 @@ A queue entry's state carries `interrupted` for the same reason the session and 
 run do (principle 11): a restart that reported those as `done` was reporting success
 for work that never happened.
 
+**Steering** lives in `session_questions`, `broadcasts` / `broadcast_recipients` /
+`broadcast_sends`, and `handoff_briefs` (migration 16). Every rule is
+`@plotroom/core`'s; these are what its planners produced. Three shapes are worth
+knowing: a question **outlives the call it blocks** (a surface that asked the runtime
+what was asked would have nothing to show once the call settled, and "unpicked
+options remain visible" needs the options remembered), the broadcast **rate window is
+rows** because a counter cannot answer "how many in the last hour" after a restart,
+and a broadcast's **one content object is world-scoped** even though
+`InjectionContent` says local — it is wired into sessions across workstreams, which
+§3.3 refuses for a local object.
+
+A **repository's identity is its configured source** (`sessions/world.ts`), so a
+worktree and the checkout it branched from are one repository — which is exactly what
+§6.5's "everyone in _this_ repository" is about, and it means two workspaces agree
+without a registry. Broadcast-induced spend is charged at a **stated grain**: the
+recipient's spend between delivery and the next time its accounting moved, once, with
+the baseline in a column so a restart between the two does not lose the charge.
+
+An **initiation does not always produce a run** (migration 17): a fork, a handoff, and
+a resume each spend a key and produce a session, so `run_initiations.command_id` is
+nullable. And `sessions.runtime_mode` records **which fork branch ran** — native or
+seeded — because the pi adapter refuses to substitute one for the other, which is what
+makes the column trustworthy.
+
 **Commands and runs** live in `command_definitions` / `commands` /
 `command_parameter_bindings` / `command_outputs` and `runs` / `run_inputs` /
 `run_outputs` (migration 5). Four §3.5 rules are schema constraints rather
