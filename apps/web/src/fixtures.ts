@@ -106,25 +106,27 @@ export const FIXTURE_SESSION_ENDED_PHASE: SessionPhase = { kind: "idle" };
  * facts (busy/wants-attention) off a fixture phase rather than fabricating
  * a whole `SessionObservationState`.
  */
-export const FIXTURE_SESSION_STATUSES: ReadonlyMap<string, SessionStatus> =
-  new Map([
-    [
-      FIXTURE_SESSION_RUNNING.id,
-      {
-        phase: FIXTURE_SESSION_RUNNING_PHASE,
-        facts: phaseFacts(FIXTURE_SESSION_RUNNING_PHASE),
-        health: { silentForMs: 0, possiblyStalled: false },
-      },
-    ],
-    [
-      FIXTURE_SESSION_ENDED.id,
-      {
-        phase: FIXTURE_SESSION_ENDED_PHASE,
-        facts: phaseFacts(FIXTURE_SESSION_ENDED_PHASE),
-        health: { silentForMs: 0, possiblyStalled: false },
-      },
-    ],
-  ]);
+export const FIXTURE_SESSION_STATUSES: ReadonlyMap<
+  Session["id"],
+  SessionStatus
+> = new Map([
+  [
+    FIXTURE_SESSION_RUNNING.id,
+    {
+      phase: FIXTURE_SESSION_RUNNING_PHASE,
+      facts: phaseFacts(FIXTURE_SESSION_RUNNING_PHASE),
+      health: { silentForMs: 0, possiblyStalled: false },
+    },
+  ],
+  [
+    FIXTURE_SESSION_ENDED.id,
+    {
+      phase: FIXTURE_SESSION_ENDED_PHASE,
+      facts: phaseFacts(FIXTURE_SESSION_ENDED_PHASE),
+      health: { silentForMs: 0, possiblyStalled: false },
+    },
+  ],
+]);
 
 export const FIXTURE_NODES: readonly CanvasNodeInput[] = [
   {

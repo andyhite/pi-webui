@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { humanAuthor } from "@plotroom/core";
+import type { SessionId } from "@plotroom/core";
 import type {
   CommandPaletteItem,
   ContextInputRow,
@@ -21,6 +22,7 @@ import {
   browserWebSocketFactory,
   createApiActions,
   createApiGraphDataSource,
+  createApiSessionDataSource,
   createFixtureGraphDataSource,
   createFixtureSessionDataSource,
   createHttpClient,
@@ -72,28 +74,39 @@ const placementStore = createWebStoragePlacementStore(
 const LIVE = import.meta.env.VITE_USE_FIXTURES !== "1";
 
 const httpClient = createHttpClient((path, init) => fetch(path, init));
+const wsFactory = browserWebSocketFactory();
 
 const graphDataSource = LIVE
-  ? createApiGraphDataSource({
-      http: httpClient,
-      createSocket: browserWebSocketFactory(),
-    })
+  ? createApiGraphDataSource({ http: httpClient, createSocket: wsFactory })
   : createFixtureGraphDataSource(FIXTURE_SNAPSHOT);
 
 const actions = createApiActions(httpClient);
 
 /**
- * The session data seam (Epic 5.1, Stage 1 of 2): fixture-fed regardless of
- * `LIVE` — no sessions server API exists yet (Track A, in parallel), unlike
- * the graph seam above. Stage 2 adds a live `SessionDataSource` the exact
- * same way `createApiGraphDataSource` was added here for the graph.
+ * The session data seam (Epic 5.1, Stage 2): live over Track A's run spine
+ * (`GET /api/sessions(/:id, /transcript)` plus `/ws`) by default, the exact
+ * same swap `createApiGraphDataSource` already does for the graph above;
+ * fixture-fed for `VITE_USE_FIXTURES=1` (tests, offline dev).
  */
-const sessionDataSource = createFixtureSessionDataSource({
-  sessions: FIXTURE_SESSIONS,
-  transcripts: new Map([[FIXTURE_TRANSCRIPT.sessionId, FIXTURE_TRANSCRIPT]]),
-  script: FIXTURE_TRANSCRIPT_SCRIPT,
-  releasedContent: FIXTURE_RELEASED_CONTENT,
-});
+const sessionDataSource = LIVE
+  ? createApiSessionDataSource({ http: httpClient, createSocket: wsFactory })
+  : createFixtureSessionDataSource({
+      sessions: FIXTURE_SESSIONS,
+      statuses: FIXTURE_SESSION_STATUSES,
+      transcripts: new Map([
+        [FIXTURE_TRANSCRIPT.sessionId, FIXTURE_TRANSCRIPT],
+      ]),
+      script: FIXTURE_TRANSCRIPT_SCRIPT,
+      releasedContent: FIXTURE_RELEASED_CONTENT,
+    });
+
+/**
+ * Injection (§6.5) has no server endpoint yet (Track A: Batch 3 scope) —
+ * disabled with this reason rather than the composer pretending a click
+ * delivered something it did not, live or fixture-fed alike.
+ */
+const SEND_DISABLED_REASON =
+  "session injection has no server endpoint yet (Batch 3 scope)";
 
 /** Drafts and prompt history persist per session (§6.2), the same durable-store seam as placement. */
 const sessionDraftsStore = createWebStorageSessionDraftsStore(
@@ -113,16 +126,17 @@ export function App() {
   const [arrangementEpoch, setArrangementEpoch] = useState(0);
   const { selectedNodeId, select } = useSelectionRoute();
 
-  // Fixture-fed lookup (Stage 1): a session node's id is the session's own
-  // id (`sessions/canvas-node.ts`'s `refId`); Stage 2 resolves this against
-  // a live `SessionDataSource` instead.
-  const selectedSession = useMemo(
-    () =>
-      FIXTURE_SESSIONS.find((session) => session.id === selectedNodeId) ?? null,
-    [selectedNodeId],
-  );
-
   const [graph, setGraph] = useState<GraphSnapshot | null>(null);
+
+  // A session node's id is the session's own id (its `refId`, `sessions/
+  // canvas-node.ts`'s fixture helper and the live run path agree on this),
+  // so the selected session for the Conversation panel is read straight off
+  // the graph — live or fixture-fed alike, no separate lookup table needed.
+  const selectedSessionId = useMemo(() => {
+    if (!graph || !selectedNodeId) return null;
+    const node = graph.nodes.find((n) => n.id === selectedNodeId);
+    return node?.role === "session" ? (node.refId as SessionId) : null;
+  }, [graph, selectedNodeId]);
 
   const [collapsedContainerIds, setCollapsedContainerIds] = useState<
     Set<string>
@@ -263,21 +277,12 @@ export function App() {
         title: "Conversation",
         initialState: null,
         render: () =>
-          selectedSession ? (
+          selectedSessionId ? (
             <ConversationPanel
-              session={selectedSession}
-              status={
-                FIXTURE_SESSION_STATUSES.get(selectedSession.id) ?? {
-                  phase: { kind: "idle" },
-                  facts: { busy: false, wantsAttention: false },
-                  health: { silentForMs: 0, possiblyStalled: false },
-                }
-              }
+              sessionId={selectedSessionId}
               dataSource={sessionDataSource}
               draftsStore={sessionDraftsStore}
-              onSend={(sessionId, text) =>
-                log(`send to ${sessionId} (no-op against fixtures): ${text}`)
-              }
+              sendDisabledReason={SEND_DISABLED_REASON}
               onWireAsContext={(sessionId, turnOrdinal, item) =>
                 log(
                   `wire as context: session ${sessionId} turn ${turnOrdinal} (${item.kind}) — not yet wired`,
@@ -298,7 +303,7 @@ export function App() {
       }),
     );
     return registry;
-  }, [initialNote, warnings, select, selectedSession]);
+  }, [initialNote, warnings, select, selectedSessionId]);
 
   if (placements === null || graph === null) {
     return null;
@@ -450,6 +455,34 @@ export function App() {
                   void placementStore.save(next);
                   return next;
                 });
+              });
+          }}
+          onRunCommand={(commandNodeId) => {
+            if (!LIVE) {
+              log(`offline mode: running ${commandNodeId} was not started`);
+              return;
+            }
+            const commandNode = graph.nodes.find(
+              (node) => node.id === commandNodeId,
+            );
+            if (!commandNode?.refId) return;
+            // The client's own idea of "this gesture" (principle 9): a retry
+            // with the same key would get the same run and session back,
+            // never a second one — a fresh key per click is exactly one run
+            // per click.
+            const initiationKey = `run-${crypto.randomUUID()}`;
+            void actions
+              .runCommand({ commandId: commandNode.refId, initiationKey })
+              .then((result) => {
+                if (!result.ok) {
+                  log(
+                    `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                  );
+                  return;
+                }
+                log(
+                  `run ${result.value.runId} started; session ${result.value.sessionId}`,
+                );
               });
           }}
         />
