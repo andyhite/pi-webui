@@ -41,6 +41,58 @@ describe("canonicalizePath", () => {
     expect(upper.ok && upper.path.display).toBe("SRC/README.md");
   });
 
+  it("folds NFD and NFC spellings of one filename together", () => {
+    // macOS stores decomposed names, Linux and Windows tools hand over composed
+    // ones: `café.ts` typed by a human and the same name read from a directory
+    // listing are routinely different byte strings for one physical file. Two
+    // claims on one file is the single-writer guarantee failing invisibly, since
+    // both spellings print identically (principle 4).
+    const composed = "caf\u00e9.ts"; // é as one code point
+    const decomposed = "cafe\u0301.ts"; // e + combining acute
+    expect(composed).not.toBe(decomposed);
+
+    const a = canonicalizePath(`src/${composed}`);
+    const b = canonicalizePath(`src/${decomposed}`);
+    expect(a.ok && b.ok && a.path.key === b.path.key).toBe(true);
+    expect(
+      pathsConflict(
+        claimPath(`src/${composed}`),
+        claimPath(`src/${decomposed}`),
+      ),
+    ).toBe(true);
+  });
+
+  it("normalizes before folding case, not after", () => {
+    // Lowercasing a decomposed name leaves it decomposed, so the wrong order
+    // silently reintroduces the collision for any name with an accent.
+    expect(claimPath("SRC/CAFE\u0301.TS").key).toBe(
+      claimPath("src/caf\u00e9.ts").key,
+    );
+  });
+
+  it("normalizes directory segments too, so the hierarchy check agrees", () => {
+    const parent = claimPath("caf\u00e9"); // composed
+    const child = claimPath("cafe\u0301/auth.ts"); // decomposed
+    expect(isWithin(child, parent)).toBe(true);
+  });
+
+  it("leaves the authored spelling in `display` for messages", () => {
+    const decomposed = canonicalizePath("src/cafe\u0301.ts");
+    expect(decomposed.ok && decomposed.path.display).toBe("src/cafe\u0301.ts");
+  });
+
+  it("does not claim full Unicode case folding — ς and σ stay distinct", () => {
+    // Documented limit, not an oversight: `toLowerCase` maps Σ to σ but leaves ς
+    // alone, which is what the common case-insensitive filesystems do. Folding
+    // them together would refuse claims those filesystems consider different
+    // files; a stricter rule belongs to whichever workspace kind can prove its
+    // filesystem needs it (§3.4's mechanism-per-kind).
+    expect(claimPath("\u03a3igma.ts").key).toBe(claimPath("\u03c3igma.ts").key);
+    expect(claimPath("final\u03c2.ts").key).not.toBe(
+      claimPath("final\u03c3.ts").key,
+    );
+  });
+
   it("resolves `.` and interior `..`", () => {
     const result = canonicalizePath("src/api/../ui/./widget.tsx");
     expect(result.ok && result.path.display).toBe("src/ui/widget.tsx");

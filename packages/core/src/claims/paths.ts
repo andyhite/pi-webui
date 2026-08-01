@@ -34,15 +34,25 @@ import { asPathKey, type PathKey } from "./ids.js";
  *   guarantee claims exist to make (principle 4). Folding costs a case-sensitive
  *   filesystem the ability to claim two spellings separately, which nobody
  *   wants; not folding costs correctness on macOS and Windows.
+ * - **Unicode is normalized to NFC before folding.** macOS stores decomposed
+ *   names (NFD) while Linux and Windows tools hand over composed ones (NFC), so
+ *   `café.ts` typed by a human and `café.ts` read from a directory listing are
+ *   routinely different byte strings for one physical file. Comparing them
+ *   unnormalized would hand that file to two holders — the same failure as case,
+ *   with no visible clue in the message, since both spellings *print*
+ *   identically. Case folding is `toLowerCase` rather than full Unicode case
+ *   folding, so pairs like `ς`/`Σ` stay distinct: that is what the common
+ *   case-insensitive filesystems do too, and inventing a stricter rule here
+ *   would refuse claims those filesystems consider different files.
  * - **Surrounding whitespace is trimmed**, as a typo rather than a name.
  */
 
 export interface ClaimPath {
   /** The canonical form in the case it was authored in — what messages show. */
   readonly display: string;
-  /** Case-folded comparison key. The workspace root's key is the empty string. */
+  /** NFC-normalized, case-folded key. The workspace root's key is the empty string. */
   readonly key: PathKey;
-  /** Case-folded segments, so hierarchy is a prefix test rather than a substring one. */
+  /** Normalized, folded segments, so hierarchy is a prefix test, not a substring one. */
   readonly segments: readonly string[];
 }
 
@@ -146,8 +156,16 @@ export function claimPath(input: string): ClaimPath {
   return result.path;
 }
 
+/**
+ * NFC first, then case.
+ *
+ * The order matters: lowercasing a decomposed name leaves it decomposed, so a
+ * fold that skipped normalization would still treat one physical file as two
+ * paths on any machine where the two spellings meet (a macOS checkout read by a
+ * Linux tool, or the other way round).
+ */
 function fold(segment: string): string {
-  return segment.toLowerCase();
+  return segment.normalize("NFC").toLowerCase();
 }
 
 function refuse(
