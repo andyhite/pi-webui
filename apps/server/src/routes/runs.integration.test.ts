@@ -1046,8 +1046,11 @@ describe("the producing completion loop (§3.5, principle 3)", () => {
     const ended = await endedSession(harness, str(started, "session.id"));
 
     expect(at(ended, "session.end.kind")).toBe("failed");
+    // The wording is `checkProvenCompletion`'s, in core beside `classifyEnd`:
+    // this session never submitted its declared outcome, and the record says so
+    // rather than saying "unproven" in general.
     expect(at(ended, "session.end.message")).toMatch(
-      /completion is proof, not a claim/,
+      /without submitting its declared outcome/,
     );
     expect(at(ended, "end.proven")).toBe(false);
 
@@ -1055,6 +1058,62 @@ describe("the producing completion loop (§3.5, principle 3)", () => {
     // showing work still in flight.
     const read = await harness.ok(`/runs/${str(started, "run.id")}`);
     expect(at(read, "run.status")).toBe("failed");
+  });
+
+  it("names the conditions that were false when a session claims it finished", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness, {
+      conditions: [
+        {
+          id: "output_written",
+          predicate: "workspace_file_exists",
+          description: "the workspace contains out.txt",
+          args: { path: "out.txt" },
+        },
+      ],
+    });
+
+    // Submits without doing the work, gets the feedback, and then says it is
+    // done anyway. The evidence PlotRoom holds is "submitted, one condition
+    // false", which is a different failure from never submitting at all — and a
+    // distinction the driver could not previously express.
+    const started = await run(harness, fixture.commandId, {
+      acts: [
+        {
+          on: "start",
+          steps: [
+            { observation: { kind: "turn-started", turn: 1 } },
+            {
+              observation: {
+                kind: "turn-ended",
+                turn: 1,
+                usage: { inputTokens: 2, outputTokens: 1 },
+              },
+            },
+            { submit: {} },
+          ],
+        },
+        {
+          on: "injection",
+          steps: [
+            {
+              observation: {
+                kind: "session-ended",
+                reason: { kind: "completed" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const ended = await endedSession(harness, str(started, "session.id"));
+
+    expect(at(ended, "session.end.kind")).toBe("failed");
+    expect(at(ended, "session.end.message")).toMatch(
+      /world conditions are false: output_written/,
+    );
+    expect(at(ended, "end.proven")).toBe(false);
   });
 
   it("refuses an open session's completion claim too, and ends its run", async () => {
@@ -1092,8 +1151,10 @@ describe("the producing completion loop (§3.5, principle 3)", () => {
     const ended = await endedSession(harness, str(started, "session.id"));
 
     expect(at(ended, "session.end.kind")).toBe("failed");
+    // Core's own reason for this case: an open session declares no outcome, so
+    // it could never have proven one.
     expect(at(ended, "session.end.message")).toMatch(
-      /completion is proof, not a claim/,
+      /declares no outcome and so can never have proven one/,
     );
     expect(at(ended, "end.proven")).toBe(false);
 

@@ -6,6 +6,7 @@ import {
   reduceObservation,
   sessionAuthor,
   type AccountingContext,
+  type CompletionEvidence,
   type RuntimeObservation,
   type RuntimeSessionHandle,
   type SessionEnd,
@@ -43,6 +44,15 @@ export interface SessionDriverHooks {
     readonly sessionId: string;
     readonly submission: ScriptedSubmission;
   }): Promise<void>;
+  /**
+   * What the world says about this session's declared outcome (principle 3).
+   *
+   * The driver cannot know: the evidence is the run's own record of what was
+   * submitted and which declared conditions held, and the run path is what keeps
+   * it. `classifyEnd` is handed the answer and decides — a driver that decided
+   * for itself would be principle 3 written twice.
+   */
+  completionEvidence(sessionId: string): CompletionEvidence;
   /** A session's stream ended. The run must stop being "running" too. */
   onEnded(input: {
     readonly sessionId: string;
@@ -132,7 +142,6 @@ export function driveSession(
               sessionId,
               reason: observation.reason,
               at: epochSeconds(observation.at),
-              proven: completionAlreadyProven(stored),
             });
             break;
 
@@ -149,7 +158,6 @@ export function driveSession(
         sessionId,
         reason: { kind: "failed", message },
         at: epochSeconds(deps.nowMillis()),
-        proven: false,
       });
     }
   })().catch((error: unknown) => {
@@ -165,56 +173,34 @@ export function driveSession(
   });
 }
 
-/**
- * Whether PlotRoom has already proven this session's outcome. The run path
- * writes the `completed` end the moment the world conditions held (§3.5), so
- * this is a read of PlotRoom's own record — never of the session's opinion.
- */
-function completionAlreadyProven(stored: StoredSession): boolean {
-  return stored.session.end?.kind === "completed";
-}
-
 interface EndInput {
   readonly sessionId: string;
   readonly reason: SessionEndReason;
   readonly at: number;
-  /** Whether PlotRoom has already proven this session's outcome itself. */
-  readonly proven: boolean;
 }
 
 /**
  * Turn what the runtime reported into what PlotRoom records.
  *
- * `classifyEnd` is the only place one becomes the other, and PlotRoom's own
- * state outranks the report. One rule is added here, and it belongs to the
- * product rather than to any runtime: **completion is proof, never a claim**
- * (§3.5, principle 3). A runtime that says "completed" for work PlotRoom never
- * proved did not complete it, so the outcome recorded is a failure that says
- * exactly that.
- *
- * The rule is not scoped to producing sessions. An open session has no declared
- * outcome, so there is nothing it could ever have proven — which makes a
- * `completed` claim from its runtime *more* unfounded, not less, and letting it
- * through would put `proven: true` on a record nothing checked and leave its run
- * looking like work still in flight.
+ * `classifyEnd` is the only place one becomes the other, and PlotRoom's own state
+ * outranks the report — including the rule that **completion is proof, never a
+ * claim** (§3.5, principle 3), which lives beside it as `checkProvenCompletion`.
+ * This used to be a clause here; it is core's now, and all this does is supply
+ * the evidence only the run path can know and record whatever comes back.
  */
 async function endFromObservation(
   deps: SessionDriverDeps,
   input: EndInput,
 ): Promise<void> {
-  const reason: SessionEndReason =
-    input.reason.kind === "completed" && !input.proven
-      ? {
-          kind: "failed",
-          message:
-            "the session ended without a proven outcome; completion is proof, not a claim",
-        }
-      : input.reason;
-
   // No `budgetStop` context is ever supplied here: PlotRoom initiates budget
   // stops itself and writes that outcome before it touches the runtime, so what
-  // reaches this point is only ever the runtime's own report (§3.6, §8).
-  const end = classifyEnd(reason, input.at);
+  // reaches this point is only ever the runtime's own report (§3.6, §8). The
+  // completion evidence is supplied for every report, because absent evidence is
+  // not proof: `classifyEnd` records an unproven completion as a failure that
+  // says which half was missing.
+  const end = classifyEnd(input.reason, input.at, {
+    completion: deps.hooks.completionEvidence(input.sessionId),
+  });
 
   const stored = deps.sessions.end(input.sessionId, end);
   const recorded = stored.session.end ?? end;

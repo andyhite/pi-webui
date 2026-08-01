@@ -12,6 +12,7 @@ import {
   systemMillisClock,
   type Author,
   type BudgetScope,
+  type CompletionEvidence,
   type CompletionProof,
   type ConditionEvaluation,
   type Run,
@@ -678,6 +679,7 @@ export class RunService {
                 : { outputs: submission.outputs }),
             });
           },
+          completionEvidence: (id) => this.completionEvidence(id),
           onEnded: async ({ sessionId: id }) => {
             await this.endRunFor(this.deps.stores.sessions.get(id));
             this.deps.hub.detach(id);
@@ -694,6 +696,49 @@ export class RunService {
     );
 
     this.deps.hub.attach(sessionId, { handle, adapterId, pump });
+  }
+
+  /**
+   * What the world says about a session's declared outcome (principle 3, §3.5).
+   *
+   * Read from PlotRoom's own record and nowhere else: whether the declared
+   * outcome was ever submitted, and which declared conditions PlotRoom checked
+   * and found false. `checkProvenCompletion` in `@plotroom/core` is what turns
+   * this into an answer — this only says what happened.
+   */
+  private completionEvidence(sessionId: string): CompletionEvidence {
+    const { stores } = this.deps;
+    const session = stores.sessions.get(sessionId);
+
+    // An open session declares no outcome, so there is nothing it could ever
+    // have proven — which core reads as the *more* unfounded claim, not the
+    // lesser one.
+    if (session.session.mode === "open") return { lifecycle: "open" };
+
+    if (session.runId === null) {
+      return {
+        lifecycle: "producing",
+        outcomeSubmitted: false,
+        failedConditionIds: [],
+      };
+    }
+
+    const submissions = stores.runs.submissions(session.runId);
+    const accepted = submissions.some((attempt) => attempt.accepted);
+    const latest = submissions.at(-1);
+
+    return {
+      lifecycle: "producing",
+      outcomeSubmitted: submissions.length > 0,
+      // Named rather than counted, so the recorded failure says which conditions
+      // were false. An accepted submission has none by definition.
+      failedConditionIds:
+        accepted || latest === undefined
+          ? []
+          : latest.evaluations
+              .filter((evaluation) => !evaluation.holds)
+              .map((evaluation) => evaluation.conditionId),
+    };
   }
 
   /**
