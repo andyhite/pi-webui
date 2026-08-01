@@ -44,9 +44,10 @@
  * `apps/server/dist` and `apps/web/dist`; this suite spawns the former and
  * serves the latter, neither of which exists until built).
  *
- * Deferred to later batches (noted, not asserted here): composer send is
- * disabled with a reason (injection has no server endpoint yet, Batch 3);
- * drafts/prompt history are exercised at the unit level only.
+ * Deferred to later batches (noted, not asserted here): drafts/prompt
+ * history are exercised at the unit level only. Composer send (injection,
+ * §6.5) went live in Batch 3, Stage 2 and is exercised end to end by its
+ * own gate, `steering.spec.ts` (the W14 milestone).
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
@@ -238,10 +239,6 @@ test("drop a command definition onto a ticket, run it, watch the transcript stre
     hasText: "phase:",
   });
   await expect(conversationStatus).toBeVisible();
-
-  // Composer send is honestly disabled — injection has no server endpoint
-  // yet (§6.5, Batch 3 scope).
-  await expect(page.getByTestId("send-disabled-reason")).toBeVisible();
 
   // THE LIVE-STREAMING PROOF (gate review finding: this must not pass just
   // because the whole session finished before the panel ever opened). The
