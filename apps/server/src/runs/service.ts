@@ -97,6 +97,16 @@ export interface StopSessionInput {
   readonly scope?: BudgetScope;
 }
 
+/** What a graceful close waits for before the database is closed. */
+const SHUTDOWN_DRAIN_MS = 2_000;
+
+export interface RestartRecovery {
+  /** Sessions that were in flight when the last process died (principle 11). */
+  readonly interrupted: readonly StoredSession[];
+  /** Initiation keys no attempt could still hold (principle 9). */
+  readonly freedInitiationKeys: readonly string[];
+}
+
 export interface RunServiceDeps {
   readonly config: ServerConfig;
   readonly stores: ApiStores;
@@ -127,7 +137,11 @@ export class RunService {
         run,
         session,
         status: this.statusOf(session.session.id),
-        warning: null,
+        // The same gesture gets the same answer, warning included: it is
+        // recomputed from what the run recorded (§15-1), so a retry cannot lose
+        // the fact that assembly was near the model's window — which is the
+        // whole point of warning about it.
+        warning: stores.runs.assemblyWarning(run.id),
         replayed: true,
       };
     }
@@ -460,13 +474,25 @@ export class RunService {
   }
 
   /**
-   * Principle 11, at process start: every session that was in flight when the
-   * process died is recorded as **interrupted** — not stopped, not failed — and
-   * the run it was executing stops being "running" with that reason attached.
+   * Recovery at process start, for the case nothing could be tidied: the last
+   * process died rather than shut down.
+   *
+   * Two things are true the moment this runs and at no other time: every session
+   * still marked live was in flight when the process died — recorded as
+   * **interrupted**, not stopped and not failed, and resumable like any session
+   * (principle 11) — and no initiation attempt can still be in progress, so a
+   * key claimed but never settled is stranded and is freed rather than refusing
+   * that gesture forever (principle 9).
    */
-  async recoverInterrupted(message: string): Promise<readonly StoredSession[]> {
-    const interrupted = this.deps.stores.sessions.interruptInFlight(message);
+  async recoverFromRestart(message: string): Promise<RestartRecovery> {
+    const stranded = this.deps.stores.runs.releaseUnsettledInitiations();
+    if (stranded.length > 0) {
+      this.deps.logger.warn("freed initiation keys no attempt can still hold", {
+        keys: stranded,
+      });
+    }
 
+    const interrupted = this.deps.stores.sessions.interruptInFlight(message);
     for (const session of interrupted) {
       await this.endRunFor(session);
       this.deps.logger.warn("session interrupted by a restart", {
@@ -474,7 +500,71 @@ export class RunService {
       });
     }
 
-    return interrupted;
+    return { interrupted, freedInitiationKeys: stranded };
+  }
+
+  /**
+   * Shutdown, for the case something *can* be tidied (principle 11 again, from
+   * the other side).
+   *
+   * A graceful close must not orphan a runtime: a pi child left running would
+   * keep spending money and writing to a workspace nothing is watching. So the
+   * outcome is written first — **interrupted**, because nobody stopped this work
+   * and it did not fail — and then the process is terminated. Writing first is
+   * what makes the record honest: terminating a runtime makes it report a stop,
+   * and the first outcome wins (principle 9).
+   *
+   * Next-boot marking stays for real crashes, where this never got to run.
+   */
+  async shutdown(message: string): Promise<readonly StoredSession[]> {
+    const { stores, hub } = this.deps;
+    const ended: StoredSession[] = [];
+    const pumps: Promise<void>[] = [];
+
+    for (const sessionId of [...hub.ids()]) {
+      const live = hub.get(sessionId);
+      if (live === null) continue;
+      pumps.push(live.pump);
+
+      const stored = stores.sessions.get(sessionId);
+      if (stored.session.end === null) {
+        const at = stores.clock();
+        const interrupted = stores.sessions.end(
+          sessionId,
+          classifyEnd({ kind: "interrupted", message }, at, {
+            interrupted: { message },
+          }),
+        );
+        await this.endRunFor(interrupted);
+        this.publishSession(interrupted, { kind: "human" });
+        ended.push(interrupted);
+
+        this.deps.logger.warn("session interrupted by a shutdown", {
+          sessionId,
+        });
+      }
+
+      // Abort rather than wind down: the server is going away, and a runtime
+      // asked to finish its turn would outlive the process that records it.
+      await live.handle.stop("abort").catch((error: unknown) =>
+        this.deps.logger.error("a runtime would not stop", {
+          sessionId,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+
+    // Let the pumps drain what the abort produced, so nothing writes to a
+    // database that is about to close. Bounded: a runtime that will not end its
+    // stream must not hold the process open.
+    await Promise.race([
+      Promise.allSettled(pumps),
+      new Promise((resolve) => setTimeout(resolve, SHUTDOWN_DRAIN_MS).unref()),
+    ]);
+
+    hub.detachAll();
+
+    return ended;
   }
 
   /* ----------------------------------------------------------------- private */
@@ -529,6 +619,10 @@ export class RunService {
    * The run stops being "running" when its session ends. The mapping is the
    * honest one: a stop is a stop, a failure says why, out-of-budget is its own
    * outcome, and an interruption says it was interrupted.
+   *
+   * The invariant this keeps is the one that matters for run history: **no ended
+   * session leaves a running run behind**. A run stuck at "running" reads as
+   * work still in flight on every surface that shows it, forever.
    */
   private async endRunFor(session: StoredSession): Promise<void> {
     const { stores } = this.deps;
@@ -545,9 +639,16 @@ export class RunService {
     const ended = ((): Run => {
       switch (end.kind) {
         case "completed":
-          // Completion is recorded by the submission path, which is the only
-          // place a run may be completed at all (§3.5).
-          return run;
+          // The submission path is the only place a run may be *completed*
+          // (§3.5), and it has already done so by the time a session's end says
+          // completed — so reaching here means the run was never completed and
+          // is still open. It stops, saying exactly that, rather than being left
+          // to look like work in flight.
+          return stores.runs.stop(
+            run.id,
+            cost,
+            "the session ended as completed without the run recording a proven outcome",
+          );
         case "failed":
           return stores.runs.fail(run.id, end.message, cost);
         case "out-of-budget":

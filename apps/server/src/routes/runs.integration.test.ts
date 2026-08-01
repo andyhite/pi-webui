@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import type { DomainEvent } from "@plotroom/core";
+import {
+  endStateFacts,
+  humanAuthor,
+  INHERIT_APP_TOOLS,
+  type DomainEvent,
+  type SessionEnd,
+} from "@plotroom/core";
+import { openDatabase, RunStore, SessionStore } from "@plotroom/db";
 import { loadServerConfig, type ServerConfigOverrides } from "../config.js";
 import { startServer } from "../index.js";
 import type { RuntimeScript } from "../runtime/scripted.js";
@@ -550,10 +557,30 @@ describe("assembly and run history (§3.5, §15-1, §15-4)", () => {
       notes: [{ title: "big", body: "x".repeat(400) }],
     });
 
-    const started = await run(harness, fixture.commandId, oneTurn);
+    const started = await run(
+      harness,
+      fixture.commandId,
+      oneTurn,
+      "warned-gesture",
+    );
 
     expect(at(started, "warning")).toMatch(/close to the model's 40-token/);
     expect(at(started, "run.status")).toBe("running");
+
+    // A retry is the same gesture, so it gets the same answer — warning
+    // included. Losing it would make the retry look like the assembly was fine.
+    const replayed = await harness.call("/runs", {
+      method: "POST",
+      body: {
+        commandId: fixture.commandId,
+        initiationKey: "warned-gesture",
+        runtime: { script: oneTurn },
+      },
+    });
+
+    expect(replayed.status).toBe(200);
+    expect(at(replayed.body, "replayed")).toBe(true);
+    expect(at(replayed.body, "warning")).toBe(at(started, "warning"));
   });
 
   it("refuses over an opt-in hard cap rather than truncating (principle 12)", async () => {
@@ -865,6 +892,58 @@ describe("the producing completion loop (§3.5, principle 3)", () => {
       /completion is proof, not a claim/,
     );
     expect(at(ended, "end.proven")).toBe(false);
+
+    // And the run is ended too: an unproven claim must not leave run history
+    // showing work still in flight.
+    const read = await harness.ok(`/runs/${str(started, "run.id")}`);
+    expect(at(read, "run.status")).toBe("failed");
+  });
+
+  it("refuses an open session's completion claim too, and ends its run", async () => {
+    const harness = await boot(repository());
+    // An open session declares no outcome, so there is nothing it could ever
+    // have proven — which makes a `completed` claim from its runtime more
+    // unfounded, not less (§3.5: an open session ends when the user ends it).
+    const fixture = await command(harness, { lifecycle: "open" });
+
+    const started = await run(harness, fixture.commandId, {
+      acts: [
+        {
+          on: "start",
+          steps: [
+            { observation: { kind: "turn-started", turn: 1 } },
+            { observation: { kind: "output-delta", text: "all done" } },
+            {
+              observation: {
+                kind: "turn-ended",
+                turn: 1,
+                usage: { inputTokens: 2, outputTokens: 2 },
+              },
+            },
+            {
+              observation: {
+                kind: "session-ended",
+                reason: { kind: "completed" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const ended = await endedSession(harness, str(started, "session.id"));
+
+    expect(at(ended, "session.end.kind")).toBe("failed");
+    expect(at(ended, "session.end.message")).toMatch(
+      /completion is proof, not a claim/,
+    );
+    expect(at(ended, "end.proven")).toBe(false);
+
+    // The invariant that matters for run history: no ended session leaves a
+    // running run behind.
+    const read = await harness.ok(`/runs/${str(started, "run.id")}`);
+    expect(at(read, "run.status")).not.toBe("running");
+    expect(at(read, "run.endedAt")).not.toBeNull();
   });
 
   it("proves the same submission whether a runtime or the API asked (principle 8)", async () => {
@@ -1007,9 +1086,9 @@ describe("end states are distinct (§3.6, principle 11)", () => {
     });
   });
 
-  it("marks sessions in flight at a restart as interrupted, not stopped", async () => {
+  it("interrupts a live session at a graceful shutdown rather than orphaning it", async () => {
     const repositoryPath = gitRepository();
-    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-restart-"));
+    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-shutdown-"));
     scratch.push(stateDir);
 
     const first = await boot({ workspace: { repositoryPath } }, { stateDir });
@@ -1018,17 +1097,80 @@ describe("end states are distinct (§3.6, principle 11)", () => {
     const sessionId = str(started, "session.id");
     const runId = str(started, "run.id");
 
-    // The session is genuinely in flight when the process goes away: it has
-    // been observed streaming, and nothing has ended it.
+    // The session is genuinely in flight when the server is asked to close: it
+    // has been observed streaming, and nothing has ended it.
     await waitFor(async () => {
       const read = await first.ok(`/sessions/${sessionId}`);
       return at(read, "status.phase.kind") === "responding" ? read : null;
     }, "the session to be observed streaming");
+    expect(first.handle.hub.ids()).toContain(sessionId);
+
     await first.handle.close();
     harnesses.splice(harnesses.indexOf(first), 1);
 
+    // Read the state directory directly, with no server running: this is the
+    // record as the shutdown left it, not something a later boot tidied up.
+    const state = openDatabase({ stateDir });
+    try {
+      const stored = new SessionStore(state).get(sessionId);
+      const end = stored.session.end as SessionEnd;
+
+      expect(end.kind).toBe("interrupted");
+      expect((end as { readonly message: string }).message).toMatch(
+        /server shut down/,
+      );
+      // Nobody stopped this work and it did not fail (principle 11).
+      expect(endStateFacts(end).stopped).toBe(false);
+      expect(endStateFacts(end).failed).toBe(false);
+      expect(endStateFacts(end).resumable).toBe(true);
+
+      // And the run is not left looking like work still in flight.
+      expect(new RunStore(state).run(runId).status).toBe("stopped");
+    } finally {
+      state.close();
+    }
+
+    // Nothing is left for the next boot to recover, because nothing was
+    // orphaned — and the record still says what actually happened.
     const second = await boot({ workspace: { repositoryPath } }, { stateDir });
+    await expect(second.handle.recovered).resolves.toMatchObject({
+      interrupted: [],
+    });
     const recovered = await second.ok(`/sessions/${sessionId}`);
+    expect(at(recovered, "session.end.message")).toMatch(/server shut down/);
+  });
+
+  it("marks a session the last process died on as interrupted at the next boot", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-crash-"));
+    scratch.push(stateDir);
+
+    // A crash leaves a live session record with no end and no process. Written
+    // directly here, because that is exactly the state a killed process leaves
+    // behind and the only state next-boot recovery exists for.
+    const first = await boot({}, { stateDir });
+    const workstreamId = str(
+      await first.ok("/workstreams", { method: "POST", body: {} }),
+      "workstream.id",
+    );
+    await first.handle.close();
+    harnesses.splice(harnesses.indexOf(first), 1);
+
+    const state = openDatabase({ stateDir });
+    const orphan = new SessionStore(state).start({
+      workstreamId,
+      mode: "open",
+      launch: {
+        model: "fixture-model",
+        effort: "medium",
+        toolPermissions: INHERIT_APP_TOOLS,
+      },
+      initiatedBy: humanAuthor,
+      runtime: { adapterId: "scripted", ref: "native-crashed" },
+    });
+    state.close();
+
+    const second = await boot({}, { stateDir });
+    const recovered = await second.ok(`/sessions/${orphan.session.id}`);
 
     expect(at(recovered, "session.end.kind")).toBe("interrupted");
     expect(at(recovered, "session.end.message")).toMatch(/server restarted/);
@@ -1037,10 +1179,45 @@ describe("end states are distinct (§3.6, principle 11)", () => {
     expect(at(recovered, "end.failed")).toBe(false);
     expect(at(recovered, "end.resumable")).toBe(true);
     expect(at(recovered, "end.wantsDecision")).toBe(true);
+  });
 
-    // The run it was executing is no longer "running" either.
-    const read = await second.ok(`/runs/${runId}`);
-    expect(at(read, "run.status")).toBe("stopped");
+  it("frees an initiation key no attempt can still hold, at the next boot", async () => {
+    const repositoryPath = gitRepository();
+    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-stranded-"));
+    scratch.push(stateDir);
+
+    const first = await boot({ workspace: { repositoryPath } }, { stateDir });
+    const fixture = await command(first);
+    await first.handle.close();
+    harnesses.splice(harnesses.indexOf(first), 1);
+
+    // A process that died between claiming a key and settling it leaves this: a
+    // claim with no run behind it, which would otherwise refuse that gesture
+    // forever (principle 9).
+    const state = openDatabase({ stateDir });
+    expect(
+      new RunStore(state).claimInitiation("stranded-gesture", fixture.commandId)
+        .state,
+    ).toBe("claimed");
+    state.close();
+
+    const second = await boot({ workspace: { repositoryPath } }, { stateDir });
+    await expect(second.handle.recovered).resolves.toMatchObject({
+      freedInitiationKeys: ["stranded-gesture"],
+    });
+
+    // The same gesture runs, instead of being told it is already starting.
+    const res = await second.call("/runs", {
+      method: "POST",
+      body: {
+        commandId: fixture.commandId,
+        initiationKey: "stranded-gesture",
+        runtime: { script: oneTurn },
+      },
+    });
+
+    expect(res.status).toBe(201);
+    expect(at(res.body, "replayed")).toBe(false);
   });
 });
 

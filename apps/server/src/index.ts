@@ -42,11 +42,13 @@ export function startServer(config = loadServerConfig()) {
     upgradeWebSocket,
   });
 
-  // Principle 11, before anything is served: a session that was in flight when
-  // the last process died is recorded as **interrupted** — not stopped, not
-  // failed — so nobody is ever shown a session the product believes is running.
-  // Resuming one is a gesture, never automatic (principle 2).
-  const interrupted = runtime.runs.recoverInterrupted(
+  // Recovery before anything is served, for whatever the last process could not
+  // tidy because it died rather than shut down: a session that was in flight is
+  // recorded as **interrupted** — not stopped, not failed — so nobody is ever
+  // shown a session the product believes is running (principle 11; resuming one
+  // is a gesture, never automatic), and an initiation key claimed but never
+  // settled is freed, since no attempt can still be holding it (principle 9).
+  const recovered = runtime.runs.recoverFromRestart(
     "the server restarted while this session was in flight",
   );
 
@@ -69,16 +71,21 @@ export function startServer(config = loadServerConfig()) {
     db,
     bus,
     logger,
-    /** Resolves once boot-time interruption has been recorded. */
-    recovered: interrupted,
+    /** Resolves once boot-time recovery has been recorded. */
+    recovered,
     hub: runtime.hub,
     runs: runtime.runs,
     close: async () => {
-      await interrupted;
-      // Let go of the live sessions without ending them: they are genuinely in
-      // flight, and the next start is what names them interrupted. Ending them
-      // here would record a stop nobody asked for.
-      runtime.hub.detachAll();
+      await recovered;
+
+      // A graceful close does not orphan a runtime: every live session is
+      // recorded as **interrupted** here and its process terminated, rather than
+      // left spending money against a workspace nothing is watching until the
+      // next boot notices. Next-boot marking stays for the crash case, where
+      // this never runs (principle 11, from both sides).
+      await runtime.runs.shutdown(
+        "the server shut down while this session was in flight",
+      );
 
       await new Promise<void>((resolve) => {
         server.close(() => {
