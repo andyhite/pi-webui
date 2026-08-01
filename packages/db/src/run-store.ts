@@ -497,17 +497,20 @@ export class RunStore {
   }
 
   /**
-   * A human stopped it, or the work stopped without failing and without
-   * proving its outcome. `reason` is recorded verbatim when there is one: a run
-   * cut short by a restart says "interrupted" rather than looking like a
-   * decision somebody made (principle 11).
-   *
-   * The session is where the end-state taxonomy lives (§3.6), and it keeps the
-   * distinction exactly; `runs.status` has no `interrupted` member, so the
-   * reason string is what carries it here until a schema change can widen it.
+   * Somebody stopped it (§6.7). `reason` records who or what asked, verbatim.
    */
   stop(runId: string, cost?: RunCost, reason?: string): Run {
     return this.end(runId, "stopped", cost, reason ?? null);
+  }
+
+  /**
+   * A crash or restart caught the run in flight (principle 11). Its own outcome:
+   * not stopped, because nobody decided to stop it, and not failed. The session
+   * that executed it records the same thing (§3.6), so the two halves of the
+   * record agree instead of one of them rounding to the nearest available word.
+   */
+  interrupt(runId: string, message: string, cost?: RunCost): Run {
+    return this.end(runId, "interrupted", cost, message);
   }
 
   /**
@@ -861,7 +864,7 @@ export class RunStore {
 
   private end(
     runId: string,
-    status: "failed" | "out_of_budget" | "stopped",
+    status: "failed" | "out_of_budget" | "stopped" | "interrupted",
     cost: RunCost | undefined,
     reason: string | null,
   ): Run {

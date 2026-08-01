@@ -74,9 +74,10 @@ export const ZERO_COST: RunCost = {
 };
 
 /**
- * A run's end state. Out-of-budget is its own outcome, distinct from failure:
- * PlotRoom stopped the work deliberately, and reporting that as a failure
- * makes every cross-run outcome dishonest (§3.6, §8).
+ * A run's end state, mirroring the session end-state taxonomy (§3.6, §8).
+ * Out-of-budget is its own outcome, distinct from failure — PlotRoom stopped the
+ * work deliberately, and reporting that as a failure makes every cross-run
+ * outcome dishonest — and so is interruption, which nobody chose at all.
  */
 export const RUN_STATUSES = [
   "running",
@@ -84,6 +85,12 @@ export const RUN_STATUSES = [
   "failed",
   "out_of_budget",
   "stopped",
+  /**
+   * A crash or restart caught the run in flight (principle 11). Not stopped —
+   * nobody decided to stop it — and not failed. The session that executed it
+   * carries the same distinction (§3.6), and now so does its run history.
+   */
+  "interrupted",
 ] as const;
 
 export type RunStatus = (typeof RUN_STATUSES)[number];

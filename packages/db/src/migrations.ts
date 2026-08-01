@@ -8,6 +8,20 @@ export interface Migration {
   readonly id: number;
   readonly name: string;
   readonly sql: string;
+  /**
+   * Set for the one kind of change SQLite cannot make in place: altering a
+   * CHECK constraint, which requires rebuilding the table.
+   *
+   * SQLite's own procedure for that (its ALTER TABLE docs, "Making Other Kinds
+   * Of Table Schema Changes") requires foreign keys to be *off* while the old
+   * table is dropped — otherwise the drop performs an implicit cascading delete
+   * and takes every child row with it. `PRAGMA foreign_keys` is a no-op inside a
+   * transaction, so the runner turns it off *before* beginning one, which keeps
+   * the rebuild atomic and the children intact. It then turns it back on and
+   * runs `PRAGMA foreign_key_check`, so a rebuild that got the references wrong
+   * fails loudly instead of shipping a store that lies about itself.
+   */
+  readonly rebuildsTable?: true;
 }
 
 export const migrations: readonly Migration[] = [
@@ -726,6 +740,68 @@ export const migrations: readonly Migration[] = [
       -- afterwards if only the estimate was ever written down. NULL means no cap
       -- was accepted; enforcing one is Phase 6's job, recording it is not.
       ALTER TABLE runs ADD COLUMN spend_cap_micros INTEGER;
+    `,
+  },
+  {
+    id: 9,
+    name: "interrupted_runs",
+    // The CHECK on runs.status has to change, and SQLite cannot alter one in
+    // place, so the table is rebuilt — see `Migration.rebuildsTable` for why the
+    // runner drops foreign keys around this one and checks them afterwards.
+    rebuildsTable: true,
+    sql: `
+      -- A run whose session was interrupted (principle 11) was recorded as
+      -- 'stopped' with the reason in failure_reason, because the taxonomy had
+      -- nowhere else to put it. "Stopped" means somebody decided to stop it, and
+      -- nobody did — so run history was saying something untrue about every run
+      -- a restart caught in flight. The end-state taxonomy the session already
+      -- keeps (§3.6) is now representable on the run too.
+      CREATE TABLE runs_new (
+        id                 TEXT PRIMARY KEY,
+        command_id         TEXT NOT NULL REFERENCES commands (id) ON DELETE CASCADE,
+        definition_id      TEXT NOT NULL REFERENCES command_definitions (id),
+        ordinal            INTEGER NOT NULL,
+        status             TEXT NOT NULL CHECK (status IN
+                             ('running', 'completed', 'failed', 'out_of_budget',
+                              'stopped', 'interrupted')),
+        assembled_blob_id  TEXT NOT NULL REFERENCES blobs (id),
+        assembled_hash     TEXT NOT NULL,
+        assembled_bytes    INTEGER NOT NULL,
+        config_json        TEXT NOT NULL,
+        input_tokens       INTEGER NOT NULL DEFAULT 0,
+        output_tokens      INTEGER NOT NULL DEFAULT 0,
+        cost_micros        INTEGER NOT NULL DEFAULT 0,
+        outcome_proof_json TEXT,
+        failure_reason     TEXT,
+        pinned             INTEGER NOT NULL DEFAULT 0,
+        started_at         INTEGER NOT NULL DEFAULT (unixepoch()),
+        ended_at           INTEGER,
+        spend_cap_micros   INTEGER
+      );
+
+      -- Columns listed explicitly rather than SELECT *: a copy that depended on
+      -- column order would break the first time one was added.
+      INSERT INTO runs_new (
+        id, command_id, definition_id, ordinal, status, assembled_blob_id,
+        assembled_hash, assembled_bytes, config_json, input_tokens,
+        output_tokens, cost_micros, outcome_proof_json, failure_reason, pinned,
+        started_at, ended_at, spend_cap_micros
+      )
+      SELECT
+        id, command_id, definition_id, ordinal, status, assembled_blob_id,
+        assembled_hash, assembled_bytes, config_json, input_tokens,
+        output_tokens, cost_micros, outcome_proof_json, failure_reason, pinned,
+        started_at, ended_at, spend_cap_micros
+      FROM runs;
+
+      DROP TABLE runs;
+      ALTER TABLE runs_new RENAME TO runs;
+
+      -- Named this time, matching what schema.ts has always declared; migration
+      -- 5 created the same constraint as an anonymous table-level UNIQUE.
+      CREATE UNIQUE INDEX runs_ordinal_idx ON runs (command_id, ordinal);
+      CREATE INDEX runs_definition_idx ON runs (definition_id, started_at);
+      CREATE INDEX runs_retention_idx ON runs (pinned, started_at);
     `,
   },
 ];

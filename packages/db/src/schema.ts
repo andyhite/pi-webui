@@ -434,7 +434,14 @@ export const runs = sqliteTable(
       .references(() => commandDefinitions.id),
     ordinal: integer("ordinal").notNull(),
     status: text("status", {
-      enum: ["running", "completed", "failed", "out_of_budget", "stopped"],
+      enum: [
+        "running",
+        "completed",
+        "failed",
+        "out_of_budget",
+        "stopped",
+        "interrupted",
+      ],
     }).notNull(),
     assembledBlobId: text("assembled_blob_id")
       .notNull()

@@ -1282,8 +1282,9 @@ describe("end states are distinct (§3.6, principle 11)", () => {
       expect(endStateFacts(end).failed).toBe(false);
       expect(endStateFacts(end).resumable).toBe(true);
 
-      // And the run is not left looking like work still in flight.
-      expect(new RunStore(state).run(runId).status).toBe("stopped");
+      // And the run says the same thing the session does: not left looking like
+      // work in flight, and not rounded to "stopped" either — nobody stopped it.
+      expect(new RunStore(state).run(runId).status).toBe("interrupted");
     } finally {
       state.close();
     }

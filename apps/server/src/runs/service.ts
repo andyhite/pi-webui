@@ -739,7 +739,9 @@ export class RunService {
         case "ended-by-user":
           return stores.runs.stop(run.id, cost, "the user ended the session");
         case "interrupted":
-          return stores.runs.stop(run.id, cost, `interrupted: ${end.message}`);
+          // Its own outcome on the run too, now that the taxonomy can say it
+          // (principle 11): nobody stopped this work.
+          return stores.runs.interrupt(run.id, end.message, cost);
       }
     })();
 

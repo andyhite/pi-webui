@@ -67,10 +67,51 @@ function applyMigrations(sqlite: Database.Database): void {
   for (const migration of migrations) {
     if (applied.has(migration.id)) continue;
 
-    sqlite.transaction(() => {
+    const apply = sqlite.transaction(() => {
       sqlite.exec(migration.sql);
       record.run(migration.id, migration.name);
-    })();
+    });
+
+    if (migration.rebuildsTable !== true) {
+      apply();
+      continue;
+    }
+
+    applyRebuild(sqlite, apply, migration.name);
+  }
+}
+
+/**
+ * A table rebuild, done the way SQLite documents it.
+ *
+ * Rebuilding a table means dropping the old one, and a `DROP TABLE` with foreign
+ * keys enabled performs an implicit cascading delete — which would take every
+ * child row with it and call the migration a success. So foreign keys go off
+ * first. `PRAGMA foreign_keys` is a no-op *inside* a transaction, which is why it
+ * is set before one begins; the rebuild itself is still one transaction, so a
+ * failure rolls the whole thing back.
+ *
+ * Afterwards the references are checked rather than assumed: a rebuild that got a
+ * foreign key wrong fails here, loudly, instead of shipping a store that lies
+ * about itself.
+ */
+function applyRebuild(
+  sqlite: Database.Database,
+  apply: () => void,
+  name: string,
+): void {
+  sqlite.pragma("foreign_keys = OFF");
+  try {
+    apply();
+  } finally {
+    sqlite.pragma("foreign_keys = ON");
+  }
+
+  const violations = sqlite.pragma("foreign_key_check") as unknown[];
+  if (violations.length > 0) {
+    throw new Error(
+      `migration ${name} left ${violations.length} foreign key violation(s); the store was not migrated`,
+    );
   }
 }
 
