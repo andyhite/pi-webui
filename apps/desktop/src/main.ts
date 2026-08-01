@@ -27,11 +27,15 @@
 import { spawn as spawnChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { BrowserWindow, app } from "electron";
+import { BrowserWindow, app, ipcMain } from "electron";
 
+import { applyBadgeCount } from "./badge.js";
 import { resolvePort } from "./config.js";
+import { BADGE_COUNT_CHANNEL } from "./ipc-channels.js";
 import { createPollingWaiter, spawnOrAttach } from "./spawn-or-attach.js";
 import type { HealthProbe, SpawnedProcess } from "./spawn-or-attach.js";
+
+const PRELOAD_ENTRY = fileURLToPath(new URL("./preload.js", import.meta.url));
 
 /**
  * Same layout assumption as the rest of the monorepo (AGENTS.md): sibling
@@ -142,8 +146,20 @@ async function main(): Promise<void> {
   });
   app.on("before-quit", () => handle.stop());
 
+  // The one derivation, one more surface (§7): the renderer derives its own
+  // fresh attention count and asks this process to apply it — the only
+  // thing exposed across the bridge (`preload.ts`), because `app.
+  // setBadgeCount` has no renderer-side equivalent at all.
+  ipcMain.on(BADGE_COUNT_CHANNEL, (_event, count: unknown) => {
+    applyBadgeCount(app, typeof count === "number" ? count : 0);
+  });
+
   await app.whenReady();
-  window = new BrowserWindow({ width: 1280, height: 800 });
+  window = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    webPreferences: { preload: PRELOAD_ENTRY },
+  });
   // The one single-origin URL (§12) — same port the health probe just
   // confirmed is serving, never a second address.
   await window.loadURL(`http://127.0.0.1:${port}/`);
