@@ -13,6 +13,15 @@ import type { WriteIntent, WriteIntentDeclaration } from "../../tools/gate.js";
  * `unbounded`, which raises an approval instead of consulting claims: slow, and
  * never wrong. Adding an entry is how a tool becomes claim-gated, and each entry
  * is a statement that someone checked pi's actual input shape for it.
+ *
+ * **What a wrong entry costs.** This declaration is the trust boundary and nothing
+ * downstream re-derives it — principle 7 cuts both ways: PlotRoom does not guess at
+ * what a tool writes, and it also does not second-guess a declaration. A `paths`
+ * entry naming the wrong input field makes the gate check a path the call is not
+ * writing, and the write then lands outside the claim it was checked against, because
+ * claims are only enforceable over *declared* paths. A `none` entry on a tool that
+ * does write executes with no check at all. That is why the default is `unbounded`
+ * and why every entry here cites the version it was verified against.
  */
 
 export type PiWriteExtent =

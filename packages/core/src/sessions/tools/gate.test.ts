@@ -353,8 +353,13 @@ describe("decideToolPermission", () => {
     expect(decision.raisesApproval).toBe(true);
   });
 
-  it("lets a reversible integration write through on a pre-grant", () => {
+  it("raises for a declared reversible external write that nothing pre-granted (§6.6, §9.2)", () => {
     const { state, manager } = setup();
+    // The hole this closes: a reversible external write with a `none` extent used to
+    // be allowed as not-gated, which made every `integration-write` pre-grant
+    // vacuous — nothing was left for one to authorize, so "irreversibility pierces
+    // pre-grants" pierced nothing. §6.6 lists "a write to an external system" among
+    // the raisers and §9.2 makes each write action's tool "subject to approvals".
     const decision = decideToolPermission(toolCall("github_comment", {}), {
       sessionId: A,
       claims: state,
@@ -362,10 +367,73 @@ describe("decideToolPermission", () => {
       intents: writesNothing,
       world: worldDeclarations,
       workstreamId: W,
+      preGrants: [],
+    });
+    expect(decision.outcome.kind).toBe("deny");
+    expect(decision.raisesApproval).toBe(true);
+    expect(decision.ask?.trigger).toBe("external-write");
+    // Reversible, so nothing was pierced: a pre-grant *could* have covered this one.
+    expect(decision.piercedPreGrant).toBeNull();
+  });
+
+  it("lets a reversible integration write through on a pre-grant — and only on one", () => {
+    const { state, manager } = setup();
+    const call = toolCall("github_comment", {});
+    const shared = {
+      sessionId: A,
+      claims: state,
+      manager,
+      intents: writesNothing,
+      world: worldDeclarations,
+      workstreamId: W,
+    } as const;
+
+    // Asserted together on purpose: a pre-grant test that passes identically with
+    // `preGrants: []` enshrines the hole instead of covering it.
+    const ungranted = decideToolPermission(call, { ...shared, preGrants: [] });
+    expect(ungranted.raisesApproval).toBe(true);
+
+    const decision = decideToolPermission(call, {
+      ...shared,
       preGrants: [preGrant({ kinds: ["integration-write"] })],
     });
     expect(decision.outcome.kind).toBe("allow");
     expect(decision.raisesApproval).toBe(false);
+    expect(decision.coveredBy?.kind).toBe("pre-grant");
+  });
+
+  it("does not let a grant for one class of ask widen to another", () => {
+    const { state, manager } = setup();
+    // The kinds are the classes the operator granted, and a grant naming one does not
+    // quietly widen to the other: a shell is not an external write, and a comment on
+    // a pull request is not a workspace tool.
+    const shellUnderIntegrationGrant = decideToolPermission(
+      toolCall("bash", { command: "ls" }),
+      {
+        sessionId: A,
+        claims: state,
+        manager,
+        intents: writesFile,
+        world: worldDeclarations,
+        workstreamId: W,
+        preGrants: [preGrant({ kinds: ["integration-write"] })],
+      },
+    );
+    expect(shellUnderIntegrationGrant.raisesApproval).toBe(true);
+
+    const commentUnderToolGrant = decideToolPermission(
+      toolCall("github_comment", {}),
+      {
+        sessionId: A,
+        claims: state,
+        manager,
+        intents: writesNothing,
+        world: worldDeclarations,
+        workstreamId: W,
+        preGrants: [preGrant({ kinds: ["tool-permission"] })],
+      },
+    );
+    expect(commentUnderToolGrant.raisesApproval).toBe(true);
   });
 
   it("allows an irreversible write once its own call was approved from the queue", () => {

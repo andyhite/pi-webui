@@ -1,6 +1,6 @@
 import type { Author } from "../../author.js";
 import { describeAsk, type ApprovalAsk } from "./ask.js";
-import type { Approval } from "./approval.js";
+import { settlesAsk, type Approval } from "./approval.js";
 import {
   describePreGrant,
   evaluatePreGrants,
@@ -25,7 +25,9 @@ import {
  *
  * 1. **A human is never gated.** §6.6 is about "a session requesting a capability
  *    it does not have". The operator is the authority every chain terminates at.
- * 2. **An answered approval settles it** — approve once, or deny with its reason.
+ * 2. **An answered approval settles the ask it was raised for** — approve once, or
+ *    deny with its reason. `settlesAsk` is what "it" means: an approval for another
+ *    tool, or for another target, settles nothing here.
  * 3. **`preGrantable` or ask.** The only route to pre-grant evaluation is through a
  *    constructor that returns `null` for an irreversible ask, so step 4 is
  *    unreachable for one. That is "irreversibility pierces pre-grants", spelled as
@@ -92,7 +94,12 @@ export function decideApproval(
 
   const raised = context.approval ?? null;
   const answered = raised?.answer ?? null;
-  if (raised !== null && answered !== null) {
+  // An answer settles the ask it was raised for and no other. A caller handing over
+  // the approval for a *different* target — this session's approved `object_delete`
+  // on `obj_1`, supplied while deleting `obj_2` — gets a must-ask rather than an
+  // execution: an approval names one gesture, and the operator who answered it was
+  // answering that one (principle 9).
+  if (raised !== null && answered !== null && settlesAsk(raised, ask)) {
     if (answered.decision === "approve-once") {
       return {
         kind: "allowed",
@@ -148,7 +155,16 @@ export function decideApproval(
     return {
       kind: "allowed",
       by: { kind: "not-gated" },
-      reason: `nothing about ${describeAsk(ask)} raises an approval; claims answer the write itself (§3.4)`,
+      // Two shapes reach here and the sentence has to be true of the one it
+      // describes: a call that writes nothing and that no declaration ties to an
+      // external system, or a workspace write bounded to declared paths, which §3.4
+      // answers. This used to say "claims answer the write itself" for both, which
+      // was false of an external write with a `none` extent — and that call does not
+      // reach this branch at all any more (`external-write`).
+      reason:
+        ask.writeExtent === "paths"
+          ? `nothing about ${describeAsk(ask)} raises an approval; claims answer the write itself (§3.4)`
+          : `nothing about ${describeAsk(ask)} raises an approval; it writes nothing in the workspace and nothing declares it touching an external system`,
     };
   }
 

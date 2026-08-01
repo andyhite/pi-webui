@@ -68,6 +68,22 @@ export const APPROVAL_TRIGGERS = [
   "none",
   /** §6.6: an irreversible write always asks. Never coverable — see `preGrantable`. */
   "irreversible-write",
+  /**
+   * A declared write to an external system that **is** reversible (§9.2): it asks
+   * unless a pre-grant covers it.
+   *
+   * This is a distinct trigger rather than `"none"` because §6.6 lists "a write to
+   * an external system" among the things a session raises an approval for, and §9.2
+   * makes every write action available as an agent tool "subject to approvals". The
+   * piercing clause presupposes it: if reversible external writes were ungated, then
+   * "irreversibility pierces pre-grants" would pierce nothing, because an
+   * `integration-write` pre-grant would have had nothing to authorize.
+   *
+   * Its extent is beside the point. An external write usually writes no workspace
+   * path at all, so the claim gate has nothing to say about it (§3.4 governs paths),
+   * and reading a `none` extent as "nothing to check" is what left the hole.
+   */
+  "external-write",
   /** The gate could not bound the write extent, so nothing checked it (§3.4). */
   "undeclared-write-extent",
   /** No standing policy covers it — the claim-wait reason, in this vocabulary. */
@@ -194,11 +210,17 @@ export function toolCallAsk(input: BuildToolAskInput): ApprovalAsk {
 
   return {
     kind: world === null ? "tool-permission" : "integration-write",
+    // Ordered most-specific-first. A declared external write that is *also*
+    // unbounded in the workspace reports `external-write`, the more specific fact;
+    // both trigger the same must-ask, and coverage is unaffected either way because
+    // a pre-grant has to name the ask's extent as well as its kind.
     trigger: irreversible
       ? "irreversible-write"
-      : writeExtent === "unbounded"
-        ? "undeclared-write-extent"
-        : "none",
+      : world !== null
+        ? "external-write"
+        : writeExtent === "unbounded"
+          ? "undeclared-write-extent"
+          : "none",
     tool: input.toolName,
     summary: input.summary,
     writeExtent,

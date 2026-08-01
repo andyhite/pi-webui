@@ -35,6 +35,13 @@ import {
  * Which tools are destruction-class is catalog metadata (`requires.destroys`), so
  * this needs no list of its own and a new destructive verb is covered the moment it
  * declares one.
+ *
+ * **The approval has to be this gesture's.** `context.approval` comes from the
+ * caller, and a caller looking one up by session finds the session's approvals
+ * rather than this one's — so `decideApproval` matches it with `settlesAsk` (tool
+ * and target) and a mismatch asks again instead of executing. An approved delete of
+ * one object does not delete another, and that is enforced in the decision rather
+ * than left as a requirement the caller has to remember.
  */
 
 export interface DestructionRequest {

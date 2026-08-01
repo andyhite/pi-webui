@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { humanAuthor, sessionAuthor } from "../../author.js";
 import { session, ws } from "../../claims/testing.js";
 import { answerApproval, raiseApproval } from "./approval.js";
-import { claimAsk, toolCallAsk } from "./ask.js";
+import { claimAsk, destructionAsk, toolCallAsk } from "./ask.js";
 import { decideApproval } from "./decide.js";
 import type { ApprovalId, PreGrantId } from "./ids.js";
 import { ALL_APPROVAL_EXTENTS, type PreGrant } from "./pre-grants.js";
@@ -124,12 +124,37 @@ describe("decideApproval (§6.6)", () => {
     }
   });
 
-  it("takes a pre-grant for a reversible integration write", () => {
+  it("asks for a declared reversible external write, and takes a pre-grant for it (§9.2)", () => {
+    // §6.6 lists "a write to an external system" among what a session raises an
+    // approval for, and §9.2's write actions are "subject to approvals". Allowed
+    // ungated, an `integration-write` pre-grant would authorize nothing at all.
+    expect(commentAsk.trigger).toBe("external-write");
+    const unstated = decideApproval(commentAsk, context);
+    expect(unstated.kind).toBe("must-ask");
+    if (unstated.kind === "must-ask") {
+      // Reversible: a pre-grant could have covered it, so nothing was pierced.
+      expect(unstated.pierced).toBeNull();
+    }
+
     const verdict = decideApproval(commentAsk, {
       ...context,
       preGrants: [preGrant({ kinds: ["integration-write"] })],
     });
     expect(verdict.kind).toBe("allowed");
+  });
+
+  it("says something true about the calls it does not gate", () => {
+    const read = decideApproval(readAsk, context);
+    const bounded = decideApproval(boundedWriteAsk, context);
+    if (read.kind !== "allowed" || bounded.kind !== "allowed") {
+      expect.fail("neither a read nor a claimed write raises an approval");
+      return;
+    }
+    // "Claims answer the write itself" is true of a path-bounded write, and was false
+    // of the external write that used to reach this same branch.
+    expect(bounded.reason).toContain("claims answer the write itself");
+    expect(read.reason).toContain("writes nothing in the workspace");
+    expect(read.reason).not.toContain("claims answer the write itself");
   });
 
   it("lets a deny bite a call that would never have asked", () => {
@@ -185,6 +210,52 @@ describe("decideApproval (§6.6)", () => {
         expect(verdict.reason).toContain("open a PR against the fork");
       }
     }
+  });
+
+  it("is not settled by an answer to a different gesture (principle 9)", () => {
+    // A caller that looks approvals up by session finds the session's, not this
+    // gesture's. An approved delete of one object must not delete another.
+    const approvedForOne = answerApproval(
+      raiseApproval({
+        id: "appr_3" as ApprovalId,
+        sessionId: A,
+        workstreamId: W,
+        ask: destructionAsk({
+          toolName: "object_delete",
+          target: { kind: "object", id: "obj_1" },
+        }),
+        at: 10,
+      }),
+      { decision: "approve-once", by: humanAuthor, at: 11 },
+    );
+    expect(approvedForOne.ok).toBe(true);
+    if (!approvedForOne.ok) return;
+
+    const otherTarget = destructionAsk({
+      toolName: "object_delete",
+      target: { kind: "object", id: "obj_2" },
+    });
+    expect(
+      decideApproval(otherTarget, {
+        ...context,
+        approval: approvedForOne.value,
+      }).kind,
+    ).toBe("must-ask");
+
+    expect(
+      decideApproval(mergeAsk, { ...context, approval: approvedForOne.value })
+        .kind,
+    ).toBe("must-ask");
+
+    // The gesture it *was* raised for is still settled by it.
+    const sameTarget = destructionAsk({
+      toolName: "object_delete",
+      target: { kind: "object", id: "obj_1" },
+    });
+    expect(
+      decideApproval(sameTarget, { ...context, approval: approvedForOne.value })
+        .kind,
+    ).toBe("allowed");
   });
 
   it("treats a raised-but-unanswered approval as still asking, never as permission", () => {

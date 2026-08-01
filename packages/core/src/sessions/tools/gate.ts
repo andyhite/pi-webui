@@ -33,14 +33,36 @@ import type { RequestOutcome, RuntimeRequest } from "../runtime.js";
  *   path, and an extent nobody could bound raises an approval.
  * - **What it does to the world** (`ToolWorldDeclaration`) — approvals territory
  *   (§6.6, §9.2). A declared **irreversible** integration write *always* asks,
- *   whatever was pre-granted, and this is where that rule bites: an outside-world
- *   write typically writes no workspace path at all, so before this the intent-`none`
- *   shortcut allowed a merge outright. Building the ask first is what closed that.
+ *   whatever was pre-granted; a declared **reversible** one asks unless a pre-grant
+ *   covers it (§9.2's write actions are "subject to approvals"). Both bite here for
+ *   the same reason: an outside-world write typically writes no workspace path at
+ *   all, so the intent-`none` shortcut used to allow a merge outright — and, until
+ *   `external-write` existed, allowed every reversible external write ungated, which
+ *   left `integration-write` pre-grants with nothing to authorize.
  *
  * A pre-grant answers the *approval* question and never the claim one: a covered
  * call still goes through the claim manager, because isolation is a guarantee rather
  * than a convention (principle 4) and a pre-grant that pierced a claim would be a
  * second writer on one path.
+ *
+ * ## What this gate cannot do, stated plainly
+ *
+ * Two limits are worth naming here rather than being discovered later, because both
+ * are consequences of "declared, never inferred" (principle 7) rather than defects
+ * in the decision:
+ *
+ * - **Claims are only enforceable over declared paths.** `checkWrite` can only find
+ *   a conflict on a path the declaration named. A tool that writes `src/a.ts` while
+ *   declaring `docs/b.md` writes outside its claim and nothing here can tell — the
+ *   claim ledger records what was declared. That is why an adapter's declaration is
+ *   reviewed code (`PI_KNOWN_WRITE_EXTENTS`) rather than configuration, and why an
+ *   unknown tool is `unbounded` instead of being trusted.
+ * - **A tool mis-declared `none` executes ungated.** `intent.kind === "none"` means
+ *   "touches nothing in the workspace", and this gate believes it: no paths are
+ *   checked and, absent a world declaration, no approval is raised. The declaration
+ *   *is* the trust boundary. Getting one wrong is not caught downstream, so
+ *   `UNKNOWN_WRITE_INTENTS` is the safe default for an adapter that has not
+ *   enumerated its surface, and adding an entry is a statement that someone checked.
  */
 
 export type WriteIntent =

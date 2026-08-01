@@ -1697,6 +1697,19 @@ whether an approval is needed: the claim manager is still asked about every path
 because a pre-grant that pierced a claim would be a second writer on one path
 (principle 4).
 
+**Every declared external write asks; irreversibility decides whether a pre-grant
+can answer for it.** The two rules are separate and both are enforced. A declared
+**reversible** write to an external system raises unless a pre-grant covers it —
+§6.6 lists "a write to an external system" among what a session raises an approval
+for, and §9.2 makes each write action's agent tool "subject to approvals". A declared
+**irreversible** one raises regardless. This was wrong when first landed: a reversible
+external write with a `none` write extent was allowed as not-gated, which made every
+`integration-write` pre-grant **vacuous** — with nothing left for one to authorize,
+"irreversibility pierces pre-grants" pierced nothing. The fix is a distinct trigger
+(`external-write`) rather than a special case at the call site, and the test asserts
+the contrast: the same call raises with `preGrants: []` and is allowed with the grant,
+so a pre-grant test can no longer pass by covering a call that was never gated.
+
 **One decision stated rather than left to a reader.** An **absent** world
 declaration does not raise. A tool nobody declared costs certainty about fork
 cleanliness (§6.3, already reported as `unknown`) and is still bounded by its write
@@ -1704,7 +1717,19 @@ extent — an unbounded one raises on its own — but reading "undeclared" as
 "irreversible" would raise an approval for every file read, and an operator
 approving a hundred reads an hour is reading none of them. §6.6's rule is written
 about _declared_ write actions, and `"unknown"` is what a declaration says when it
-cannot tell.
+cannot tell. The honest cost of that, now written into the gate's own docstring:
+**claims are only enforceable over declared paths**, and a tool mis-declared `none`
+executes ungated. The declaration is the trust boundary — principle 7 cuts both ways,
+since PlotRoom neither guesses at what a tool writes nor second-guesses an adapter
+that said — which is why `UNKNOWN_WRITE_INTENTS` is the default and why each entry in
+`PI_KNOWN_WRITE_EXTENTS` cites the version it was verified against.
+
+**An answer settles the gesture it was raised for.** `settlesAsk` matches an
+approval's tool and target against the ask being decided, inside `decideApproval`, so
+an approved `object_delete` on `obj_1` does not authorize `object_delete` on `obj_2`
+— a mismatch asks again (principle 9). It is enforced in the decision rather than
+stated as a requirement Track A has to remember, which also means the destruction path
+and the gate cannot each get it slightly differently.
 
 **Two answers, and no third.** Approve-once or deny-with-a-reason. There is
 deliberately no "always allow": a durable grant is a `PreGrant`, the operator's own
@@ -1763,7 +1788,9 @@ exposes. Nothing below needs a new rule invented:
   `approvalOutcome(...)`, and `approvedCallIds` is how the answer reaches the next
   decision for the same call. The claim path gains one line too: a wait whose
   `claimWaitReason` is `"approval"` raises one of these with `claimAsk(...)`, so the
-  queue shows one kind of row instead of two.
+  queue shows one kind of row instead of two. Passing an `Approval` into
+  `decideApproval` needs no care about _which_ one: `settlesAsk` refuses an answer
+  raised for another tool or another target, so looking one up by session is safe.
 
 **Alignment with Track B (Epic 6.1).** `ApprovalAttention` is the payload, and it is
 built in core for the reason `BroadcastAttention` is: five surfaces wording one

@@ -6,6 +6,7 @@ import {
   isIrreversibleAsk,
   type ApprovalAsk,
   type ApprovalKind,
+  type ApprovalTarget,
 } from "./ask.js";
 import type { ApprovalId } from "./ids.js";
 import type { PiercedPreGrant } from "./pre-grants.js";
@@ -195,6 +196,34 @@ function refuse<T>(
  */
 export function isApprovalAnswered(approval: Approval): boolean {
   return approval.answer !== null;
+}
+
+/**
+ * Whether this approval is an answer to **this** ask.
+ *
+ * `decideApproval` is handed the approval by its caller, and a caller looking one up
+ * by session finds the *session's* approvals rather than this gesture's. Without this
+ * check, an approved `object_delete` on `obj_1` would authorize `object_delete` on
+ * `obj_2`: a delete nobody agreed to, executed on the strength of agreeing to a
+ * different one. One gesture, one answer (principle 9) — and the check lives here
+ * rather than at each call site so the destruction path, the gate, and whatever Track
+ * A wires next cannot each get it slightly differently.
+ *
+ * Matched on the two facts that identify the gesture: the tool, and the record it
+ * would act on. Deliberately not the summary — wording is for humans, and matching on
+ * it would make a reworded row stop settling its own call.
+ */
+export function settlesAsk(approval: Approval, ask: ApprovalAsk): boolean {
+  if (approval.ask.tool !== ask.tool) return false;
+  return sameTarget(approval.ask.target, ask.target);
+}
+
+function sameTarget(
+  a: ApprovalTarget | null,
+  b: ApprovalTarget | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return a.kind === b.kind && a.id === b.id;
 }
 
 export function isApproved(approval: Approval): boolean {

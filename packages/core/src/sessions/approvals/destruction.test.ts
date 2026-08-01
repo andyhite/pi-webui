@@ -141,6 +141,42 @@ describe("routing (§6.6)", () => {
     }
   });
 
+  it("does not execute on an approval raised for another target (principle 9)", () => {
+    // The caller supplies the approval, and a caller looking one up by session finds
+    // the *session's* rather than this gesture's. `settlesAsk` is why an approved
+    // delete of `obj_1` does not delete `obj_2`: this asks again instead.
+    const answered = answerApproval(
+      raiseApproval({
+        id: "appr_9" as ApprovalId,
+        sessionId: A,
+        workstreamId: W,
+        ask: {
+          kind: "destruction",
+          trigger: "destruction",
+          tool: "object_delete",
+          summary: "object_delete on object obj_1",
+          writeExtent: "none",
+          paths: [],
+          world: null,
+          target: { kind: "object", id: "obj_1" },
+        },
+        at: 10,
+      }),
+      { decision: "approve-once", by: humanAuthor, at: 11 },
+    );
+    expect(answered.ok).toBe(true);
+    if (!answered.ok) return;
+
+    const routing = decideDestruction(
+      { tool: objectDelete(), targetId: "obj_2" },
+      { ...context, approval: answered.value },
+    );
+    expect(routing.kind).toBe("destruction");
+    if (routing.kind === "destruction") {
+      expect(routing.verdict.kind).toBe("must-ask");
+    }
+  });
+
   it("returns the operator's reason to the session when denied", () => {
     const raised = raiseApproval({
       id: "appr_2" as ApprovalId,
