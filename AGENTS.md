@@ -317,7 +317,11 @@ Record answers here as they are decided; do not assume.
 - Remaining graph schema: sessions (Epic 1.5). Workstreams, nodes, edges,
   commands, and runs are landed — see "Persistence notes".
 - Collection membership model (the `collection` kind has no members yet)
-- Electron packaging/updater tooling (electron-builder vs electron-forge)
 - Plugin distribution and permission-grant UX
 - Styling approach for the UI package
 - Versioning and release process
+
+Decided (recorded as they were made):
+
+- **Electron packaging/updater tooling: electron-builder** (with electron-updater). Decided W6–7 under the operator's standing autonomous-judgment directive; applied in Epic 8.4. Rationale: mature updater story and config-driven multi-platform targets fit Epic 8.4's "installers per platform + updater" scope with the least assembly.
+- Retention policy defaults: last 20 runs per definition, 30-day version window (Epic 1.4, recorded in the development plan's Epic 1.4 note).

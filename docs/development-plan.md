@@ -504,7 +504,7 @@ directory-listing seam and no watch; and clone-from-a-PR-card is the same
 ### Epic 4.5 — Agent tool surface (`tools`)
 
 - [ ] Every human gesture exposed as an agent tool over the same API vocabulary (principle 8)
-- [ ] Reflexivity enforcement: no session authors context/capabilities/budget into its own initiation chain; propose-and-accept path for self-touching targets (principle 1) — enforced at the server using the Phase 1 lineage model
+- [ ] Reflexivity enforcement: no session authors context/capabilities/budget into its own initiation chain; propose-and-accept path for self-touching targets (principle 1) — enforced at the server using the Phase 1 lineage model. _Carry-over from the Epic 2.2 review: `X-PlotRoom-Actor` is currently caller-supplied and trivially forgeable (acceptable single-operator/local). When agent tools land, the tool/runtime layer must set the actor itself from the session it serves — never trust an agent-supplied actor — or principle 1 becomes advisory._
 - [ ] Delegation: child sessions visible on the graph with provenance; spend attributed up the initiating chain (§3.6, principle 2)
 - [ ] Graph warnings readable by agents (§5)
 
