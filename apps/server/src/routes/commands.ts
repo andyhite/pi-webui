@@ -11,7 +11,7 @@ import {
 import { toDefinition, toOutput, type EditDefinitionInput } from "@plotroom/db";
 import { validateJsonBody } from "../http/validate.js";
 import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
-import { toCommandNode, toPlacedNode } from "./mappers.js";
+import { toCommandNode, toEdge, toPlacedNode } from "./mappers.js";
 
 const permissions = z.object({
   allowed: z.array(z.string()),
@@ -187,29 +187,37 @@ export function commandRoutes(stores: ApiStores): Hono<ApiEnv> {
   );
 
   app.delete("/command-definitions/:id", (c) => {
+    const id = param(c, "id");
     const author = actorOf(c);
-    const definition = toDefinition(commands.deleteDefinition(param(c, "id")));
+    const wasLive = commands.definitionRow(id).deletedAt === null;
+    const definition = toDefinition(commands.deleteDefinition(id));
 
-    bus.publish({
-      entity: "command_definition",
-      verb: "deleted",
-      definitionId: definition.id,
-      author,
-    });
+    if (wasLive) {
+      bus.publish({
+        entity: "command_definition",
+        verb: "deleted",
+        definitionId: definition.id,
+        author,
+      });
+    }
 
     return c.json({ definition, restorable: true });
   });
 
   app.post("/command-definitions/:id/restore", (c) => {
+    const id = param(c, "id");
     const author = actorOf(c);
-    const definition = toDefinition(commands.restoreDefinition(param(c, "id")));
+    const wasDeleted = commands.definitionRow(id).deletedAt !== null;
+    const definition = toDefinition(commands.restoreDefinition(id));
 
-    bus.publish({
-      entity: "command_definition",
-      verb: "created",
-      definition,
-      author,
-    });
+    if (wasDeleted) {
+      bus.publish({
+        entity: "command_definition",
+        verb: "created",
+        definition,
+        author,
+      });
+    }
 
     return c.json({ definition });
   });
@@ -247,11 +255,26 @@ export function commandRoutes(stores: ApiStores): Hono<ApiEnv> {
       });
     }
 
+    // Dropping a definition onto a ticket wires the ticket in the same
+    // gesture (§3.5), and those edges are authored edges like any other — a
+    // subscriber that never heard about them would render the command with no
+    // context until it refetched.
+    const wired = graph.contextInputs(instantiated.node.id);
+    for (const edge of wired) {
+      bus.publish({
+        entity: "edge",
+        verb: "created",
+        edge: toEdge(edge),
+        author,
+      });
+    }
+
     return c.json(
       {
         command,
         node: toPlacedNode(instantiated.node),
         outputs: instantiated.outputs.map((row) => toOutput(row)),
+        inputs: wired.map((edge) => toEdge(edge)),
       },
       201,
     );
@@ -271,23 +294,27 @@ export function commandRoutes(stores: ApiStores): Hono<ApiEnv> {
   app.delete("/commands/:id", (c) => {
     const id = param(c, "id");
     const author = actorOf(c);
+    const wasLive = commands.command(id).deletedAt === null;
     const effects = commands.delete(id);
 
-    bus.publish({
-      entity: "command",
-      verb: "deleted",
-      commandId: toCommandNode(commands.command(id)).id,
-      author,
-    });
-    // A pre-bind placeholder is now visibly broken and its wires stay exactly
-    // where they are: nothing downstream is silently unblocked (§3.5).
-    for (const output of commands.outputs(id)) {
+    if (wasLive) {
       bus.publish({
-        entity: "command_output",
-        verb: "updated",
-        output,
+        entity: "command",
+        verb: "deleted",
+        commandId: toCommandNode(commands.command(id)).id,
         author,
       });
+      // A pre-bind placeholder is now visibly broken and its wires stay
+      // exactly where they are: nothing downstream is silently unblocked
+      // (§3.5).
+      for (const output of commands.outputs(id)) {
+        bus.publish({
+          entity: "command_output",
+          verb: "updated",
+          output,
+          author,
+        });
+      }
     }
 
     return c.json({ effects, restorable: true });
@@ -296,16 +323,19 @@ export function commandRoutes(stores: ApiStores): Hono<ApiEnv> {
   app.post("/commands/:id/restore", (c) => {
     const id = param(c, "id");
     const author = actorOf(c);
+    const wasDeleted = commands.command(id).deletedAt !== null;
     const command = toCommandNode(commands.restore(id));
 
-    bus.publish({ entity: "command", verb: "created", command, author });
-    for (const output of commands.outputs(id)) {
-      bus.publish({
-        entity: "command_output",
-        verb: "updated",
-        output,
-        author,
-      });
+    if (wasDeleted) {
+      bus.publish({ entity: "command", verb: "created", command, author });
+      for (const output of commands.outputs(id)) {
+        bus.publish({
+          entity: "command_output",
+          verb: "updated",
+          output,
+          author,
+        });
+      }
     }
 
     return c.json({ command, outputs: commands.outputs(id) });

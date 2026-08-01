@@ -9,6 +9,7 @@ import {
 import { notFound } from "../http/errors.js";
 import { validateJsonBody } from "../http/validate.js";
 import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
+import { announceRemoval, announceRestoration } from "./announce.js";
 import { toPlotObject } from "./mappers.js";
 
 const renderings = z.object({
@@ -158,19 +159,25 @@ export function objectRoutes(stores: ApiStores): Hono<ApiEnv> {
   app.delete("/objects/:id", (c) => {
     const id = param(c, "id");
     const author = actorOf(c);
+    const existed = readObject(id).id;
+    const wasLive = objects.get(id)?.deletedAt === null;
     const row = objects.delete(id);
 
     // The placement goes with it, so the board matches the model; restoring
-    // the object puts the node and its wires back (principle 10).
+    // the object puts the node and its wires back (principle 10). The cascade
+    // is announced, not inferred — a subscriber told only "object deleted"
+    // would keep drawing the node and every wire into it.
     const node = graph.findNodeFor("content", id);
-    if (node && node.deletedAt === null) graph.removeNode(node.id);
+    if (node) announceRemoval(bus, author, graph.removeNode(node.id));
 
-    bus.publish({
-      entity: "object",
-      verb: "deleted",
-      objectId: toPlotObject(row).id,
-      author,
-    });
+    if (wasLive) {
+      bus.publish({
+        entity: "object",
+        verb: "deleted",
+        objectId: existed,
+        author,
+      });
+    }
 
     return c.json({ object: toPlotObject(row), restorable: true });
   });
@@ -178,17 +185,22 @@ export function objectRoutes(stores: ApiStores): Hono<ApiEnv> {
   app.post("/objects/:id/restore", (c) => {
     const id = param(c, "id");
     const author = actorOf(c);
+    const wasDeleted = objects.get(id)?.deletedAt !== null;
     const row = objects.restore(id);
 
-    const node = graph.findNodeFor("content", id);
-    if (node && node.deletedAt !== null) graph.restoreNode(node.id);
+    if (wasDeleted) {
+      bus.publish({
+        entity: "object",
+        verb: "created",
+        object: toPlotObject(row),
+        author,
+      });
+    }
 
-    bus.publish({
-      entity: "object",
-      verb: "created",
-      object: toPlotObject(row),
-      author,
-    });
+    // Roots before leaves: the object exists again before anything that
+    // refers to it does.
+    const node = graph.findNodeFor("content", id);
+    if (node) announceRestoration(bus, author, graph.restoreNode(node.id));
 
     return c.json({ object: toPlotObject(row) });
   });

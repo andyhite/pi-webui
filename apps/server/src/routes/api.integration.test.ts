@@ -749,3 +749,176 @@ describe("placing is idempotent (principle 9)", () => {
     expect(events).toEqual([]);
   });
 });
+
+describe("a removed node is off the board until it is restored", () => {
+  it("refuses to place it again, naming the verb that puts it back", async () => {
+    const { noteId, noteNode } = await board();
+    await ok(`/nodes/${noteNode}`, { method: "DELETE" });
+
+    const res = await call("/nodes", {
+      method: "POST",
+      body: { role: "content", refId: noteId },
+    });
+
+    expect(res.status).toBe(409);
+    expect(at(res.body, "error.details")).toEqual({ reason: "node_deleted" });
+    expect(at(res.body, "error.message")).toMatch(/restore it/);
+
+    await ok(`/nodes/${noteNode}/restore`, { method: "POST" });
+    const again = await call("/nodes", {
+      method: "POST",
+      body: { role: "content", refId: noteId },
+    });
+    expect(again.status).toBe(200);
+  });
+
+  it("refuses to wire it, at either end", async () => {
+    const { workstream, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+    await ok(`/nodes/${noteNode}`, { method: "DELETE" });
+
+    const res = await call("/edges", {
+      method: "POST",
+      body: { from: noteNode, to: command.node },
+    });
+
+    expect(res.status).toBe(409);
+    expect(at(res.body, "error.details")).toEqual({ reason: "node_deleted" });
+  });
+});
+
+describe("provenance is recorded, never authored (§3.7)", () => {
+  it("refuses to unwire a provenance edge", async () => {
+    const { workstream } = await board();
+    await producingCommand(workstream, "Implement");
+    const provenance = handle.db.sqlite
+      .prepare("SELECT id FROM edges WHERE kind = 'provenance' LIMIT 1")
+      .get() as { id: string };
+
+    const res = await call(`/edges/${provenance.id}`, { method: "DELETE" });
+
+    expect(res.status).toBe(409);
+    expect(at(res.body, "error.details")).toEqual({
+      reason: "provenance_not_authored",
+    });
+  });
+});
+
+describe("the stream carries the whole change, not part of it", () => {
+  it("announces the wires a removed node took down, and their return", async () => {
+    const { workstream, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+    await ok("/edges", {
+      method: "POST",
+      body: { from: noteNode, to: command.node },
+    });
+
+    const removal = await eventsDuring(async () => {
+      await ok(`/nodes/${noteNode}`, { method: "DELETE" });
+    });
+
+    // Leaves first: nothing is left drawing an edge to a node that is gone.
+    expect(removal.map((event) => `${event.entity}.${event.verb}`)).toEqual([
+      "edge.deleted",
+      "node.deleted",
+    ]);
+
+    const restoration = await eventsDuring(async () => {
+      await ok(`/nodes/${noteNode}/restore`, { method: "POST" });
+    });
+
+    expect(restoration.map((event) => `${event.entity}.${event.verb}`)).toEqual(
+      ["node.created", "edge.created"],
+    );
+  });
+
+  it("announces the cascade when an object is deleted and restored", async () => {
+    const { workstream, noteId, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+    await ok("/edges", {
+      method: "POST",
+      body: { from: noteNode, to: command.node },
+    });
+
+    const removal = await eventsDuring(async () => {
+      await ok(`/objects/${noteId}`, { method: "DELETE" });
+    });
+
+    expect(removal.map((event) => `${event.entity}.${event.verb}`)).toEqual([
+      "edge.deleted",
+      "node.deleted",
+      "object.deleted",
+    ]);
+
+    const restoration = await eventsDuring(async () => {
+      await ok(`/objects/${noteId}/restore`, { method: "POST" });
+    });
+
+    // Roots first: the object exists again before anything referring to it.
+    expect(restoration.map((event) => `${event.entity}.${event.verb}`)).toEqual(
+      ["object.created", "node.created", "edge.created"],
+    );
+  });
+
+  it("announces the context an instantiation wired in the same gesture", async () => {
+    const { workstream, noteNode } = await board();
+    const definition = await ok("/command-definitions", {
+      method: "POST",
+      body: {
+        name: "Implement",
+        instruction: "Implement it.",
+        model: "fixture-model",
+        effort: "medium",
+        lifecycle: "open",
+      },
+    });
+
+    const events = await eventsDuring(async () => {
+      await ok("/commands", {
+        method: "POST",
+        body: {
+          definitionId: str(definition, "definition.id"),
+          workstreamId: workstream,
+          context: [noteNode],
+        },
+      });
+    });
+
+    const edgeEvents = events.filter((event) => event.entity === "edge");
+    expect(edgeEvents).toHaveLength(1);
+    expect(edgeEvents[0]?.verb).toBe("created");
+    expect(edgeEvents[0]?.author).toEqual({ kind: "human" });
+  });
+
+  it("announces nothing when a delete or restore changed nothing", async () => {
+    const { workstream, noteId, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+    const edgeId = str(
+      await ok("/edges", {
+        method: "POST",
+        body: { from: noteNode, to: command.node },
+      }),
+      "edge.id",
+    );
+
+    await ok(`/edges/${edgeId}`, { method: "DELETE" });
+    await ok(`/workstreams/${workstream}`, { method: "DELETE" });
+    await ok(`/objects/${noteId}`, { method: "DELETE" });
+    await ok(`/commands/${command.commandId}`, { method: "DELETE" });
+    await ok(`/command-definitions/${command.definitionId}`, {
+      method: "DELETE",
+    });
+
+    const events = await eventsDuring(async () => {
+      await ok(`/edges/${edgeId}`, { method: "DELETE" });
+      await ok(`/workstreams/${workstream}`, { method: "DELETE" });
+      await ok(`/objects/${noteId}`, { method: "DELETE" });
+      await ok(`/commands/${command.commandId}`, { method: "DELETE" });
+      await ok(`/command-definitions/${command.definitionId}`, {
+        method: "DELETE",
+      });
+    });
+
+    expect(events).toEqual([]);
+  });
+});

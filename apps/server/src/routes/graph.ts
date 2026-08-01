@@ -3,6 +3,7 @@ import { z } from "zod";
 import { badRequest } from "../http/errors.js";
 import { validateJsonBody } from "../http/validate.js";
 import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
+import { announceRemoval, announceRestoration } from "./announce.js";
 import { toEdge, toPlacedNode } from "./mappers.js";
 
 const placeBody = z.object({
@@ -72,41 +73,31 @@ export function graphRoutes(stores: ApiStores): Hono<ApiEnv> {
 
   app.delete("/nodes/:id", (c) => {
     const author = actorOf(c);
-    const node = graph.removeNode(param(c, "id"));
+    const removal = graph.removeNode(param(c, "id"));
 
-    bus.publish({
-      entity: "node",
-      verb: "deleted",
-      nodeId: toPlacedNode(node).id,
-      author,
+    // The wires went down with it, so they are announced with it; a removal
+    // that changed nothing announces nothing.
+    announceRemoval(bus, author, removal);
+
+    return c.json({
+      node: toPlacedNode(removal.node),
+      edges: removal.edges.map((edge) => toEdge(edge)),
+      restorable: true,
     });
-
-    return c.json({ node: toPlacedNode(node), restorable: true });
   });
 
   app.post("/nodes/:id/restore", (c) => {
     const author = actorOf(c);
-    const node = graph.restoreNode(param(c, "id"));
+    const restoration = graph.restoreNode(param(c, "id"));
 
-    bus.publish({
-      entity: "node",
-      verb: "created",
-      node: toPlacedNode(node),
-      author,
-    });
-
-    // The edges the removal took down came back with it (principle 10), so
+    // Exactly what the removal took down comes back (principle 10), and
     // subscribers hear about each of them rather than inferring their return.
-    for (const edge of graph.contextInputs(node.id)) {
-      bus.publish({
-        entity: "edge",
-        verb: "created",
-        edge: toEdge(edge),
-        author,
-      });
-    }
+    announceRestoration(bus, author, restoration);
 
-    return c.json({ node: toPlacedNode(node) });
+    return c.json({
+      node: toPlacedNode(restoration.node),
+      edges: restoration.edges.map((edge) => toEdge(edge)),
+    });
   });
 
   /** Context inputs in assembly order (§3.5). */
@@ -171,25 +162,28 @@ export function graphRoutes(stores: ApiStores): Hono<ApiEnv> {
   app.delete("/edges/:id", (c) => {
     const id = param(c, "id");
     const author = actorOf(c);
-    graph.removeEdge(id);
+    // Was it still wired? Unwiring an already-unwired edge changes nothing,
+    // and announcing a deletion that did not happen would have subscribers
+    // undo state twice.
+    const wired = graph.edge(id).deletedAt === null;
+    const edge = toEdge(graph.removeEdge(id));
 
-    bus.publish({
-      entity: "edge",
-      verb: "deleted",
-      edgeId: toEdge(graph.edge(id)).id,
-      author,
-    });
+    if (wired) {
+      bus.publish({ entity: "edge", verb: "deleted", edgeId: edge.id, author });
+    }
 
-    return c.json({ edge: toEdge(graph.edge(id)), restorable: true });
+    return c.json({ edge, restorable: true });
   });
 
   app.post("/edges/:id/restore", (c) => {
     const id = param(c, "id");
     const author = actorOf(c);
-    graph.restoreEdge(id);
-    const edge = toEdge(graph.edge(id));
+    const wasRemoved = graph.edge(id).deletedAt !== null;
+    const edge = toEdge(graph.restoreEdge(id));
 
-    bus.publish({ entity: "edge", verb: "created", edge, author });
+    if (wasRemoved) {
+      bus.publish({ entity: "edge", verb: "created", edge, author });
+    }
 
     return c.json({ edge });
   });

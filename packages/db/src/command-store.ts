@@ -654,7 +654,14 @@ export class CommandStore {
     return row;
   }
 
-  private definitionRow(definitionId: string): CommandDefinitionRow {
+  /**
+   * The stored row, beside {@link definition}'s domain shape — the pair
+   * {@link command} already offers for command nodes. Deletion state lives on
+   * the row and deliberately not on `CommandDefinition`: a definition is the
+   * recipe, and "has this been deleted" is a fact about the record, not about
+   * the marching orders.
+   */
+  definitionRow(definitionId: string): CommandDefinitionRow {
     const row = this.state.db
       .select()
       .from(commandDefinitions)

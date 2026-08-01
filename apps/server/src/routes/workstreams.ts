@@ -117,29 +117,39 @@ export function workstreamRoutes(stores: ApiStores): Hono<ApiEnv> {
   }
 
   app.delete("/workstreams/:id", (c) => {
+    const id = param(c, "id");
     const author = actorOf(c);
-    const row = workstreams.delete(param(c, "id"), author);
+    // Deleting an already-deleted workstream changes nothing; announcing it
+    // would have subscribers act on a change that did not happen.
+    const wasLive = workstreams.get(id)?.deletedAt === null;
+    const row = workstreams.delete(id, author);
 
-    bus.publish({
-      entity: "workstream",
-      verb: "deleted",
-      workstreamId: toWorkstream(row).id,
-      author,
-    });
+    if (wasLive) {
+      bus.publish({
+        entity: "workstream",
+        verb: "deleted",
+        workstreamId: toWorkstream(row).id,
+        author,
+      });
+    }
 
     return c.json({ workstream: toWorkstream(row), restorable: true });
   });
 
   app.post("/workstreams/:id/restore", (c) => {
+    const id = param(c, "id");
     const author = actorOf(c);
-    const row = workstreams.restore(param(c, "id"), author);
+    const wasDeleted = workstreams.get(id)?.deletedAt !== null;
+    const row = workstreams.restore(id, author);
 
-    bus.publish({
-      entity: "workstream",
-      verb: "created",
-      workstream: toWorkstream(row),
-      author,
-    });
+    if (wasDeleted) {
+      bus.publish({
+        entity: "workstream",
+        verb: "created",
+        workstream: toWorkstream(row),
+        author,
+      });
+    }
 
     return c.json({ workstream: toWorkstream(row) });
   });
