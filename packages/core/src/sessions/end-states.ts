@@ -12,6 +12,8 @@
  * treats out-of-budget like failure re-runs work the money already ran out on.
  */
 
+import { humanAuthor, type Author } from "../author.js";
+
 /** Budget scopes (§8). A cap that binds can be any of the three. */
 export const BUDGET_SCOPES = ["run", "workstream", "global"] as const;
 
@@ -32,8 +34,17 @@ export type SessionEnd = { readonly at: number } &
   /** A producing session ended on proven completion (principle 3). */
   (
     | { readonly kind: "completed" }
-    /** An open session the user ended; whatever work remains, remains. */
-    | { readonly kind: "ended-by-user" }
+    /**
+     * An open session somebody ended; whatever work remains, remains.
+     *
+     * `author` records who. Ending a session is a gesture like any other, and
+     * naming the actor is what lets a card say "ended by you" rather than
+     * "ended" — and lets accounting tell a peer session's gesture from the
+     * operator's. Optional because a hand-written record may omit it, and absent
+     * means the operator: exactly the default `X-PlotRoom-Actor` already uses for
+     * an omitted actor. Read it through `endedBy` so that default is stated once.
+     */
+    | { readonly kind: "ended-by-user"; readonly author?: Author }
     /** Somebody stopped it (§6.7). */
     | { readonly kind: "stopped"; readonly by: "user" | "session" }
     /**
@@ -154,6 +165,16 @@ export function endStateFacts(end: SessionEnd): EndStateFacts {
 }
 
 /**
+ * Who ended this session, for the ends that have an actor.
+ *
+ * One place resolves the default, so "an omitted author means the operator" is
+ * stated once rather than assumed differently by each surface.
+ */
+export function endedBy(end: SessionEnd): Author | null {
+  return end.kind === "ended-by-user" ? (end.author ?? humanAuthor) : null;
+}
+
+/**
  * The short reason a card shows. Kept beside the taxonomy so no surface
  * invents its own wording for "the money ran out".
  */
@@ -161,8 +182,12 @@ export function describeEnd(end: SessionEnd): string {
   switch (end.kind) {
     case "completed":
       return "completed";
-    case "ended-by-user":
-      return "ended by you";
+    case "ended-by-user": {
+      const author = endedBy(end);
+      return author?.kind === "session"
+        ? `ended by session ${author.sessionId}`
+        : "ended by you";
+    }
     case "stopped":
       return end.by === "user" ? "stopped by you" : "stopped by a session";
     case "out-of-budget":

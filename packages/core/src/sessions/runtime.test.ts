@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { humanAuthor, sessionAuthor } from "../author.js";
-import { newSessionId } from "../ids.js";
+import { newSessionId, type SessionId } from "../ids.js";
 import {
   checkDeletion,
   isDeleted,
@@ -9,7 +9,7 @@ import {
   markRestored,
   NOT_DELETED,
 } from "./deletion.js";
-import { endStateFacts } from "./end-states.js";
+import { endStateFacts, endedBy } from "./end-states.js";
 import { planFork } from "./fork.js";
 import {
   ADAPTER_REPORTABLE_END_KINDS,
@@ -90,6 +90,8 @@ describe("SessionEndReason reconciled with the end-state taxonomy", () => {
   });
 });
 
+const PEER = "sess_peer" as SessionId;
+
 describe("completion is proven, not claimed (principle 3, §3.5)", () => {
   const submitted = {
     lifecycle: "producing",
@@ -142,14 +144,28 @@ describe("completion is proven, not claimed (principle 3, §3.5)", () => {
     expect(end.message).toContain("pr-open");
   });
 
+  it("carries the actor of an end PlotRoom made", () => {
+    // The runtime cannot know who ended it — it sees its input close — so the
+    // gesture's actor comes from PlotRoom, like every other gesture's.
+    const byPeer = classifyEnd({ kind: "ended-by-user" }, 10, {
+      endedBy: sessionAuthor(PEER),
+    });
+    expect(endedBy(byPeer)).toEqual(sessionAuthor(PEER));
+
+    const byOperator = classifyEnd({ kind: "ended-by-user" }, 10);
+    expect(endedBy(byOperator)).toEqual(humanAuthor);
+  });
+
   it("treats an open session's finish as an end, not as proof", () => {
     // An open session declares no outcome, so there is nothing to prove; its end
     // is the end an open session has (§3.5), and `proven` stays false.
     const end = classifyEnd({ kind: "completed" }, 10, {
       completion: { lifecycle: "open" },
+      endedBy: sessionAuthor(PEER),
     });
     expect(end.kind).toBe("ended-by-user");
     expect(endStateFacts(end).proven).toBe(false);
+    expect(endedBy(end)).toEqual(sessionAuthor(PEER));
   });
 
   it("lets PlotRoom's own state still win over the runtime's report", () => {

@@ -1,3 +1,4 @@
+import type { Author } from "../author.js";
 import type { SessionEnd, BudgetScope } from "./end-states.js";
 
 /**
@@ -240,6 +241,16 @@ export function isAdapterReportable(reason: SessionEndReason): boolean {
   return reason.kind !== "out-of-budget";
 }
 
+/** One place builds this end, so its author is never dropped on one path only. */
+function endedByUser(
+  at: number,
+  context: EndClassificationContext,
+): SessionEnd {
+  return context.endedBy === undefined
+    ? { kind: "ended-by-user", at }
+    : { kind: "ended-by-user", at, author: context.endedBy };
+}
+
 /**
  * What the session was launched to produce, and whether the world agrees it did
  * (principle 3, §3.5).
@@ -352,6 +363,13 @@ export interface EndClassificationContext {
    * rather than as a completion nobody checked.
    */
   readonly completion?: CompletionEvidence;
+  /**
+   * Who ended it, when the runtime reports `ended-by-user`. The runtime cannot
+   * know — it sees its input close — so the gesture's actor comes from PlotRoom,
+   * the same way the actor header carries it for every other gesture. Omitted
+   * means the operator.
+   */
+  readonly endedBy?: Author;
 }
 
 /**
@@ -380,11 +398,11 @@ export function classifyEnd(
       // has (§3.5), not a failure. Anything else is work reported done that the
       // world does not agree is done.
       return proof.reason === "no_declared_outcome"
-        ? { kind: "ended-by-user", at }
+        ? endedByUser(at, context)
         : { kind: "failed", message: proof.message, at };
     }
     case "ended-by-user":
-      return { kind: "ended-by-user", at };
+      return endedByUser(at, context);
     case "stopped":
       return { kind: "stopped", by: reason.by, at };
     case "out-of-budget":

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { humanAuthor, sessionAuthor } from "../author.js";
+import type { SessionId } from "../ids.js";
 import {
   SESSION_END_KINDS,
   describeEnd,
   endStateFacts,
+  endedBy,
   type SessionEnd,
 } from "./end-states.js";
 
@@ -15,6 +18,35 @@ const EVERY_END: readonly SessionEnd[] = [
   { kind: "failed", message: "the tool exploded", at: 10 },
   { kind: "interrupted", message: "the server restarted", at: 10 },
 ];
+
+describe("who ended it (§3.6)", () => {
+  const peer = sessionAuthor("sess_peer" as SessionId);
+
+  it("records the actor, and defaults to the operator when absent", () => {
+    // Absent means the operator — the same default `X-PlotRoom-Actor` uses for an
+    // omitted actor — resolved in one place so no surface invents its own.
+    expect(endedBy({ kind: "ended-by-user", at: 1 })).toEqual(humanAuthor);
+    expect(
+      endedBy({ kind: "ended-by-user", at: 1, author: humanAuthor }),
+    ).toEqual(humanAuthor);
+    expect(endedBy({ kind: "ended-by-user", at: 1, author: peer })).toEqual(
+      peer,
+    );
+  });
+
+  it("has no actor for the ends nobody made", () => {
+    expect(endedBy({ kind: "completed", at: 1 })).toBeNull();
+    expect(endedBy({ kind: "failed", message: "boom", at: 1 })).toBeNull();
+    expect(endedBy({ kind: "out-of-budget", scope: "run", at: 1 })).toBeNull();
+  });
+
+  it("says who in the card's own wording", () => {
+    expect(describeEnd({ kind: "ended-by-user", at: 1 })).toBe("ended by you");
+    expect(describeEnd({ kind: "ended-by-user", at: 1, author: peer })).toBe(
+      "ended by session sess_peer",
+    );
+  });
+});
 
 describe("the end-state taxonomy", () => {
   it("covers every kind, with nothing left over", () => {
