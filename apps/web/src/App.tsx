@@ -11,6 +11,8 @@ import type {
 import {
   CommandPalette,
   ContextInputList,
+  ConversationPanel,
+  DiffPanel,
   DockRail,
   GraphWarningsPanel,
   NotePanel,
@@ -20,12 +22,15 @@ import {
   createApiActions,
   createApiGraphDataSource,
   createFixtureGraphDataSource,
+  createFixtureSessionDataSource,
   createHttpClient,
   createNote,
   createPanelRegistry,
   createWebStoragePlacementStore,
+  createWebStorageSessionDraftsStore,
   definePanel,
   deriveGraphWarnings,
+  deriveInitialArrangement,
   dragOutMember,
   expandCollection,
   pruneMember,
@@ -33,7 +38,16 @@ import {
 } from "@plotroom/ui";
 import type { WarningGraphNode } from "@plotroom/ui";
 
-import { FIXTURE_COLLECTION, FIXTURE_SNAPSHOT } from "./fixtures.js";
+import {
+  FIXTURE_COLLECTION,
+  FIXTURE_RELEASED_CONTENT,
+  FIXTURE_SESSIONS,
+  FIXTURE_SESSION_STATUSES,
+  FIXTURE_SNAPSHOT,
+  FIXTURE_TRANSCRIPT,
+  FIXTURE_TRANSCRIPT_SCRIPT,
+  FIXTURE_WORKSPACE_DIFF,
+} from "./fixtures.js";
 
 /**
  * Placement is durable across reloads (spec §5). localStorage stands in for
@@ -68,11 +82,39 @@ const graphDataSource = LIVE
 
 const actions = createApiActions(httpClient);
 
+/**
+ * The session data seam (Epic 5.1, Stage 1 of 2): fixture-fed regardless of
+ * `LIVE` — no sessions server API exists yet (Track A, in parallel), unlike
+ * the graph seam above. Stage 2 adds a live `SessionDataSource` the exact
+ * same way `createApiGraphDataSource` was added here for the graph.
+ */
+const sessionDataSource = createFixtureSessionDataSource({
+  sessions: FIXTURE_SESSIONS,
+  transcripts: new Map([[FIXTURE_TRANSCRIPT.sessionId, FIXTURE_TRANSCRIPT]]),
+  script: FIXTURE_TRANSCRIPT_SCRIPT,
+  releasedContent: FIXTURE_RELEASED_CONTENT,
+});
+
+/** Drafts and prompt history persist per session (§6.2), the same durable-store seam as placement. */
+const sessionDraftsStore = createWebStorageSessionDraftsStore(
+  window.localStorage,
+  "plotroom.session-drafts.v1",
+);
+
 const now = () => Date.now();
 
 export function App() {
   const [placements, setPlacements] = useState<Placements | null>(null);
   const { selectedNodeId, select } = useSelectionRoute();
+
+  // Fixture-fed lookup (Stage 1): a session node's id is the session's own
+  // id (`sessions/canvas-node.ts`'s `refId`); Stage 2 resolves this against
+  // a live `SessionDataSource` instead.
+  const selectedSession = useMemo(
+    () =>
+      FIXTURE_SESSIONS.find((session) => session.id === selectedNodeId) ?? null,
+    [selectedNodeId],
+  );
 
   const [graph, setGraph] = useState<GraphSnapshot | null>(null);
 
@@ -158,6 +200,11 @@ export function App() {
         nodeId: node.id,
       })),
       { id: "verb-clear-log", label: "clear gesture log", kind: "verb" },
+      {
+        id: "verb-reset-arrangement",
+        label: "reset arrangement",
+        kind: "verb",
+      },
     ],
     [graph],
   );
@@ -204,8 +251,49 @@ export function App() {
         ),
       }),
     );
+    registry.register(
+      definePanel<null>({
+        id: "conversation",
+        title: "Conversation",
+        initialState: null,
+        render: () =>
+          selectedSession ? (
+            <ConversationPanel
+              session={selectedSession}
+              status={
+                FIXTURE_SESSION_STATUSES.get(selectedSession.id) ?? {
+                  phase: { kind: "idle" },
+                  facts: { busy: false, wantsAttention: false },
+                  health: { silentForMs: 0, possiblyStalled: false },
+                }
+              }
+              dataSource={sessionDataSource}
+              draftsStore={sessionDraftsStore}
+              now={now}
+              onSend={(sessionId, text) =>
+                log(`send to ${sessionId} (no-op against fixtures): ${text}`)
+              }
+              onWireAsContext={(sessionId, turnOrdinal, item) =>
+                log(
+                  `wire as context: session ${sessionId} turn ${turnOrdinal} (${item.kind}) — not yet wired`,
+                )
+              }
+            />
+          ) : (
+            <div>select a session node to see its conversation</div>
+          ),
+      }),
+    );
+    registry.register(
+      definePanel<null>({
+        id: "diff",
+        title: "Diff",
+        initialState: null,
+        render: () => <DiffPanel diff={FIXTURE_WORKSPACE_DIFF} />,
+      }),
+    );
     return registry;
-  }, [initialNote, warnings, select]);
+  }, [initialNote, warnings, select, selectedSession]);
 
   if (placements === null || graph === null) {
     return null;
@@ -224,6 +312,26 @@ export function App() {
           onSelectNode={select}
           onRunVerb={(itemId) => {
             if (itemId === "verb-clear-log") setGestureLog([]);
+            if (itemId === "verb-reset-arrangement") {
+              // §5's only automatic-layout verb: re-derive every position from
+              // the graph's own structure, discarding whatever was stored.
+              const next = deriveInitialArrangement(
+                graph.nodes.map((node) => ({
+                  id: node.id,
+                  ...(node.containerId
+                    ? { containerId: node.containerId }
+                    : {}),
+                })),
+                graph.edges.map((edge) => ({
+                  source: edge.source,
+                  target: edge.target,
+                })),
+                graph.containers.map((container) => ({ id: container.id })),
+              );
+              setPlacements(next);
+              void placementStore.save(next);
+              log("reset arrangement: re-derived from graph structure");
+            }
           }}
         />
         <PlotCanvas

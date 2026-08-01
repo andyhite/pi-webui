@@ -7,17 +7,30 @@
  * eye: content wires into commands and running sessions, nothing else.
  */
 
-import type {
-  CanvasContainerInput,
-  CanvasEdgeInput,
-  CanvasNodeInput,
-  ContextEdgeFact,
-  ContextInputRow,
-  GraphSnapshot,
-  PaletteEntry,
-  PaletteTicketEntry,
-  WarningFacts,
-  WarningGraphNode,
+import {
+  humanAuthor,
+  INHERIT_APP_TOOLS,
+  phaseFacts,
+  startSession,
+  type Session,
+  type SessionPhase,
+  type SessionStatus,
+  type Transcript,
+} from "@plotroom/core";
+import {
+  sessionCanvasNode,
+  type CanvasContainerInput,
+  type CanvasEdgeInput,
+  type CanvasNodeInput,
+  type ContextEdgeFact,
+  type ContextInputRow,
+  type GraphSnapshot,
+  type PaletteEntry,
+  type PaletteTicketEntry,
+  type ScriptedTurnDelivery,
+  type WarningFacts,
+  type WarningGraphNode,
+  type WorkspaceDiff,
 } from "@plotroom/ui";
 
 export const FIXTURE_CONTAINERS: readonly CanvasContainerInput[] = [
@@ -27,6 +40,91 @@ export const FIXTURE_CONTAINERS: readonly CanvasContainerInput[] = [
     defaultPosition: { x: 0, y: 0 },
   },
 ];
+
+/**
+ * Two fixture sessions, built from `@plotroom/core`'s real `Session` type
+ * (Phase 3 polish: sessions render as a canvas node kind from core session
+ * types, not a hand-typed label). `FIXTURE_SESSIONS` is also what
+ * `createFixtureSessionDataSource` (App.tsx's data source) loads as its
+ * session list.
+ */
+export const FIXTURE_SESSION_RUNNING: Session = startSession(
+  {
+    id: "session-running" as Session["id"],
+    workstreamId: "workstream-oxy-2982" as Session["workstreamId"],
+    commandId: null,
+    mode: "open",
+    launch: {
+      model: "anthropic/claude-sonnet-4",
+      effort: "medium",
+      toolPermissions: INHERIT_APP_TOOLS,
+    },
+    initiatedBy: humanAuthor,
+    runtime: { adapterId: "pi-coding-agent", ref: "pi-session-1" },
+  },
+  1_700_000_000,
+);
+
+export const FIXTURE_SESSION_ENDED: Session = {
+  ...startSession(
+    {
+      id: "session-ended" as Session["id"],
+      workstreamId: "workstream-oxy-2982" as Session["workstreamId"],
+      commandId: null,
+      mode: "open",
+      launch: {
+        model: "anthropic/claude-sonnet-4",
+        effort: "medium",
+        toolPermissions: INHERIT_APP_TOOLS,
+      },
+      initiatedBy: humanAuthor,
+      runtime: { adapterId: "pi-coding-agent", ref: "pi-session-2" },
+    },
+    1_699_000_000,
+  ),
+  end: { kind: "ended-by-user", at: 1_699_050_000 },
+};
+
+export const FIXTURE_SESSIONS: readonly Session[] = [
+  FIXTURE_SESSION_RUNNING,
+  FIXTURE_SESSION_ENDED,
+];
+
+/**
+ * Fixture phases (Phase 3 has no adapter/observation stream yet to derive
+ * these for real, Epic 4.1 territory) reused for both the session's canvas
+ * label and its Conversation panel status header, so the two surfaces never
+ * disagree about the same fixture session.
+ */
+export const FIXTURE_SESSION_RUNNING_PHASE: SessionPhase = { kind: "thinking" };
+export const FIXTURE_SESSION_ENDED_PHASE: SessionPhase = { kind: "idle" };
+
+/**
+ * `deriveSessionStatus` (`@plotroom/core`) needs an observation log this
+ * fixture layer doesn't have; `phaseFacts` is the pure, honest part of that
+ * derivation available without one, so the status header reads real core
+ * facts (busy/wants-attention) off a fixture phase rather than fabricating
+ * a whole `SessionObservationState`.
+ */
+export const FIXTURE_SESSION_STATUSES: ReadonlyMap<string, SessionStatus> =
+  new Map([
+    [
+      FIXTURE_SESSION_RUNNING.id,
+      {
+        phase: FIXTURE_SESSION_RUNNING_PHASE,
+        facts: phaseFacts(FIXTURE_SESSION_RUNNING_PHASE),
+        health: { silentForMs: 0, possiblyStalled: false },
+      },
+    ],
+    [
+      FIXTURE_SESSION_ENDED.id,
+      {
+        phase: FIXTURE_SESSION_ENDED_PHASE,
+        facts: phaseFacts(FIXTURE_SESSION_ENDED_PHASE),
+        health: { silentForMs: 0, possiblyStalled: false },
+      },
+    ],
+  ]);
 
 export const FIXTURE_NODES: readonly CanvasNodeInput[] = [
   {
@@ -55,21 +153,19 @@ export const FIXTURE_NODES: readonly CanvasNodeInput[] = [
     containerId: "workstream-oxy-2982",
     defaultPosition: { x: 260, y: 60 },
   },
-  {
-    id: "session-running",
-    label: "session #1 (running)",
-    role: "session",
-    running: true,
+  sessionCanvasNode({
+    session: FIXTURE_SESSION_RUNNING,
+    phase: FIXTURE_SESSION_RUNNING_PHASE,
+    label: "session #1",
     containerId: "workstream-oxy-2982",
     defaultPosition: { x: 40, y: 160 },
-  },
-  {
-    id: "session-ended",
-    label: "session #2 (ended)",
-    role: "session",
-    running: false,
+  }),
+  sessionCanvasNode({
+    session: FIXTURE_SESSION_ENDED,
+    phase: FIXTURE_SESSION_ENDED_PHASE,
+    label: "session #2",
     defaultPosition: { x: 720, y: 220 },
-  },
+  }),
   {
     id: "ticket-bare",
     label: "ticket OXY-3100 (bare, content)",
@@ -273,4 +369,100 @@ export const FIXTURE_SNAPSHOT: GraphSnapshot = {
   warningFacts: FIXTURE_WARNING_FACTS_MAP,
   paletteEntries: FIXTURE_PALETTE_ENTRIES,
   contextEdges: FIXTURE_CONTEXT_EDGES,
+};
+
+/**
+ * The Conversation panel's fixture transcript (spec §6.1): a reasoning
+ * entry distinct from output, a completed tool call, and one tool result
+ * already released (with its marker) to exercise the load-back affordance
+ * without waiting on the scripted playback below.
+ */
+export const FIXTURE_TRANSCRIPT: Transcript = {
+  sessionId: FIXTURE_SESSION_RUNNING.id,
+  turns: [
+    {
+      ordinal: 1,
+      startedAt: 1_700_000_010,
+      entries: [
+        { kind: "reasoning", text: "the ticket asks for a new endpoint" },
+        { kind: "output", text: "I'll start by reading the existing routes." },
+        {
+          kind: "tool-call",
+          callId: "call-1",
+          toolName: "read",
+          input: "apps/server/src/routes/index.ts",
+        },
+        {
+          kind: "tool-result",
+          callId: "call-1",
+          toolName: "read",
+          output: "",
+          isError: false,
+          released: {
+            releasedAt: 1_700_000_500,
+            bytes: 8_192,
+            contentHash: "fixture-hash-call-1",
+          },
+        },
+      ],
+    },
+  ],
+};
+
+/** What `session-running`'s scripted playback delivers, in order (dev/tests). */
+export const FIXTURE_TRANSCRIPT_SCRIPT: readonly ScriptedTurnDelivery[] = [
+  {
+    sessionId: FIXTURE_SESSION_RUNNING.id,
+    turn: {
+      ordinal: 2,
+      startedAt: 1_700_000_600,
+      entries: [
+        { kind: "output", text: "routes look consistent; opening a PR next." },
+      ],
+    },
+    delayMs: 2_000,
+  },
+];
+
+/** Released content this fixture source can "reload" (§6.1's load-back). */
+export const FIXTURE_RELEASED_CONTENT: ReadonlyMap<string, string> = new Map([
+  [
+    `${FIXTURE_SESSION_RUNNING.id}:call-1`,
+    "export function registerRoutes(app: Hono) { /* ...full route table... */ }",
+  ],
+]);
+
+/**
+ * The Diff panel's fixture data (spec §11): a minimal `WorkspaceDiff
+ * — read-only file tree + patches, fed until a real workspace/diff server
+ * API exists.
+ */
+export const FIXTURE_WORKSPACE_DIFF: WorkspaceDiff = {
+  workspaceId: "workspace-oxy-2982",
+  files: [
+    {
+      path: "apps/server/src/routes/tickets.ts",
+      status: "added",
+      hunks: [
+        {
+          header: "@@ -0,0 +1,3 @@",
+          lines: [
+            "+export function registerTicketRoutes() {}",
+            "+",
+            "+// TODO: wire into app.ts",
+          ],
+        },
+      ],
+    },
+    {
+      path: "apps/server/src/app.ts",
+      status: "modified",
+      patchText:
+        "@@ -10,6 +10,7 @@\n import { registerRoutes } from './routes/index.js';\n+import { registerTicketRoutes } from './routes/tickets.js';\n",
+    },
+    {
+      path: "apps/server/src/routes/legacy-tickets.ts",
+      status: "deleted",
+    },
+  ],
 };
