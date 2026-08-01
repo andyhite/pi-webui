@@ -188,21 +188,39 @@ _Landed unstyled per the design gate (fleet rule 5), against fixture data in
 `checkConnection`. Epic 3.0's server-served renderer and Electron
 spawn-or-attach wait for Phase 2 as planned._
 
-### Epic 3.2 — Zoom, containers, and legibility (`canvas`)
+### Epic 3.2 — Zoom, containers, and legibility (`canvas`) — _done (mechanics)_
 
-- [ ] Zoom-level renderers: workstream card → inner nodes → full detail (§5)
-- [ ] Collapsing workstream containers; edges draw to collapsed frames (§3.3, §5)
-- [ ] Minimap, legend, live counts; multi-select with contextual action bar (§5)
-- [ ] Off-screen attention markers with clustering (§5) — visuals now, fed by real attention in Phase 6
+- [x] Zoom-level renderers: workstream card → inner nodes → full detail (§5)
+- [x] Collapsing workstream containers; edges draw to collapsed frames (§3.3, §5)
+- [x] Minimap, legend, live counts; multi-select with contextual action bar (§5)
+- [x] Off-screen attention markers with clustering (§5) — visuals now, fed by real attention in Phase 6
 
-### Epic 3.3 — Authoring gestures (`canvas`)
+_Landed unstyled per the design gate (fleet rule 5), fixture-driven until
+Sync 2: `zoomLevelForScale` drives per-node renderers; containers force-
+collapse to one card at workstream zoom (`effectiveCollapsedContainers`) and
+edges remap to the frame (`remapEdgesForCollapse`); minimap/legend/live
+counts; xyflow-native marquee/shift multi-select feeding a role-filtered
+action bar; off-screen markers clustered by compass sector. Deferred:
+attention-marker coordinates for container children; within-container
+rigid-body push._
 
-- [ ] Edge drag with mid-drag refusal via `isValidConnection` over the core legality predicate (§3.7, §5)
-- [ ] Drag-to-empty-canvas create menu, filtered to legal targets (§5)
-- [ ] Ordered context inputs, rearrangeable by drag (§3.5)
-- [ ] One-gesture flows: definition-onto-ticket creates a workstream (workspace deferred to first run) (§3.5); collection expand/prune/drag-out (§3.1)
-- [ ] Notes: create, edit (new version → drift), promote (§3.8)
-- [ ] Undo for destructive canvas operations (§5, principle 10)
+### Epic 3.3 — Authoring gestures (`canvas`) — _done (mechanics)_
+
+- [x] Edge drag with mid-drag refusal via `isValidConnection` over the core legality predicate (§3.7, §5)
+- [x] Drag-to-empty-canvas create menu, filtered to legal targets (§5)
+- [x] Ordered context inputs, rearrangeable by drag (§3.5)
+- [x] One-gesture flows: definition-onto-ticket creates a workstream (workspace deferred to first run) (§3.5); collection expand/prune/drag-out (§3.1)
+- [x] Notes: create, edit (new version → drift), promote (§3.8)
+- [x] Undo for destructive canvas operations (§5, principle 10)
+
+_All gestures call the core predicates (`checkConnection` for mid-drag
+refusal and create-menu filtering — never a forked rule) and every authored
+edge carries an author (§15-2). Notes and the one-gesture workstream flow are
+fixture-layer models mirroring `@plotroom/core` shapes until the server API
+lands (Sync 2). Deferred, recorded: undo of rigid-body push displacement
+(§5's "restores what it pushed"); surfacing deletion/creation to the host so
+props stay the source of truth; create-menu positioning in non-origin host
+layouts._
 
 ### Epic 3.4 — Palette and shell basics (`ui`, `app`)
 
