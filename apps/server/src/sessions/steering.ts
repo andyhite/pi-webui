@@ -44,7 +44,11 @@ import {
   type StopScope,
   type WorkspaceId,
 } from "@plotroom/core";
-import type { BroadcastRow, StoredSession } from "@plotroom/db";
+import {
+  broadcastCause,
+  type BroadcastRow,
+  type StoredSession,
+} from "@plotroom/db";
 import type { EventBus } from "../events/bus.js";
 import { badRequest, refused } from "../http/errors.js";
 import type { Logger } from "../logging/logger.js";
@@ -755,29 +759,42 @@ export class SteeringService {
       const row = stores.broadcasts.found(entry.broadcastId);
       if (row === undefined) continue;
 
-      const plan = {
-        broadcastId: entry.broadcastId,
-        // Only `spendChargedTo` and the spender are read by
-        // `attributeBroadcastSpend`; the chain is the sender's own, deduped there.
-        spendChargedTo: attributionChain(stores, entry.senderSessionId),
-      } as unknown as BroadcastPlan;
-
-      const rows = attributeBroadcastSpend(plan, {
+      const spend = {
         sessionId: recipientSessionId as SessionId,
         amountUsd: induced / 1_000_000,
-        basis: "reported",
+        basis: "reported" as const,
         at: stores.clock(),
-      });
+      };
+
+      // Who the sender's chain is, minus everyone the accounting fold already
+      // charges for this recipient: the recipient itself and its own ancestors are
+      // billed for this turn through their own attribution, and charging them here
+      // as well would bill one dollar to one budget twice.
+      const rows = attributeBroadcastSpend(
+        { spendChargedTo: attributionChain(stores, entry.senderSessionId) },
+        spend,
+        attributionChain(stores, recipientSessionId),
+      );
+      if (rows.length === 0) {
+        // The sender's chain is entirely inside the recipient's own: there is
+        // nothing left to charge, and the charge is still closed so the same
+        // slice is not reconsidered on the next observation.
+        stores.broadcasts.markInduced(
+          entry.broadcastId,
+          recipientSessionId,
+          induced,
+        );
+        continue;
+      }
 
       stores.spend.attribute({
         chain: rows.map((attribution) => attribution.sessionId),
         workstreamId,
-        spend: {
-          sessionId: recipientSessionId as SessionId,
-          amountUsd: induced / 1_000_000,
-          basis: "reported",
-          at: stores.clock(),
-        },
+        spend,
+        // One cause per broadcast, so a second broadcast from the same sender to
+        // the same recipient is a second charge rather than a replacement of the
+        // first — and so neither can overwrite the accounting fold's row (§6.5).
+        cause: broadcastCause(entry.broadcastId),
       });
 
       stores.broadcasts.markInduced(

@@ -1542,4 +1542,31 @@ export const migrations: readonly Migration[] = [
         ON session_injections (session_id, queued_at);
     `,
   },
+  {
+    id: 22,
+    name: "spend_charge_cause",
+    sql: `
+      -- Why a spend row exists, and therefore what its amount means.
+      --
+      -- Two writers share this table and they do not mean the same thing by a
+      -- number. The accounting fold restates a spender's **cumulative** total every
+      -- time it moves, so its row must be replaced. A broadcast's induced charge
+      -- (§6.5) is an **increment**: the slice of a recipient's turn that one
+      -- broadcast caused. Keyed on (session, spender) alone, a second broadcast from
+      -- the same sender to the same recipient silently replaced the first —
+      -- undercharging the sender's chain — and either writer could overwrite the
+      -- other's row with a number measuring something else.
+      --
+      -- Existing rows are 'accounting'. A broadcast slice written before this column
+      -- existed is indistinguishable from a cumulative total and is left as one; the
+      -- next fold for that spender replaces it with the true total, so the ledger
+      -- self-heals rather than carrying a wrong number forward for ever.
+      ALTER TABLE spend_attributions ADD COLUMN cause TEXT NOT NULL DEFAULT 'accounting';
+
+      DROP INDEX spend_attributions_pair_idx;
+
+      CREATE UNIQUE INDEX spend_attributions_charge_idx
+        ON spend_attributions (session_id, source_session_id, cause);
+    `,
+  },
 ];

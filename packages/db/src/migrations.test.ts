@@ -225,3 +225,79 @@ describe("migration 9 rebuilds runs without eating its children", () => {
     }
   });
 });
+
+describe("migration 22 re-keys the spend ledger by cause", () => {
+  /** A store at 21 with one attributed dollar: what an install upgrades from. */
+  function storeWithSpend(): void {
+    const file = storeAtMigration(21);
+    const sqlite = new Database(file);
+    sqlite.exec(`
+      INSERT INTO spend_attributions
+        (id, session_id, source_session_id, workstream_id, basis, amount_micros,
+         cost_basis, at)
+        VALUES ('spend_1', 'sess_1', 'sess_1', 'ws_1', 'own', 1000000,
+                'reported', 1000);
+    `);
+    sqlite.close();
+  }
+
+  it("keeps existing rows, calling them what they are", () => {
+    storeWithSpend();
+
+    const state = openDatabase({ stateDir: dir });
+    try {
+      const row = state.sqlite
+        .prepare<[], Record<string, unknown>>(
+          "SELECT * FROM spend_attributions WHERE id = 'spend_1'",
+        )
+        .get() as Record<string, unknown>;
+
+      // Nothing is lost and nothing is guessed: a row written before the column
+      // existed is an accounting row, which is what almost all of them were.
+      expect(row["amount_micros"]).toBe(1000000);
+      expect(row["cause"]).toBe("accounting");
+      expect(state.sqlite.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      state.close();
+    }
+  });
+
+  it("admits a second charge for the same pair under a different cause", () => {
+    storeWithSpend();
+
+    const state = openDatabase({ stateDir: dir });
+    try {
+      const insert = (id: string, cause: string) =>
+        state.sqlite
+          .prepare(
+            `INSERT INTO spend_attributions
+               (id, session_id, source_session_id, workstream_id, basis,
+                amount_micros, cost_basis, cause, at)
+             VALUES (?, 'sess_1', 'sess_1', 'ws_1', 'descendant', 500000,
+                     'reported', ?, 2000)`,
+          )
+          .run(id, cause);
+
+      // What the old key made impossible: a broadcast's induced charge beside the
+      // accounting row for the same pair (§6.5).
+      insert("spend_2", "broadcast:bcast_1");
+      // And a second broadcast is a second charge, not a replacement of the first.
+      insert("spend_3", "broadcast:bcast_2");
+
+      // The pair is still unique *within* a cause, so a restated total cannot
+      // become two rows.
+      expect(() => insert("spend_4", "broadcast:bcast_2")).toThrow(
+        /UNIQUE constraint failed/,
+      );
+
+      const total = state.sqlite
+        .prepare<[], { total: number }>(
+          "SELECT SUM(amount_micros) AS total FROM spend_attributions",
+        )
+        .get() as { total: number };
+      expect(total.total).toBe(2000000);
+    } finally {
+      state.close();
+    }
+  });
+});

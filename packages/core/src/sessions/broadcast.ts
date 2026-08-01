@@ -587,18 +587,36 @@ export function planSessionBroadcast(
  * it; anything else lets a session spend from budgets that do not bind it, a
  * hole in principle 2's transitive guarantee)."
  *
- * One recipient's induced turn produces rows for the recipient (`own` — it still
- * spent its own budget) and for every session in the sender's chain
- * (`descendant` — they caused it). A recipient that happens to *be* in the
- * sender's chain gets one row, as `own`, because `attributeSpend` keys on the
- * spender; the chain is deduped here so a two-row charge is impossible.
+ * This charges the sender's chain and **only** the part of it the ordinary
+ * accounting fold does not already charge, which is what `alreadyCharged` is for.
+ * The recipient's own budget is charged for this turn anyway — it is the
+ * recipient's spend, folded from its own log — and so is every ancestor of the
+ * recipient, transitively (§3.6). Adding a second charge for those sessions would
+ * bill the same dollar to the same budget twice; the hole §6.5 names is only the
+ * *sender's* chain going uncharged, and that is what is filled here.
+ *
+ * Two consequences follow, and both are the point:
+ *
+ * - every row this returns is `descendant`, because nobody left in the list spent
+ *   the money themselves — so an induced charge never moves a workstream or fleet
+ *   total, which sum `own` rows and would otherwise count the turn twice;
+ * - a recipient inside the sender's chain (which §6.5 accepts rather than
+ *   prevents) is charged exactly once, by the fold, not once here and once there.
+ *
+ * `alreadyCharged` is required rather than defaulted: a caller that forgot it
+ * would silently reintroduce the double charge, and there is no safe guess.
  */
 export function attributeBroadcastSpend(
-  plan: BroadcastPlan,
+  plan: Pick<BroadcastPlan, "spendChargedTo">,
   spend: SessionSpend,
+  /** The recipient's own attribution chain: itself and every ancestor. */
+  alreadyCharged: readonly SessionId[],
 ): readonly SpendAttributionEntry[] {
-  const chain = [spend.sessionId, ...plan.spendChargedTo];
-  return attributeSpend([...new Set(chain)], spend);
+  const charged = new Set<SessionId>([spend.sessionId, ...alreadyCharged]);
+  const chain = [...new Set(plan.spendChargedTo)].filter(
+    (sessionId) => !charged.has(sessionId),
+  );
+  return attributeSpend(chain, spend);
 }
 
 /* ------------------------------------------------- what the operator sees */

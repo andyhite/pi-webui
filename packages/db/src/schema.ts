@@ -935,9 +935,10 @@ export const pathReads = sqliteTable(
 );
 
 /**
- * Spend attributed up the initiating chain (§3.6, principle 2, migration 12).
- * One row per (charged session, spender): re-attributing a grown total replaces
- * the row rather than adding a second one.
+ * Spend attributed up the initiating chain (§3.6, principle 2, migrations 12 and
+ * 22). One row per (charged session, spender, **cause**): re-attributing a grown
+ * accounting total replaces that row rather than adding a second one, while two
+ * broadcasts' induced charges stay two rows because they are two charges.
  */
 export const spendAttributions = sqliteTable(
   "spend_attributions",
@@ -955,15 +956,23 @@ export const spendAttributions = sqliteTable(
     basis: text("basis", { enum: ["own", "descendant"] }).notNull(),
     amountMicros: integer("amount_micros").notNull(),
     costBasis: text("cost_basis", { enum: ["reported", "priced"] }).notNull(),
+    /**
+     * Why this row exists, and therefore what its amount means (migration 22):
+     * `accounting` restates a spender's cumulative total, a `broadcast:<id>` row
+     * is one broadcast's induced increment (§6.5). Part of the key, because
+     * sharing one let either kind silently replace the other.
+     */
+    cause: text("cause").notNull(),
     at: integer("at").notNull(),
   },
   (table) => [
     index("spend_attributions_session_idx").on(table.sessionId),
     index("spend_attributions_source_idx").on(table.sourceSessionId),
     index("spend_attributions_workstream_idx").on(table.workstreamId),
-    uniqueIndex("spend_attributions_pair_idx").on(
+    uniqueIndex("spend_attributions_charge_idx").on(
       table.sessionId,
       table.sourceSessionId,
+      table.cause,
     ),
   ],
 );
@@ -994,8 +1003,17 @@ export const budgets = sqliteTable(
     updatedAt: integer("updated_at").notNull(),
   },
   (table) => [
-    uniqueIndex("budgets_global_idx").on(table.scope),
-    uniqueIndex("budgets_workstream_idx").on(table.workstreamId),
+    // Both are **partial**, exactly as migration 20 creates them: one global
+    // ceiling, and one budget per workstream. Declared with their predicates
+    // rather than as plain unique indexes — an unqualified unique on `scope` would
+    // claim "one workstream budget in the whole store", which is neither what the
+    // store enforces nor what this file should say it does.
+    uniqueIndex("budgets_global_idx")
+      .on(table.scope)
+      .where(sql`${table.scope} = 'global'`),
+    uniqueIndex("budgets_workstream_idx")
+      .on(table.workstreamId)
+      .where(sql`${table.workstreamId} is not null`),
   ],
 );
 

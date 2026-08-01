@@ -218,21 +218,31 @@ describe("a session's broadcast carries its constraints (§6.5)", () => {
     if (!planned.ok) return;
     expect(planned.plan.spendChargedTo).toEqual([sender, parent]);
 
-    // One recipient's induced turn: its own budget, plus the sender's chain.
-    const entries = attributeBroadcastSpend(planned.plan, {
-      sessionId: peer,
-      amountUsd: 0.4,
-      basis: "reported",
-      at: 11_000,
-    });
+    // One recipient's induced turn, charged to the sender's chain — and to nobody
+    // the ordinary accounting fold already bills. The recipient's own budget is
+    // charged for this turn by its own attribution (it is the recipient's spend),
+    // so a row for it here would bill one dollar to one budget twice.
+    const entries = attributeBroadcastSpend(
+      planned.plan,
+      {
+        sessionId: peer,
+        amountUsd: 0.4,
+        basis: "reported",
+        at: 11_000,
+      },
+      [peer],
+    );
 
-    expect(attributedTotal(entries, peer)).toBeCloseTo(0.4);
     expect(attributedTotal(entries, sender)).toBeCloseTo(0.4);
     expect(attributedTotal(entries, parent)).toBeCloseTo(0.4);
-    expect(entries.filter((entry) => entry.basis === "own")).toHaveLength(1);
+    expect(attributedTotal(entries, peer)).toBe(0);
+    // Every induced row is `descendant`: nobody left in the list spent it. That is
+    // what keeps a workstream or fleet total — which sums `own` rows — from
+    // counting the same turn twice.
+    expect(entries.filter((entry) => entry.basis === "own")).toHaveLength(0);
   });
 
-  it("charges a recipient inside the sender's chain exactly once", () => {
+  it("leaves a recipient inside the sender's chain to its own attribution", () => {
     const planned = planSessionBroadcast(
       { world, history: [], lineage },
       request,
@@ -240,17 +250,44 @@ describe("a session's broadcast carries its constraints (§6.5)", () => {
     expect(planned.ok).toBe(true);
     if (!planned.ok) return;
 
-    const entries = attributeBroadcastSpend(planned.plan, {
-      sessionId: parent,
-      amountUsd: 1,
-      basis: "priced",
-      at: 11_000,
-    });
-
-    expect(entries.filter((entry) => entry.sessionId === parent)).toHaveLength(
-      1,
+    // §6.5 accepts that a broadcast can reach the sender's own chain rather than
+    // preventing it. When the recipient *is* the sender's parent, the whole of the
+    // sender's chain is already charged for that turn by the fold — the sender as
+    // an ancestor's descendant, the parent as the spender — so there is nothing
+    // left for the induced charge to add, and it adds nothing rather than
+    // double-billing the pair.
+    const entries = attributeBroadcastSpend(
+      planned.plan,
+      { sessionId: parent, amountUsd: 1, basis: "priced", at: 11_000 },
+      [parent, sender],
     );
-    expect(attributedTotal(entries, parent)).toBe(1);
+
+    expect(entries).toHaveLength(0);
+  });
+
+  it("charges the part of the sender's chain the fold does not reach", () => {
+    const planned = planSessionBroadcast(
+      { world, history: [], lineage },
+      request,
+    );
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+
+    // The recipient is the sender itself: the fold charges the sender (its own
+    // spend) and would charge its ancestors anyway — so nothing is added here
+    // either. The interesting half is that the function decides this from what it
+    // is told is already charged, not from lineage it re-derives.
+    const entries = attributeBroadcastSpend(
+      planned.plan,
+      { sessionId: sender, amountUsd: 1, basis: "priced", at: 11_000 },
+      [sender],
+    );
+
+    // `parent` is in the sender's chain but *not* in what the caller said was
+    // already charged, so it is charged — the caller is the one place that knows
+    // which sessions the fold reaches.
+    expect(entries.map((entry) => entry.sessionId)).toEqual([parent]);
+    expect(entries[0]?.basis).toBe("descendant");
   });
 
   it("refuses when nothing shares the material state, without spending the bound", () => {
