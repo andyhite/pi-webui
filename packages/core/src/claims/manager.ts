@@ -386,15 +386,29 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
     );
   }
 
+  /**
+   * Availability and authorization are *separate* answers, and every variant that
+   * could be granted from carries **both**.
+   *
+   * `denied` used to carry only the policy, which let `grant` — the operator, who
+   * overrides a deny — skip the blocker check and stomp a live holder without so
+   * much as a release effect. A variant that hides the blockers is a variant a
+   * caller can forget to ask about, so it does not exist any more.
+   */
   type Evaluation =
     | { readonly kind: "already-held"; readonly claim: Claim }
-    | { readonly kind: "denied"; readonly by: ClaimPolicy }
+    | {
+        readonly kind: "denied";
+        readonly by: ClaimPolicy;
+        /** Held by other sessions at or under the path. Empty means available. */
+        readonly blockers: readonly Claim[];
+        /** Who would grant it — the deepest enclosing claim that is not a blocker. */
+        readonly authority: Claim;
+      }
     | { readonly kind: "no-root" }
     | {
         readonly kind: "open";
-        /** Held by other sessions at or under the path. Empty means available. */
         readonly blockers: readonly Claim[];
-        /** Who grants it — the deepest enclosing claim that is not itself a blocker. */
         readonly authority: Claim;
         /** True when a standing policy already allows it (§3.4's pre-grant). */
         readonly authorized: boolean;
@@ -442,7 +456,9 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
     if (authority === undefined) return { kind: "no-root" };
 
     const verdict = evaluatePolicies(policiesInForce(state, authority), path);
-    if (verdict.kind === "deny") return { kind: "denied", by: verdict.by };
+    if (verdict.kind === "deny") {
+      return { kind: "denied", by: verdict.by, blockers, authority };
+    }
 
     return {
       kind: "open",
@@ -1059,6 +1075,12 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
    * anything"). It ignores policy — a deny is a holder's rule, and the operator
    * outranks it — but it never stomps a live holder: taking a path from a wedged
    * session is force-release, deliberately a separate verb.
+   *
+   * Availability is therefore checked **before policy is consulted at all**. The
+   * order matters: a deny policy over a held path used to short-circuit the
+   * blocker check, and the grant landed on top of the live holder — two live
+   * claims, the first holder silently losing authority, and no release effect for
+   * anyone to see.
    */
   function grant(
     state: ClaimState,
@@ -1086,7 +1108,7 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
         result: { kind: "already-held", claim: evaluation.claim },
       };
     }
-    if (evaluation.kind !== "denied" && evaluation.blockers.length > 0) {
+    if (evaluation.blockers.length > 0) {
       const holders = evaluation.blockers
         .map(
           (claim) =>
@@ -1100,17 +1122,11 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
       );
     }
 
-    // A deny policy is a holder's rule and the operator outranks it: "the human
-    // may grant, revoke, or force-release anything" (§3.4). The grant still hangs
+    // Only now does policy come up, and only to be overridden: a deny is a
+    // holder's rule and the operator outranks it (§3.4). The grant still hangs
     // from the deepest enclosing claim, so the tree and the extent invariant stay
     // intact, and `grantedBy: human` records the override.
-    const authority =
-      evaluation.kind === "denied"
-        ? authorityFor(state, path)
-        : evaluation.authority;
-    if (authority === undefined) {
-      return refuse("no_such_claim", "this workstream has no root claim");
-    }
+    const authority = evaluation.authority;
     const claim = makeClaim(state, {
       path,
       holder: { kind: "session", sessionId: input.to },

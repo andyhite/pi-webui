@@ -323,6 +323,55 @@ describe("grant authority follows the path hierarchy, not lineage", () => {
     expect(after.claim.holder).toEqual(sessionAuthor(B));
   });
 
+  it("refuses to grant over a live holder even when a deny policy is in force", () => {
+    // Adversarial repro: a deny policy used to short-circuit the availability
+    // check, so the operator's override landed on top of a live holder — two live
+    // claims on one path, the first holder silently losing authority, and no
+    // release effect for anyone to see (principle 4).
+    const { manager, state } = setup();
+    const held = granted(manager, state, A, "migrations");
+    const denied = ok(
+      manager.declarePolicy(held.state, {
+        claimId: (rootClaimOf(held.state) as Claim).id,
+        subtree: "migrations",
+        effect: "deny",
+        by: humanAuthor,
+      }),
+    );
+
+    const stomp = manager.grant(denied.state, {
+      path: "migrations",
+      to: B,
+      by: humanAuthor,
+    });
+    expect(stomp.ok).toBe(false);
+    if (stomp.ok) return;
+    expect(stomp.refusal.reason).toBe("already_held");
+    expect(stomp.refusal.message).toContain("force-release");
+
+    // The state is untouched: A still holds it, alone.
+    expect(
+      manager.checkWrite(denied.state, sessionAuthor(A), "migrations/0001.sql")
+        .allowed,
+    ).toBe(true);
+    expect(
+      manager.checkWrite(denied.state, sessionAuthor(B), "migrations/0001.sql")
+        .allowed,
+    ).toBe(false);
+    expect(violatesSingleWriter(denied.state)).toEqual([]);
+
+    // Force-release first, then the operator's override works as documented.
+    const forced = ok(
+      manager.forceRelease(denied.state, {
+        claimId: held.claim.id,
+        by: humanAuthor,
+      }),
+    );
+    const after = granted(manager, forced.state, B, "migrations");
+    expect(after.claim.grantedBy).toEqual(humanAuthor);
+    expect(violatesSingleWriter(after.state)).toEqual([]);
+  });
+
   it("lets the operator carve a sub-path out of a holder, narrowing its extent", () => {
     const { manager, state } = setup();
     const held = granted(manager, state, A, "src");
