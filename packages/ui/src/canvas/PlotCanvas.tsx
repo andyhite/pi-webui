@@ -16,9 +16,8 @@ import type {
   Node,
   NodeProps,
   NodeTypes,
+  OnDelete,
   OnNodeDrag,
-  OnNodesDelete,
-  OnEdgesDelete,
   OnSelectionChangeFunc,
 } from "@xyflow/react";
 import {
@@ -46,7 +45,10 @@ import { solvePush } from "../solver/push.js";
 import type { Placements } from "../placement/store.js";
 import { zoomLevelForScale } from "../zoom/level.js";
 import type { ZoomLevel, ZoomThresholds } from "../zoom/level.js";
-import { remapEdgesForCollapse } from "../containers/collapse.js";
+import {
+  effectiveCollapsedContainers,
+  remapEdgesForCollapse,
+} from "../containers/collapse.js";
 import type { ParentOf } from "../containers/collapse.js";
 import { actionsForSelection } from "../selection/multi-select.js";
 import type { SelectionActionId } from "../selection/multi-select.js";
@@ -58,6 +60,11 @@ import {
 } from "../legality/create-menu.js";
 import type { CreateMenuOption } from "../legality/create-menu.js";
 import { createUndoStack } from "../undo/stack.js";
+import {
+  addTombstones,
+  clearTombstones,
+  withoutTombstoned,
+} from "./tombstones.js";
 
 export interface CanvasNodeInput {
   readonly id: string;
@@ -93,7 +100,14 @@ export interface PlotCanvasProps {
   readonly edges: readonly CanvasEdgeInput[];
   /** Workstream containers (spec §3.3): collapse and expand as one frame. */
   readonly containers?: readonly CanvasContainerInput[];
-  /** Ids of containers currently collapsed; edges into them draw to the frame. */
+  /**
+   * Ids the human manually collapsed; edges into them draw to the frame.
+   * The workstream zoom level (§5) also forces every container to render
+   * collapsed regardless of this set — see `effectiveCollapsedContainerIds`
+   * internally. `onToggleContainer` always flips *this* manual set, so a
+   * toggle made while zoomed out (rendered collapsed either way) is still
+   * the human's real preference once zoomed back in.
+   */
   readonly collapsedContainerIds?: ReadonlySet<string>;
   readonly onToggleContainer?: (containerId: string) => void;
   /** Durable placements, loaded by the host through a PlacementStore. */
@@ -453,6 +467,21 @@ function CanvasInner({
   const { zoom } = useViewport();
   const zoomLevel = zoomLevelForScale(zoom, zoomThresholds);
 
+  // "Zoomed out: one card per workstream" (§5) is a second, independent
+  // force collapsing containers alongside the human's manual toggle (§3.3):
+  // at the workstream zoom level every container collapses to its frame
+  // regardless of what the human chose, and un-collapses back to exactly
+  // what they chose once zoomed back in.
+  const effectiveCollapsedContainerIds = useMemo(
+    () =>
+      effectiveCollapsedContainers(
+        containers.map((container) => container.id),
+        collapsedContainerIds,
+        zoomLevel === "workstream",
+      ),
+    [containers, collapsedContainerIds, zoomLevel],
+  );
+
   const parentOf: ParentOf = useMemo(() => {
     const map = new Map<string, string>();
     for (const node of nodeInputs) {
@@ -469,7 +498,7 @@ function CanvasInner({
       style: { width: CONTAINER_WIDTH, height: CONTAINER_HEIGHT },
       data: {
         label: container.label,
-        collapsed: collapsedContainerIds.has(container.id),
+        collapsed: effectiveCollapsedContainerIds.has(container.id),
         onToggle: () => onToggleContainer?.(container.id),
       },
     }));
@@ -479,7 +508,7 @@ function CanvasInner({
         zoomLevel,
         selectedNodeId,
         placements,
-        collapsedContainerIds,
+        collapsedContainerIds: effectiveCollapsedContainerIds,
         ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
       }),
     );
@@ -490,7 +519,7 @@ function CanvasInner({
     containers,
     nodeInputs,
     placements,
-    collapsedContainerIds,
+    effectiveCollapsedContainerIds,
     onToggleContainer,
     onDropDefinitionOnTicket,
     zoomLevel,
@@ -514,39 +543,56 @@ function CanvasInner({
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const { getNodes } = useReactFlow<CanvasNode>();
 
+  // Tombstones (principle 10, B1 fix): a Backspace/Delete gesture only
+  // mutates this internal xyflow state — the host is never told, so the
+  // deleted id stays in `nodeInputs`/`edgeInputs` forever. Without this,
+  // the additive sync effect below would find that id "missing" on the
+  // very next unrelated render (a zoom change, a click) and resurrect it;
+  // worse, if the delete were still on the undo stack, Cmd/Ctrl+Z would
+  // append it a *second* time, producing a duplicate id. Refs, not state:
+  // tombstones must be current inside the same synchronous handler that
+  // both records the undo op and re-runs the sync effect on the next
+  // render, and they are never rendered themselves.
+  const tombstonedNodeIds = useRef<Set<string>>(new Set());
+  const tombstonedEdgeIds = useRef<Set<string>>(new Set());
+
   // `nodes`/`edges` seed the canvas once; drag positions and undo live only
   // in this internal state afterward. A one-gesture flow (creating a
   // workstream by drop, for example) still needs its result to show up on
   // the running canvas, so new ids in `nodeInputs`/`containers`/`edgeInputs`
   // are appended here — additively only, never touching an id already
-  // present, so an in-progress arrangement is never disturbed.
+  // present, so an in-progress arrangement is never disturbed. Deleted ids
+  // are excluded via the tombstone set above so a deletion is never undone
+  // by this effect re-running for an unrelated reason.
   useEffect(() => {
     setNodes((current) => {
       const present = new Set(current.map((node) => node.id));
-      const newContainers: ContainerNode[] = containers
-        .filter((container) => !present.has(container.id))
-        .map((container) => ({
-          id: container.id,
-          type: "container" as const,
-          position: placements[container.id] ?? container.defaultPosition,
-          style: { width: CONTAINER_WIDTH, height: CONTAINER_HEIGHT },
-          data: {
-            label: container.label,
-            collapsed: collapsedContainerIds.has(container.id),
-            onToggle: () => onToggleContainer?.(container.id),
-          },
-        }));
-      const newBoxNodes: BoxNode[] = nodeInputs
-        .filter((input) => !present.has(input.id))
-        .map((input) =>
-          toBoxNode(input, {
-            zoomLevel,
-            selectedNodeId,
-            placements,
-            collapsedContainerIds,
-            ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
-          }),
-        );
+      const newContainers: ContainerNode[] = withoutTombstoned(
+        containers.filter((container) => !present.has(container.id)),
+        tombstonedNodeIds.current,
+      ).map((container) => ({
+        id: container.id,
+        type: "container" as const,
+        position: placements[container.id] ?? container.defaultPosition,
+        style: { width: CONTAINER_WIDTH, height: CONTAINER_HEIGHT },
+        data: {
+          label: container.label,
+          collapsed: effectiveCollapsedContainerIds.has(container.id),
+          onToggle: () => onToggleContainer?.(container.id),
+        },
+      }));
+      const newBoxNodes: BoxNode[] = withoutTombstoned(
+        nodeInputs.filter((input) => !present.has(input.id)),
+        tombstonedNodeIds.current,
+      ).map((input) =>
+        toBoxNode(input, {
+          zoomLevel,
+          selectedNodeId,
+          placements,
+          collapsedContainerIds: effectiveCollapsedContainerIds,
+          ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
+        }),
+      );
       if (newContainers.length === 0 && newBoxNodes.length === 0)
         return current;
       // Parents must precede children in xyflow's node array.
@@ -556,7 +602,7 @@ function CanvasInner({
     containers,
     nodeInputs,
     placements,
-    collapsedContainerIds,
+    effectiveCollapsedContainerIds,
     onToggleContainer,
     onDropDefinitionOnTicket,
     zoomLevel,
@@ -567,26 +613,29 @@ function CanvasInner({
   useEffect(() => {
     setEdges((current) => {
       const present = new Set(current.map((edge) => edge.id));
-      const additions = edgeInputs
-        .filter((input) => !present.has(input.id))
-        .map((input) => ({
-          id: input.id,
-          source: input.source,
-          target: input.target,
-        }));
+      const additions = withoutTombstoned(
+        edgeInputs.filter((input) => !present.has(input.id)),
+        tombstonedEdgeIds.current,
+      ).map((input) => ({
+        id: input.id,
+        source: input.source,
+        target: input.target,
+      }));
       return additions.length === 0 ? current : [...current, ...additions];
     });
   }, [edgeInputs, setEdges]);
 
-  // Collapsing containers (§3.3): hide inner nodes and remap their zoom-level
-  // data/hidden flag, and edges crossing into a collapsed container draw to
-  // its frame (spec §5) rather than to a hidden node.
+  // Collapsing containers (§3.3, §5): hide inner nodes and remap their
+  // zoom-level data/hidden flag, and edges crossing into a collapsed
+  // container draw to its frame rather than to a hidden node. Driven by
+  // `effectiveCollapsedContainerIds` — the manual toggle OR the workstream
+  // zoom level forcing every container to one card (§5).
   useEffect(() => {
     setNodes((current) =>
       current.map((node) => {
         if (node.type !== "box") {
           if (node.type === "container") {
-            const collapsed = collapsedContainerIds.has(node.id);
+            const collapsed = effectiveCollapsedContainerIds.has(node.id);
             if (node.data.collapsed === collapsed) return node;
             return { ...node, data: { ...node.data, collapsed } };
           }
@@ -594,20 +643,21 @@ function CanvasInner({
         }
         const parent = parentOf.get(node.id);
         const hidden =
-          parent !== undefined && collapsedContainerIds.has(parent);
+          parent !== undefined && effectiveCollapsedContainerIds.has(parent);
         if (node.hidden === hidden && node.data.zoomLevel === zoomLevel)
           return node;
         return { ...node, hidden, data: { ...node.data, zoomLevel } };
       }),
     );
-  }, [collapsedContainerIds, parentOf, zoomLevel, setNodes]);
+  }, [effectiveCollapsedContainerIds, parentOf, zoomLevel, setNodes]);
 
   // Node visibility inside a collapsed container is carried on `hidden`
   // (set in buildNodes/the collapse effect above); edges are remapped to
   // the container's frame here so they never point at a hidden node.
   const visibleEdges = useMemo(
-    () => remapEdgesForCollapse(edges, collapsedContainerIds, parentOf),
-    [edges, collapsedContainerIds, parentOf],
+    () =>
+      remapEdgesForCollapse(edges, effectiveCollapsedContainerIds, parentOf),
+    [edges, effectiveCollapsedContainerIds, parentOf],
   );
 
   // Selection is the route (§5): the address decides which node renders as
@@ -778,36 +828,53 @@ function CanvasInner({
 
   // Undo for destructive canvas operations (§5, principle 10): delete
   // node/edge (a workstream container is deleted the same way; a marquee
-  // delete of many nodes is "clear region"). Each deletion pushes its own
-  // inverse onto a generic undo stack.
+  // delete of many nodes is "clear region"). xyflow fires one combined
+  // `onDelete` per gesture — deleting a wired node includes its connected
+  // edges — so this pushes exactly one undo op per gesture (N3): a single
+  // Cmd/Ctrl+Z restores the node together with its edges, never leaving an
+  // intermediate state where an edge points at a still-missing node.
   const undoStack = useRef(createUndoStack<null>(50));
 
-  const onNodesDelete = useCallback<OnNodesDelete<CanvasNode>>(
-    (deleted) => {
-      undoStack.current.do(null, {
-        label: `delete ${deleted.length} node(s)`,
-        apply: (s) => s,
-        invert: (s) => {
-          setNodes((current) => [...current, ...deleted]);
-          return s;
-        },
-      });
-    },
-    [setNodes],
-  );
+  const onDelete = useCallback<OnDelete<CanvasNode, Edge>>(
+    ({ nodes: deletedNodes, edges: deletedEdges }) => {
+      if (deletedNodes.length === 0 && deletedEdges.length === 0) return;
 
-  const onEdgesDelete = useCallback<OnEdgesDelete>(
-    (deleted) => {
+      const nodeIds = deletedNodes.map((node) => node.id);
+      const edgeIds = deletedEdges.map((edge) => edge.id);
+      // B1: tombstone immediately so the additive sync effects above never
+      // resurrect these ids on the next unrelated render (a zoom change, a
+      // click) while this delete is still on the undo stack.
+      tombstonedNodeIds.current = addTombstones(
+        tombstonedNodeIds.current,
+        nodeIds,
+      );
+      tombstonedEdgeIds.current = addTombstones(
+        tombstonedEdgeIds.current,
+        edgeIds,
+      );
+
       undoStack.current.do(null, {
-        label: `delete ${deleted.length} edge(s)`,
+        label: `delete ${deletedNodes.length} node(s), ${deletedEdges.length} edge(s)`,
         apply: (s) => s,
         invert: (s) => {
-          setEdges((current) => [...current, ...deleted]);
+          // The node/edges are coming back, so the tombstone must lift for
+          // exactly these ids — otherwise a legitimate future re-add of the
+          // same id would be silently blocked forever.
+          tombstonedNodeIds.current = clearTombstones(
+            tombstonedNodeIds.current,
+            nodeIds,
+          );
+          tombstonedEdgeIds.current = clearTombstones(
+            tombstonedEdgeIds.current,
+            edgeIds,
+          );
+          setNodes((current) => [...current, ...deletedNodes]);
+          setEdges((current) => [...current, ...deletedEdges]);
           return s;
         },
       });
     },
-    [setEdges],
+    [setNodes, setEdges],
   );
 
   useEffect(() => {
@@ -815,6 +882,18 @@ function CanvasInner({
       const isUndo =
         (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z";
       if (!isUndo) return;
+
+      // N2: a global listener must not hijack native undo inside a text
+      // field (e.g. the note editor's textarea) — only the canvas's own
+      // undo binds here.
+      const target = event.target;
+      const isTextEditingTarget =
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+      if (isTextEditingTarget) return;
+
       event.preventDefault();
       undoStack.current.undo(null);
     };
@@ -841,8 +920,7 @@ function CanvasInner({
         onNodeClick={(_event, node) => onSelectNode(node.id)}
         onPaneClick={() => onSelectNode(null)}
         onSelectionChange={onSelectionChange}
-        onNodesDelete={onNodesDelete}
-        onEdgesDelete={onEdgesDelete}
+        onDelete={onDelete}
         selectionOnDrag
         multiSelectionKeyCode="Shift"
         fitView
