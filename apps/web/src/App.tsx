@@ -585,6 +585,41 @@ export function App() {
                   `wire as context: session ${sessionId} turn ${turnOrdinal} (${item.kind}) — not yet wired`,
                 )
               }
+              onResume={(sessionId) => {
+                void actions
+                  .resumeSession({
+                    sessionId,
+                    initiationKey: `resume-${crypto.randomUUID()}`,
+                  })
+                  .then((result) => {
+                    if (!result.ok) {
+                      log(
+                        `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                      );
+                      return;
+                    }
+                    log(`resumed ${result.value.sessionId}`);
+                  });
+              }}
+              onFork={(sessionId, turn) => {
+                void actions
+                  .forkSession({
+                    sessionId,
+                    turn,
+                    initiationKey: `fork-${crypto.randomUUID()}`,
+                  })
+                  .then((result) => {
+                    if (!result.ok) {
+                      log(
+                        `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                      );
+                      return;
+                    }
+                    log(
+                      `forked ${sessionId} at turn ${turn} into session ${result.value.sessionId} (workstream ${result.value.workstreamId}, mode ${result.value.mode})`,
+                    );
+                  });
+              }}
             />
           ) : (
             <div>select a session node to see its conversation</div>
