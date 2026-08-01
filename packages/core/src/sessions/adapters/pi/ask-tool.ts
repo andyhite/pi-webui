@@ -18,7 +18,7 @@ import { PI_QUESTION_TITLE_PREFIX } from "./permission-gate.js";
  * auto-resolves with `undefined` when it expires. Using it would be a timed
  * default, which §14 names as a non-goal and principle 2 forbids — "a timer that
  * resumes a session is the system acting with nobody behind it". So the generated
- * source below passes no options object at all, and `ask-tool.test.ts` asserts
+ * source below passes no options object at all, and `adapter.test.ts` asserts
  * the string contains no timer of any kind. A prohibition in a comment is a
  * prohibition someone edits out; this one fails a test.
  *

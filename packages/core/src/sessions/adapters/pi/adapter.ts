@@ -180,17 +180,27 @@ export function createPiAdapter(
     },
 
     /**
-     * Fork natively, and fall back to seeding rather than to a lie (§6.3,
-     * decision 0001).
+     * Fork natively, or refuse — never quietly do something else (§6.3, decision
+     * 0001).
      *
      * `pi --fork <ref>` produces a new native session holding the source's
-     * conversation; `forkAt` then rewinds it to the requested point. When pi
-     * cannot reach that point — the entry is gone, an extension cancelled the
-     * fork, the point is past what pi lists — the honest answer is a *seeded*
-     * session built from PlotRoom's own transcript, which the caller has already
-     * supplied as `config.seedTranscript` (`planFork`). The half-forked session is
-     * closed first: leaving it running would leave a native session nothing is
-     * driving.
+     * conversation; `forkAt` then rewinds it to the requested point.
+     *
+     * This used to fall back to a seeded session when pi could not reach the
+     * point, which sounds generous and is not: the caller decided `native` from
+     * `planFork` and records `runtime.mode` from that decision, so an adapter that
+     * seeded instead handed back a session whose stored mode was false — and a
+     * seeded fork is not bit-identical to a native one, which is the whole reason
+     * the two are distinguished. Reporting the substitution would have been a
+     * second-best fix; not making it is better, because a false mode stops being
+     * *representable* rather than being something a caller must remember to read.
+     *
+     * So the only outcomes here are the fork the caller asked for, or
+     * `PiForkUnavailable`. Seeding is the caller's own branch — `start()` with
+     * `seedTranscript`, which it already calls for `planFork`'s `seeded` verdict —
+     * so whichever route it took is the mode it records. The half-forked native
+     * session is aborted on the way out: leaving it running would leave a pi
+     * process nothing is driving.
      */
     async fork(ref, point: TranscriptPoint, config: RuntimeStartConfig) {
       const handle = await open(
@@ -207,25 +217,8 @@ export function createPiAdapter(
       try {
         await handle.forkAt(point);
       } catch (error) {
-        if (
-          !(error instanceof PiForkUnavailable) ||
-          config.seedTranscript === undefined
-        ) {
-          await handle.stop("abort");
-          throw error;
-        }
         await handle.stop("abort");
-        // A seeded fork, launched as what it is: a fresh pi session whose first
-        // prompt carries the labelled transcript prefix (`composeSeededPrompt`).
-        return open(
-          {
-            mode: "start",
-            launch: config.launch,
-            workspacePath: config.workspacePath,
-            extensionPaths,
-          },
-          composeSeededPrompt(config),
-        );
+        throw error;
       }
 
       await handle.prompt(composeSeededPrompt(config));
@@ -308,9 +301,14 @@ export function resolvePiForkTarget(
 }
 
 /**
- * A native fork pi could not perform. Thrown rather than papered over so the
- * caller can seed a fresh session from PlotRoom's own transcript instead — the
- * emulation decision 0001 describes, taken deliberately and recorded as seeded.
+ * A native fork pi could not perform.
+ *
+ * Thrown rather than papered over, and specifically **not** substituted for: the
+ * caller seeds a fresh session from PlotRoom's own transcript instead
+ * (`start({ seedTranscript })`, the emulation decision 0001 describes) and records
+ * `seeded`, because it is the caller that holds the plan and writes the record.
+ * The adapter doing that silently is what would let `runtime.mode` say `native`
+ * about a session that was seeded.
  */
 export class PiForkUnavailable extends Error {
   readonly turn: number;

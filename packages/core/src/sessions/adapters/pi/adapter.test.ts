@@ -98,7 +98,10 @@ class FakeTransport implements PiRpcTransport {
     };
   }
 
+  closed = false;
+
   async close(): Promise<void> {
+    this.closed = true;
     this.end();
   }
 
@@ -637,7 +640,12 @@ describe("fork from a point maps onto pi's own surface (§6.3)", () => {
     transport.end();
   });
 
-  it("falls back to a seeded session when pi cannot reach the point", async () => {
+  it("refuses rather than seeding a session the caller would record as native", async () => {
+    // The adapter used to substitute a seeded session here. That produced a
+    // handle the caller — which decided `native` from `planFork` and records
+    // `runtime.mode` from that decision — would have stored as a native fork. It
+    // does only what it was asked now, so a false mode is unrepresentable rather
+    // than something the caller has to remember to re-read.
     const transports: FakeTransport[] = [];
     const adapter = createPiAdapter({
       connect: async () => {
@@ -649,25 +657,57 @@ describe("fork from a point maps onto pi's own surface (§6.3)", () => {
       now: () => NOW,
     });
 
-    const handle = await adapter.fork(
-      "pi-session-1",
-      // Past what pi lists: the native route is gone.
-      { turn: 9 },
-      {
-        ...startConfig,
-        prompt: "keep going",
-        seedTranscript: "user: turn one prompt",
-      },
-    );
+    await expect(
+      adapter.fork(
+        "pi-session-1",
+        // Past what pi lists: the native route is gone.
+        { turn: 9 },
+        {
+          ...startConfig,
+          prompt: "keep going",
+          // Supplied, and deliberately not used: seeding is the caller's own
+          // branch (`start({ seedTranscript })`), which is what records `seeded`.
+          seedTranscript: "user: turn one prompt",
+        },
+      ),
+    ).rejects.toThrow(PiForkUnavailable);
 
-    // Two processes: the half-forked one, aborted, and a fresh seeded one.
-    expect(transports).toHaveLength(2);
-    const seeded = transports[1] as FakeTransport;
-    const prompts = seeded.commandsOfType("prompt");
+    // One process, aborted — not a second, quietly seeded one.
+    expect(transports).toHaveLength(1);
+    expect((transports[0] as FakeTransport).commandsOfType("prompt")).toEqual(
+      [],
+    );
+  });
+
+  it("leaves no pi process running behind a refused fork", async () => {
+    const transport = new FakeTransport();
+    transport.responses = { get_fork_messages: { messages: [] } };
+
+    await expect(
+      adapterWith(transport).fork("pi-session-1", { turn: 1 }, startConfig),
+    ).rejects.toThrow(PiForkUnavailable);
+
+    // The half-forked native session is closed on the way out: a session nothing
+    // is driving is a leak the operator cannot see.
+    expect(transport.closed).toBe(true);
+  });
+
+  it("seeds through start(), which is the caller's own branch", async () => {
+    // The seeded route the caller takes after catching `PiForkUnavailable`. It is
+    // an ordinary start with the labelled prefix, and it sends no fork command —
+    // so whichever branch the caller took is the mode it records.
+    const transport = new FakeTransport();
+    const handle = await adapterWith(transport).start({
+      ...startConfig,
+      prompt: "keep going",
+      seedTranscript: "user: turn one prompt",
+    });
+
+    const prompts = transport.commandsOfType("prompt");
     expect(prompts).toHaveLength(1);
     expect(String(prompts[0]?.message)).toContain("# Inherited transcript");
     expect(String(prompts[0]?.message)).toContain("keep going");
-    expect(seeded.commandsOfType("fork")).toEqual([]);
+    expect(transport.commandsOfType("fork")).toEqual([]);
 
     await handle.stop("abort");
   });
