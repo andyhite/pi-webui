@@ -172,11 +172,20 @@ lapsed leases **before every decision**, publishes `claim` / `claim_wait` /
 request's actor rather than by the tool catalog's flag. Every runtime write passes
 `decideToolPermission` before it runs; a driver with no gate wired **denies**.
 
-**Spend attribution** lives in `spend_attributions` (migration 12): one row per
-(charged session, spender), replaced rather than accumulated, because the accounting
-total is folded from the observation log and the same spend observed twice must be
-charged once. `own` rows only for a workstream or fleet total, or a delegated dollar
-would be counted once per ancestor. Attribution happens **whenever the accounting
+**Spend attribution** lives in `spend_attributions` (migrations 12 and 22): one row per
+(charged session, spender, **cause**), replaced rather than accumulated _within_ a
+cause, because the accounting total is folded from the observation log and the same
+spend observed twice must be charged once. The cause is in the key because two writers
+share the table and mean different things by a number: an `accounting` row restates a
+spender's **cumulative** total, a `broadcast:<id>` row is one broadcast's **increment**
+(§6.5). Keyed on the pair alone, a second broadcast from one sender silently replaced
+the first, and either writer could overwrite the other with a number measuring
+something else. An induced charge never bills whoever the fold already bills — the
+recipient and its own ancestors — so every induced row is `descendant` and a
+recipient's turn reaches a workstream or fleet total once. `own` rows only for a
+workstream or fleet total, or a delegated dollar would be counted once per ancestor —
+but a **run or batch cap counts rows charged to** its sessions, both bases, because a
+cap that counted only `own` rows is one any session walks around by delegating. Attribution happens **whenever the accounting
 fold moves**, not at session end, because a fleet view that admitted a running
 session's cost only once it stopped would be wrong for exactly as long as work was in
 flight. Nothing ever zeroes these rows: "today's total" is a **window** over `at`
@@ -195,7 +204,10 @@ number that also means removed. Which caps bind a session, and which is tightest
 the session-facing read, and the mid-session enforcement all call it, so they cannot
 disagree (principle 8). Binding is **transitive**: a session is bound by every
 ancestor's run and batch caps as well as its own, because an ancestor's cap counts
-that ancestor's attributed total, which already includes what its chain delegated.
+that ancestor's attributed total, which already includes what its chain delegated. A
+batch's cap counts every entry's attributed total for the same reason, and summing
+them double-counts nothing because entries of one batch are siblings, never each
+other's ancestors.
 `budget_notices` is rows for the same reason the broadcast rate window is: a restart
 between the near-cap warning and the cap must not warn the session twice, and "have I
 already told it?" cannot be answered from memory. The warning and the stop notice

@@ -1722,15 +1722,40 @@ turns so enforcement lands where a runtime accepts input. That recipe is documen
 `apps/server/src/runtime/scripted.ts`. `out-of-budget` remains **not expressible** in a
 script: PlotRoom initiates budget stops.
 
+**Two behaviours are disclosed rather than fixed**, because both follow from
+enforcing at the only moment spending is observable and neither is worth a timer
+(principle 2). **Siblings stop late:** a shared cap is checked when a session's own
+accounting moves, so when one child exhausts a cap its siblings keep running until
+their next turn reports usage — they are stopped then, out-of-budget like the first,
+but the fleet can overshoot a shared cap by up to one turn per bound session in
+flight. Sweeping every bound session the moment one trips would mean a scheduler
+watching budgets, which is the thing §8 is careful not to build. **The chain is told
+once per cap, not once per child:** the stop notice is a `budget_notices` row keyed
+(session, binding, `stopped`), so when a second child trips the _same_ binding its
+ancestors are not told again — deliberate, because the second notice would say the
+same sentence about the same exhausted cap, and the operator is the one who has to
+raise it either way. The first child's notice is the one that reaches the parent.
+
 Deferred, and honest about it: the **two §11 panels are Track B's** — this landed the
 data endpoints they read (`GET /api/fleet`, `GET /api/sessions/:id/timeline`) and
 nothing that renders. A queue entry's `state` still records an out-of-budget run as
 `failed` with `detail: "out-of-budget"`; the distinction is kept in the batch's pause
 reason, the entry's detail, the session record, and the events (all asserted), and
 widening `run_queue.state`'s CHECK is a migration deliberately not taken here. The
-UTC day boundary is stated rather than configurable (Epic 8.3's settings). Broadcast-
-induced spend is charged by Epic 5.2's existing attribution path, which these budgets
-now enforce against; nothing about that path changed._
+UTC day boundary is stated rather than configurable (Epic 8.3's settings)._
+
+_Also landed here, because enforcing against the ledger is what exposed it: **a spend
+row now names its cause** (migration 22). Two writers share `spend_attributions` and
+mean different things by a number — the accounting fold restates a spender's
+**cumulative** total, while §6.5's induced charge is one broadcast's **increment** —
+and keyed on (charged session, spender) alone the second of anything silently
+replaced the first: two broadcasts from one sender charged the sender once, and
+either writer could overwrite the other's row with a number measuring something
+else. The key is now (charged session, spender, cause), so a restated total still
+replaces its own row and two broadcasts are two charges. The induced charge also
+stopped billing sessions the fold already bills — the recipient and its own
+ancestors — so every induced row is `descendant` and a recipient's turn reaches a
+workstream or fleet total exactly once._
 
 _The Fleet panel (`packages/ui/src/fleet/`) aggregates real data from what
 exists on main today — `GET /api/sessions` (running vs total) and each

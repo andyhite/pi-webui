@@ -144,8 +144,13 @@ export function driveSession(
   return (async () => {
     const initial = sessions.get(sessionId);
     let state = initialObservationState(initial.session.startedAt * 1000);
-    // What the fold had already counted when this pump started, so a resumed pump
-    // does not re-announce spend that was already attributed.
+    // Zero, and only ever this pump's own accrual: `initialObservationState`
+    // starts a fresh fold, so a resumed session's new pump counts from nothing
+    // rather than from what the session has already spent. That is fine because
+    // this is a **trigger**, not a total — it answers "has this stream reported
+    // new cost?", and the budget path reads the real figure by folding the whole
+    // log. Comparing against a stored total here would miss the first turn of a
+    // resumed session, which is exactly when a cap is most likely already tight.
     let spent = state.accounting.costUsd;
 
     try {
