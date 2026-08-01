@@ -6,7 +6,7 @@ import type {
   RunId,
   WorkstreamId,
 } from "./ids.js";
-import type { ObjectKind } from "./objects.js";
+import type { ObjectKind, ObjectScope } from "./objects.js";
 
 /**
  * Spec §3.5: a command is a named, reusable set of marching orders — the
@@ -420,6 +420,7 @@ export function checkPublish(output: CommandOutput): PublishCheck {
  */
 export type OutputCrossingRefusal =
   | { readonly reason: "unpublished_output"; readonly message: string }
+  | { readonly reason: "local_bound_output"; readonly message: string }
   | { readonly reason: "broken_output"; readonly message: string };
 
 export type OutputCrossingCheck =
@@ -429,8 +430,14 @@ export type OutputCrossingCheck =
 export interface OutputCrossingFacts {
   readonly workstreamId: WorkstreamId;
   readonly published: boolean;
-  readonly bound: boolean;
   readonly broken: boolean;
+  /**
+   * The produced object's scope once the output has bound; null while it is
+   * still a placeholder. Bound-ness is carried *as* the scope rather than
+   * beside it as a flag, because post-bind the only question worth asking is
+   * the object's — and two fields that must agree is a rule waiting to break.
+   */
+  readonly boundScope: ObjectScope | null;
 }
 
 export function checkOutputCrossing(
@@ -449,7 +456,28 @@ export function checkOutputCrossing(
   }
 
   const crosses = targetWorkstreamId !== output.workstreamId;
-  if (!crosses || output.published || output.bound) return { legal: true };
+  if (!crosses) return { legal: true };
+
+  // Post-bind the command dependency has evaporated and what crosses is the
+  // produced object (§3.5), so the object's own scope decides — exactly as it
+  // would if that object were wired from its own content node (§3.3).
+  // Publishing before the run is what promotes it; an output that bound
+  // without being published produced a local object, and a local object does
+  // not cross just because a placeholder is standing in front of it.
+  if (output.boundScope !== null) {
+    return output.boundScope === "world"
+      ? { legal: true }
+      : {
+          legal: false,
+          refusal: {
+            reason: "local_bound_output",
+            message:
+              "that output produced a local object; promote it to world scope first",
+          },
+        };
+  }
+
+  if (output.published) return { legal: true };
 
   return {
     legal: false,

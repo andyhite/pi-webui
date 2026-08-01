@@ -202,8 +202,8 @@ describe("cross-workstream wires require publishing (§3.5)", () => {
   const facts = {
     workstreamId: home,
     published: false,
-    bound: false,
     broken: false,
+    boundScope: null,
   };
 
   it("allows an unpublished placeholder inside its own workstream", () => {
@@ -222,6 +222,48 @@ describe("cross-workstream wires require publishing (§3.5)", () => {
     expect(checkOutputCrossing({ ...facts, published: true }, other)).toEqual({
       legal: true,
     });
+  });
+
+  it("allows a bound output whose object was promoted to world scope", () => {
+    expect(
+      checkOutputCrossing(
+        { ...facts, published: true, boundScope: "world" },
+        other,
+      ),
+    ).toEqual({ legal: true });
+  });
+
+  it("refuses a bound output that produced a local object", () => {
+    // The gap this closes: binding without publishing leaves the object local,
+    // and being bound is not licence to carry it out of its workstream (§3.3).
+    const check = checkOutputCrossing(
+      { ...facts, published: false, boundScope: "local" },
+      other,
+    );
+
+    expect(check.legal).toBe(false);
+    if (check.legal) return;
+    expect(check.refusal.reason).toBe("local_bound_output");
+    expect(check.refusal.message).toContain("promote");
+  });
+
+  it("refuses a local bound object even when the placeholder was published", () => {
+    // Publishing is a promise about a placeholder; the object's own scope is
+    // what decides once one exists, so the two cannot disagree silently.
+    const check = checkOutputCrossing(
+      { ...facts, published: true, boundScope: "local" },
+      other,
+    );
+
+    expect(check.legal).toBe(false);
+    if (check.legal) return;
+    expect(check.refusal.reason).toBe("local_bound_output");
+  });
+
+  it("allows a local bound object to stay inside its own workstream", () => {
+    expect(
+      checkOutputCrossing({ ...facts, boundScope: "local" }, home),
+    ).toEqual({ legal: true });
   });
 
   it("refuses a broken placeholder outright", () => {

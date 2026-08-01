@@ -494,6 +494,10 @@ export class GraphStore {
    * The crossing facts for a content node standing for a command's output
    * placeholder, when it is one. Ordinary content has no row here and is
    * governed by the object scope rule instead.
+   *
+   * Once bound, the produced object's own scope is what the rule reads, so the
+   * placeholder cannot become an alias that carries a local object somewhere
+   * the object itself could not go (§3.3, §3.5).
    */
   private outputCrossingOf(refId: string): OutputCrossingFacts | null {
     const row = this.state.db
@@ -502,9 +506,11 @@ export class GraphStore {
         publishedAt: commandOutputs.publishedAt,
         boundObjectId: commandOutputs.boundObjectId,
         brokenAt: commandOutputs.brokenAt,
+        boundScope: objects.scope,
       })
       .from(commandOutputs)
       .innerJoin(commands, eq(commands.id, commandOutputs.commandId))
+      .leftJoin(objects, eq(objects.id, commandOutputs.boundObjectId))
       .where(eq(commandOutputs.id, refId))
       .get();
 
@@ -513,8 +519,8 @@ export class GraphStore {
     return {
       workstreamId: row.workstreamId as WorkstreamId,
       published: row.publishedAt !== null,
-      bound: row.boundObjectId !== null,
       broken: row.brokenAt !== null,
+      boundScope: row.boundObjectId === null ? null : (row.boundScope ?? null),
     };
   }
 

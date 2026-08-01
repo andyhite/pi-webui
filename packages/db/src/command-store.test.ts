@@ -402,6 +402,101 @@ describe("publish and promote are two verbs (§3.5, §3.2)", () => {
     ).toBe("context");
   });
 
+  it("refuses a bound-but-unpublished placeholder carrying a local object out", () => {
+    // Binding is not a licence to cross: without publish the produced object
+    // is still local, and a placeholder must not become an alias that takes it
+    // somewhere the object itself could not go (§3.3, §3.5).
+    const other = workstreams.create({ author: humanAuthor }).id;
+    const upstream = instantiate();
+    const downstream = instantiate(other);
+    const produced = objects.write({
+      kind: "pull_request",
+      title: "PR",
+      renderings: makeRenderings(),
+      workstreamId,
+    });
+    store.bindOutput(upstream.outputs[0]!.id, {
+      runId: recordRun(upstream.command.id),
+      objectId: produced.objectId,
+    });
+
+    expect(objects.get(produced.objectId)?.scope).toBe("local");
+    expect(() =>
+      graph.addContextEdge({
+        from: graph.nodeFor("content", upstream.outputs[0]!.id).id,
+        to: downstream.node.id,
+        author: humanAuthor,
+      }),
+    ).toThrow(/promote it to world scope first/);
+  });
+
+  it("refuses the placeholder wire exactly as it refuses the object's own", () => {
+    // Principle 8: two paths to the same wire must refuse identically. Wiring
+    // the local object directly is refused by checkScope; wiring it through
+    // its placeholder must not be a way around that.
+    const other = workstreams.create({ author: humanAuthor }).id;
+    const upstream = instantiate();
+    const downstream = instantiate(other);
+    const produced = objects.write({
+      kind: "pull_request",
+      title: "PR",
+      renderings: makeRenderings(),
+      workstreamId,
+    });
+    store.bindOutput(upstream.outputs[0]!.id, {
+      runId: recordRun(upstream.command.id),
+      objectId: produced.objectId,
+    });
+    const objectNode = graph.place({
+      role: "content",
+      refId: produced.objectId,
+      workstreamId,
+    });
+
+    const direct = () =>
+      graph.addContextEdge({
+        from: objectNode.id,
+        to: downstream.node.id,
+        author: humanAuthor,
+      });
+    const viaPlaceholder = () =>
+      graph.addContextEdge({
+        from: graph.nodeFor("content", upstream.outputs[0]!.id).id,
+        to: downstream.node.id,
+        author: humanAuthor,
+      });
+
+    expect(direct).toThrow(ConnectionRefused);
+    expect(viaPlaceholder).toThrow(ConnectionRefused);
+  });
+
+  it("lets a bound output cross once its object is promoted", () => {
+    const other = workstreams.create({ author: humanAuthor }).id;
+    const upstream = instantiate();
+    const downstream = instantiate(other);
+    // Publishing before the run is what promotes on bind (§3.5).
+    store.publish(upstream.outputs[0]!.id);
+    const produced = objects.write({
+      kind: "pull_request",
+      title: "PR",
+      renderings: makeRenderings(),
+      workstreamId,
+    });
+    store.bindOutput(upstream.outputs[0]!.id, {
+      runId: recordRun(upstream.command.id),
+      objectId: produced.objectId,
+    });
+
+    expect(objects.get(produced.objectId)?.scope).toBe("world");
+    expect(
+      graph.addContextEdge({
+        from: graph.nodeFor("content", upstream.outputs[0]!.id).id,
+        to: downstream.node.id,
+        author: humanAuthor,
+      }).kind,
+    ).toBe("context");
+  });
+
   it("refuses publish once the output has bound, pointing at promote", () => {
     const instance = instantiate();
     const produced = objects.write({
