@@ -50,6 +50,7 @@ export * from "./sessions/canvas-node.js";
 export * from "./sessions/ConversationPanel.js";
 export * from "./diff/types.js";
 export * from "./diff/tree.js";
+export * from "./diff/data-source.js";
 export * from "./diff/DiffPanel.js";
 export * from "./bubbles/model.js";
 export * from "./bubbles/placement.js";
