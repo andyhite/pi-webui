@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { isCompactable, DEFAULT_COMPACTION_POLICY } from "./versions.js";
+import { isRunCompactable, DEFAULT_RUN_RETENTION_POLICY } from "./runs.js";
 import {
+  makeCommandDefinition,
   makeObject,
   makeRun,
   makeVersion,
@@ -13,6 +15,16 @@ describe("factories (Epic 1.0)", () => {
     expect(makeObject().id).not.toBe(makeObject().id);
     expect(makeVersion().id).not.toBe(makeVersion().id);
     expect(makeRun().id).not.toBe(makeRun().id);
+    expect(makeCommandDefinition().id).not.toBe(makeCommandDefinition().id);
+  });
+
+  it("builds a run carrying full content and configuration (§15 invariant 1)", () => {
+    const run = makeRun();
+
+    expect(run.assembledBlobId).toBeTruthy();
+    expect(run.assembledHash).toBeTruthy();
+    expect(run.configuration.instruction).toBeTruthy();
+    expect(run.configuration.model.model).toBeTruthy();
   });
 
   it("applies overrides", () => {
@@ -32,6 +44,18 @@ describe("factories (Epic 1.0)", () => {
         now: clock.now(),
         policy: DEFAULT_COMPACTION_POLICY,
       }),
+    ).toBe(true);
+
+    expect(
+      isRunCompactable(
+        {
+          pinned: makeRun().pinned,
+          startedAt: TEST_EPOCH,
+          recencyRank: DEFAULT_RUN_RETENTION_POLICY.keepPerDefinition + 1,
+          isLatestForCommand: false,
+        },
+        { now: clock.now(), policy: DEFAULT_RUN_RETENTION_POLICY },
+      ),
     ).toBe(true);
   });
 });

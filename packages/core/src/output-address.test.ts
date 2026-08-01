@@ -13,6 +13,17 @@ describe("output addressing (spec §15 invariant 4)", () => {
     );
   });
 
+  it("addresses output@n, the general case latest is a case of", () => {
+    expect(
+      formatOutputAddress({
+        commandId,
+        name: "plan",
+        at: "ordinal",
+        runOrdinal: 3,
+      }),
+    ).toBe("cmd_1/plan@3");
+  });
+
   it("addresses a specific run", () => {
     expect(
       formatOutputAddress({ commandId, name: "plan", at: "run", runId }),

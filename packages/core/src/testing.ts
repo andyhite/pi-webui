@@ -8,17 +8,23 @@
  */
 import type { Clock } from "./clock.js";
 import {
+  newCommandDefinitionId,
   newCommandId,
   newObjectId,
+  newOutputId,
   newRunId,
   newVersionId,
   newWorkstreamId,
-  type CommandId,
-  type RunId,
-  type VersionId,
 } from "./ids.js";
+import {
+  DEFAULT_CONTENT_BUDGET,
+  type CommandDefinition,
+  type CommandNode,
+  type CommandOutput,
+} from "./commands.js";
 import type { PlotObject } from "./objects.js";
 import type { Renderings } from "./renderings.js";
+import { ZERO_COST, type Run, type RunConfiguration } from "./runs.js";
 import type { ObjectVersion } from "./versions.js";
 import type { Workstream } from "./workstreams.js";
 
@@ -102,30 +108,101 @@ export function makeWorkstream(
   };
 }
 
-/**
- * A minimal run stand-in until Epic 1.4 lands the real run model. It carries
- * only what retention and addressing fixtures need — which versions the run
- * consumed (§15 invariant 3) and an ordinal for `output@n` (§15 invariant 4).
- * This is deliberately not a schema; the domain Run replaces it.
- */
-export interface RunFixture {
-  readonly id: RunId;
-  readonly commandId: CommandId;
-  /** 1-based per command: the `n` in `output@n`. */
-  readonly ordinal: number;
-  readonly consumedVersionIds: readonly VersionId[];
-  readonly pinned: boolean;
-  readonly startedAt: number;
+export function makeCommandDefinition(
+  overrides: Partial<CommandDefinition> = {},
+): CommandDefinition {
+  return {
+    id: newCommandDefinitionId(),
+    name: "Implement the ticket",
+    instruction: "Read the ticket, implement it, and open a pull request.",
+    model: { model: "fixture-model", effort: "medium" },
+    permissions: { allowed: ["read", "write"], denied: [] },
+    askPoints: [],
+    lifecycle: "producing",
+    outcome: { name: "pull_request", kind: "pull_request", conditions: [] },
+    parameters: [],
+    budget: DEFAULT_CONTENT_BUDGET,
+    source: "user",
+    folder: null,
+    duplicatedFrom: null,
+    createdAt: TEST_EPOCH,
+    updatedAt: TEST_EPOCH,
+    ...overrides,
+  };
 }
 
-export function makeRun(overrides: Partial<RunFixture> = {}): RunFixture {
+export function makeCommandNode(
+  overrides: Partial<CommandNode> = {},
+): CommandNode {
+  return {
+    id: newCommandId(),
+    definitionId: newCommandDefinitionId(),
+    workstreamId: newWorkstreamId(),
+    createdAt: TEST_EPOCH,
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
+export function makeCommandOutput(
+  overrides: Partial<CommandOutput> = {},
+): CommandOutput {
+  return {
+    id: newOutputId(),
+    commandId: newCommandId(),
+    name: "pull_request",
+    kind: "pull_request",
+    publishedAt: null,
+    boundObjectId: null,
+    boundRunId: null,
+    boundAt: null,
+    brokenAt: null,
+    ...overrides,
+  };
+}
+
+export function makeRunConfiguration(
+  overrides: Partial<RunConfiguration> = {},
+): RunConfiguration {
+  const definition = makeCommandDefinition();
+
+  return {
+    definitionId: definition.id,
+    definitionName: definition.name,
+    instruction: definition.instruction,
+    model: definition.model,
+    permissions: definition.permissions,
+    askPoints: ["irreversible_write"],
+    lifecycle: definition.lifecycle,
+    outcome: definition.outcome,
+    parameters: {},
+    budget: definition.budget,
+    ...overrides,
+  };
+}
+
+/**
+ * A run carrying both halves of §15 invariant 1 — the full assembled content
+ * and the configuration it ran under — plus the ordinal that is the `n` in
+ * `output@n` (§15 invariant 4). There is no way to build a run fixture without
+ * them, which is the invariant restated as a type.
+ */
+export function makeRun(overrides: Partial<Run> = {}): Run {
   return {
     id: newRunId(),
     commandId: newCommandId(),
+    definitionId: newCommandDefinitionId(),
     ordinal: 1,
-    consumedVersionIds: [],
+    status: "completed",
+    assembledBlobId: "blob_fixture",
+    assembledHash: "fixture-hash",
+    assembledBytes: 32,
+    configuration: makeRunConfiguration(),
+    inputs: [],
+    cost: ZERO_COST,
     pinned: false,
     startedAt: TEST_EPOCH,
+    endedAt: TEST_EPOCH + 60,
     ...overrides,
   };
 }
