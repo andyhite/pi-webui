@@ -13,7 +13,7 @@
  * unrelated failure was "the answer is no" would hide a real bug.
  */
 
-import type { NodeRole } from "@plotroom/core";
+import type { ContinueVsFresh, NodeRole } from "@plotroom/core";
 
 import { HttpError, type HttpClient } from "../transport/http.js";
 
@@ -88,6 +88,40 @@ export interface AnswerQuestionInput {
   readonly questionId: string;
   readonly optionId: string;
   readonly text?: string;
+}
+
+/**
+ * Handoff (§6.3): a brief the source session drafts, a human reviews
+ * (editing or not), and only then does sending seed the new session
+ * (`apps/server/src/routes/continuation.ts`'s trio, already live). Three
+ * shapes rather than one, matching the server's own: writing never sends,
+ * reviewing is the operator's alone, and sending is a separate gesture from
+ * either.
+ */
+export interface HandoffBrief {
+  readonly id: string;
+  readonly sourceSessionId: string;
+  readonly text: string;
+  readonly origin: "session-written" | "derived";
+  readonly state: "drafted" | "reviewed";
+}
+
+export interface WriteHandoffBriefInput {
+  readonly sessionId: string;
+  /** Omit to derive one from the log, labelled as derived (§6.3). */
+  readonly text?: string;
+}
+
+export interface ReviewHandoffBriefInput {
+  readonly briefId: string;
+  /** The words as the operator wants them sent; omit to send the draft unchanged. */
+  readonly text?: string;
+}
+
+export interface SendHandoffInput {
+  readonly briefId: string;
+  readonly workstreamId: string;
+  readonly initiationKey: string;
 }
 
 export type StopScopeInput =
@@ -247,6 +281,40 @@ export interface GraphActions {
       readonly mode: string;
     }>
   >;
+  /**
+   * Write the brief a handoff opens with (§6.3). Writing one sends
+   * nothing — the operator reviews it first, as a separate gesture.
+   */
+  writeHandoffBrief(
+    input: WriteHandoffBriefInput,
+  ): Promise<ActionResult<{ readonly brief: HandoffBrief }>>;
+  /** The briefs a session has written, so the operator can pick one up later. */
+  listHandoffBriefs(
+    sessionId: string,
+  ): Promise<{ readonly briefs: readonly HandoffBrief[] }>;
+  /**
+   * The human's review — the only path from a draft to something sendable
+   * (§6.3). Refuses a session author (the operator alone reviews).
+   */
+  reviewHandoffBrief(
+    input: ReviewHandoffBriefInput,
+  ): Promise<ActionResult<{ readonly brief: HandoffBrief }>>;
+  /**
+   * Send a reviewed brief (§6.3): seeds a new session, wired in by the
+   * reviewer (§15-2, principle 5).
+   */
+  sendHandoff(input: SendHandoffInput): Promise<
+    ActionResult<{
+      readonly sessionId: string;
+      readonly briefNodeId: string;
+    }>
+  >;
+  /**
+   * §4.3's decision, side by side (Batch 3 carry-over): what continuing
+   * sends against what a fresh run sends, each mode's own gates. A read, so
+   * looking is free — not wrapped in `ActionResult`, matching `previewStop`.
+   */
+  getContinuation(commandId: string): Promise<ContinueVsFresh>;
 }
 
 export function createApiActions(http: HttpClient): GraphActions {
@@ -451,6 +519,50 @@ export function createApiActions(http: HttpClient): GraphActions {
           mode: response.mode,
         };
       }),
+
+    writeHandoffBrief: (input) =>
+      asAction(async () => {
+        const response = await http.post<{ brief: HandoffBrief }>(
+          `${apiPath("/api/sessions", input.sessionId)}/handoff-brief`,
+          input.text === undefined ? {} : { text: input.text },
+        );
+        return { brief: response.brief };
+      }),
+
+    listHandoffBriefs: (sessionId) =>
+      http.get<{ briefs: readonly HandoffBrief[] }>(
+        `${apiPath("/api/sessions", sessionId)}/handoff-briefs`,
+      ),
+
+    reviewHandoffBrief: (input) =>
+      asAction(async () => {
+        const response = await http.post<{ brief: HandoffBrief }>(
+          `${apiPath("/api/handoff-briefs", input.briefId)}/review`,
+          input.text === undefined ? {} : { text: input.text },
+        );
+        return { brief: response.brief };
+      }),
+
+    sendHandoff: (input) =>
+      asAction(async () => {
+        const response = await http.post<{
+          session: { readonly id: string };
+          briefNodeId: string;
+        }>("/api/handoffs", {
+          briefId: input.briefId,
+          workstreamId: input.workstreamId,
+          initiationKey: input.initiationKey,
+        });
+        return {
+          sessionId: response.session.id,
+          briefNodeId: response.briefNodeId,
+        };
+      }),
+
+    getContinuation: (commandId) =>
+      http.get<ContinueVsFresh>(
+        `${apiPath("/api/commands", commandId)}/continuation`,
+      ),
   };
 }
 

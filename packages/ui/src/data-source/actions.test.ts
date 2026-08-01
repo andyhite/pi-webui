@@ -393,4 +393,173 @@ describe("createApiActions", () => {
       value: { sessionId: "sess2", workstreamId: "ws1", mode: "native" },
     });
   });
+
+  it("writeHandoffBrief posts to the session's handoff-brief endpoint, text omitted when not given", async () => {
+    const post = vi.fn(async () => ({
+      brief: {
+        id: "brief1",
+        sourceSessionId: "sess1",
+        text: "where I got to",
+        origin: "derived",
+        state: "drafted",
+      },
+    }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.writeHandoffBrief({ sessionId: "sess1" });
+
+    expect(post).toHaveBeenCalledWith("/api/sessions/sess1/handoff-brief", {});
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        brief: {
+          id: "brief1",
+          sourceSessionId: "sess1",
+          text: "where I got to",
+          origin: "derived",
+          state: "drafted",
+        },
+      },
+    });
+  });
+
+  it("writeHandoffBrief includes text when the source session drafted its own", async () => {
+    const post = vi.fn(async () => ({
+      brief: {
+        id: "brief1",
+        sourceSessionId: "sess1",
+        text: "custom draft",
+        origin: "session-written",
+        state: "drafted",
+      },
+    }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    await actions.writeHandoffBrief({
+      sessionId: "sess1",
+      text: "custom draft",
+    });
+
+    expect(post).toHaveBeenCalledWith("/api/sessions/sess1/handoff-brief", {
+      text: "custom draft",
+    });
+  });
+
+  it("listHandoffBriefs reads the session's handoff-briefs endpoint, unwrapped (never a refusal)", async () => {
+    const get = vi.fn(async () => ({
+      briefs: [
+        {
+          id: "brief1",
+          sourceSessionId: "sess1",
+          text: "where I got to",
+          origin: "derived",
+          state: "drafted",
+        },
+      ],
+    }));
+    const actions = createApiActions(fakeHttp({ get }));
+
+    const result = await actions.listHandoffBriefs("sess1");
+
+    expect(get).toHaveBeenCalledWith("/api/sessions/sess1/handoff-briefs");
+    expect(result.briefs).toHaveLength(1);
+  });
+
+  it("reviewHandoffBrief posts to the brief's review endpoint", async () => {
+    const post = vi.fn(async () => ({
+      brief: {
+        id: "brief1",
+        sourceSessionId: "sess1",
+        text: "where I got to",
+        origin: "derived",
+        state: "reviewed",
+      },
+    }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.reviewHandoffBrief({ briefId: "brief1" });
+
+    expect(post).toHaveBeenCalledWith("/api/handoff-briefs/brief1/review", {});
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        brief: {
+          id: "brief1",
+          sourceSessionId: "sess1",
+          text: "where I got to",
+          origin: "derived",
+          state: "reviewed",
+        },
+      },
+    });
+  });
+
+  it("sendHandoff posts to /api/handoffs with the brief, workstream, and initiation key", async () => {
+    const post = vi.fn(async () => ({
+      session: { id: "sess2" },
+      briefNodeId: "node1",
+    }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.sendHandoff({
+      briefId: "brief1",
+      workstreamId: "ws1",
+      initiationKey: "key1",
+    });
+
+    expect(post).toHaveBeenCalledWith("/api/handoffs", {
+      briefId: "brief1",
+      workstreamId: "ws1",
+      initiationKey: "key1",
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: { sessionId: "sess2", briefNodeId: "node1" },
+    });
+  });
+
+  it("sendHandoff surfaces a reused-initiation-key refusal rather than throwing", async () => {
+    const post = vi.fn(async () => {
+      throw new HttpError(409, "/api/handoffs", {
+        error: {
+          code: "refused",
+          message: "this initiation key was already used",
+          details: { reason: "initiation_key_reused" },
+        },
+      });
+    });
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.sendHandoff({
+      briefId: "brief1",
+      workstreamId: "ws1",
+      initiationKey: "key1",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      refusal: {
+        reason: "initiation_key_reused",
+        message: "this initiation key was already used",
+      },
+    });
+  });
+
+  it("getContinuation reads the command's continuation endpoint, unwrapped (a preview never refuses)", async () => {
+    const get = vi.fn(async () => ({
+      continue: { mode: "continue", available: false, blocks: [] },
+      fresh: { mode: "fresh", available: true, blocks: [] },
+      comparison: { cheaper: null, basis: "input-tokens", description: "" },
+      defaultMode: "fresh",
+      recommended: "fresh",
+      forcedFresh: true,
+      windowFit: {},
+    }));
+    const actions = createApiActions(fakeHttp({ get }));
+
+    const result = await actions.getContinuation("cmd1");
+
+    expect(get).toHaveBeenCalledWith("/api/commands/cmd1/continuation");
+    expect(result.recommended).toBe("fresh");
+  });
 });
