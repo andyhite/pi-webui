@@ -527,13 +527,15 @@ describe("undo and restore for destructive operations (principle 10)", () => {
     ).toHaveLength(1);
   });
 
-  it("restores a workstream an agent deleted", async () => {
+  it("restores a deleted workstream", async () => {
     const { workstream } = await board();
 
-    await ok(`/workstreams/${workstream}`, {
-      method: "DELETE",
-      actor: "session:sess_agent",
-    });
+    // The operator's own gesture. An **agent's** delete no longer reaches the
+    // store at all: §6.6 routes a session's destruction through an approval
+    // (`approvals/guard.ts`), which `approvals.integration.test.ts` covers end to
+    // end — including that the soft delete, once approved, is still recoverable
+    // and still attributed to the session that asked (principle 10).
+    await ok(`/workstreams/${workstream}`, { method: "DELETE" });
     expect(list(await ok("/workstreams"), "workstreams")).toHaveLength(0);
     expect(at(list(await ok("/restorable"), "workstreams")[0], "id")).toBe(
       workstream,

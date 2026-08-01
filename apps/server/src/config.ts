@@ -51,6 +51,12 @@ export interface ServerConfig {
    * never a decision about whether it runs.
    */
   readonly concurrencyLimit: number;
+  /**
+   * Seconds between re-derivations of the attention queue (§7). Zero disables
+   * the schedule; the derivation still runs on every observed change and on
+   * every read, so disabling it costs punctuality rather than the queue.
+   */
+  readonly attentionTickSeconds: number;
 }
 
 export interface RuntimeConfig {
@@ -146,6 +152,7 @@ export interface ServerConfigOverrides {
   readonly workspace?: Partial<WorkspaceConfig>;
   readonly compactionIntervalSeconds?: number;
   readonly concurrencyLimit?: number;
+  readonly attentionTickSeconds?: number;
 }
 
 export const DEFAULT_RUNTIME_ADAPTER = "pi-coding-agent";
@@ -172,15 +179,35 @@ export const DEFAULT_COMPACTION_INTERVAL_SECONDS = 6 * 60 * 60;
  */
 export const DEFAULT_CONCURRENCY_LIMIT = 4;
 
-function parseSeconds(value: string | undefined, fallback: number): number {
+/**
+ * Thirty seconds between attention re-derivations.
+ *
+ * The queue is recomputed whenever something is observed to change, so this tick
+ * only exists for the two facts that are made true by time alone: a health
+ * threshold coming due (§7.2) and a snooze elapsing (§4.5). Half a minute is
+ * short enough that "no output for ten minutes" is reported at roughly ten
+ * minutes rather than whenever something else happened, and long enough that
+ * re-deriving is never what the machine is doing.
+ *
+ * It is a scheduled **read** and initiates nothing (principle 2) — see
+ * `attention/tick.ts`, where that stance is stated in full.
+ */
+export const DEFAULT_ATTENTION_TICK_SECONDS = 30;
+
+function parseSeconds(
+  name: string,
+  value: string | undefined,
+  fallback: number,
+): number {
   if (value === undefined || value.trim() === "") return fallback;
   const parsed = Number(value);
-  // A malformed interval is reported, not silently treated as "off": a sweep
-  // that never runs because of a typo is exactly the kind of quiet failure §12
-  // is about.
+  // A malformed interval is reported, not silently treated as "off": a job that
+  // never runs because of a typo is exactly the kind of quiet failure §12 is
+  // about. The variable is named in the message, because two settings share this
+  // parser and a message naming the wrong one sends the operator hunting.
   if (!Number.isFinite(parsed) || parsed < 0) {
     throw new Error(
-      `PLOTROOM_COMPACTION_INTERVAL_SECONDS must be a non-negative number of seconds (got ${value})`,
+      `${name} must be a non-negative number of seconds (got ${value})`,
     );
   }
   return parsed;
@@ -261,6 +288,7 @@ export function loadServerConfig(
     compactionIntervalSeconds:
       overrides.compactionIntervalSeconds ??
       parseSeconds(
+        "PLOTROOM_COMPACTION_INTERVAL_SECONDS",
         env.PLOTROOM_COMPACTION_INTERVAL_SECONDS,
         DEFAULT_COMPACTION_INTERVAL_SECONDS,
       ),
@@ -269,6 +297,13 @@ export function loadServerConfig(
       parseConcurrency(
         env.PLOTROOM_CONCURRENCY_LIMIT,
         DEFAULT_CONCURRENCY_LIMIT,
+      ),
+    attentionTickSeconds:
+      overrides.attentionTickSeconds ??
+      parseSeconds(
+        "PLOTROOM_ATTENTION_TICK_SECONDS",
+        env.PLOTROOM_ATTENTION_TICK_SECONDS,
+        DEFAULT_ATTENTION_TICK_SECONDS,
       ),
     runtime: {
       adapterId:

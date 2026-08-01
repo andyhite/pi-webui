@@ -98,6 +98,13 @@ export function startServer(config = loadServerConfig()) {
       // away).
       runtime.stopQueue();
       runtime.stopSteering();
+      // Same reason for the attention derivation: those same ends would be
+      // re-derived into a queue nobody is reading, against a closing database —
+      // and an outbound route would try to tell somebody about it (§7.3).
+      runtime.stopAttention();
+      runtime.stopNotifications();
+      runtime.attentionTick.stop();
+      await runtime.notifications.drain();
 
       // A graceful close does not orphan a runtime: every live session is
       // recorded as **interrupted** here and its process terminated, rather than

@@ -15,9 +15,16 @@ import {
 } from "./http/middleware.js";
 import type { Logger } from "./logging/logger.js";
 import type { CompactionSchedule } from "./maintenance/compaction.js";
+import { ApprovalService } from "./approvals/service.js";
+import { destructionGuard } from "./approvals/guard.js";
+import { AttentionService } from "./attention/service.js";
+import { NotificationRouter } from "./attention/routing.js";
+import { startAttentionTick, type AttentionTick } from "./attention/tick.js";
 import { BudgetService } from "./budgets/service.js";
 import { ClaimService } from "./claims/service.js";
 import { createStores } from "./routes/api.js";
+import { approvalRoutes } from "./routes/approvals.js";
+import { attentionRoutes } from "./routes/attention.js";
 import { budgetRoutes } from "./routes/budgets.js";
 import { claimRoutes } from "./routes/claims.js";
 import { commandRoutes } from "./routes/commands.js";
@@ -72,6 +79,14 @@ export interface AppRuntime {
   readonly stopSteering: () => void;
   /** The scheduled version-compaction sweep (§15-3, Epic 2.3). */
   readonly compaction: CompactionSchedule;
+  /** §7's one derivation, and the subscriptions that keep it current. */
+  readonly attention: AttentionService;
+  readonly stopAttention: () => void;
+  /** The re-derivation tick: a scheduled **read**, never an initiation. */
+  readonly attentionTick: AttentionTick;
+  /** §7.3's outbound routes, and the deliveries in flight. */
+  readonly notifications: NotificationRouter;
+  readonly stopNotifications: () => void;
 }
 
 /**
@@ -133,10 +148,18 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     logger,
     clock: stores.clock,
   });
+  // Approvals (§6.6, Epic 6.3). Constructed before the gate because the gate is
+  // one of the two paths that raise one: a call it cannot answer from claims and
+  // standing decisions alone asks, and the record is what the operator answers
+  // from the queue without opening the session (§7.1).
+  const approvals = new ApprovalService({ stores, bus, logger, hub, claims });
+  const unsubscribeClaimApprovals = approvals.subscribeToClaimWaits();
+
   const gate = createSessionGate({
     claims,
     sessions: stores.sessions,
     logger,
+    approvals,
   });
 
   // Budgets (§8, Epic 6.2). Constructed before the run service because the run
@@ -206,6 +229,38 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   });
   const unsubscribeQueue = queue.subscribe();
 
+  // §7's one derivation. Constructed after everything it reads, and subscribed
+  // to the same event stream every other live surface reads: something observed
+  // changes the queue, and nothing else does — except elapsed time, which is what
+  // the tick below is for (a scheduled read, principle 2).
+  const attention = new AttentionService({
+    stores,
+    bus,
+    logger,
+    claims,
+    approvals,
+  });
+  const unsubscribeAttention = attention.subscribe();
+  const notifications = new NotificationRouter({
+    stores,
+    bus,
+    logger,
+    attention,
+  });
+  const unsubscribeNotifications = notifications.subscribe();
+  const attentionTick = startAttentionTick({
+    attention,
+    logger,
+    intervalSeconds: config.attentionTickSeconds,
+  });
+
+  // §6.6, before any route can act: a session's destructive gesture raises an
+  // approval instead of executing. Registered as middleware over the whole API
+  // rather than per route, because which routes it covers is catalog metadata
+  // (`requires.destroys`) and a per-route list is the one that ends up missing an
+  // entry.
+  app.use("/api/*", destructionGuard({ approvals, logger }));
+
   app.route("/api", healthRoutes(db));
   app.route("/api", logLevelRoutes(logger));
   app.route("/api", workstreamRoutes(stores));
@@ -218,6 +273,8 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", claimRoutes(claims));
   app.route("/api", spendRoutes(stores, budgets, config.concurrencyLimit));
   app.route("/api", budgetRoutes(stores, budgets));
+  app.route("/api", approvalRoutes(approvals));
+  app.route("/api", attentionRoutes(stores, attention));
   app.route("/api", steeringRoutes(stores, steering));
   app.route("/api", continuationRoutes(stores, continuation));
   app.route(
@@ -299,5 +356,13 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     steering,
     stopSteering: unsubscribeSteering,
     compaction,
+    attention,
+    stopAttention: () => {
+      unsubscribeAttention();
+      unsubscribeClaimApprovals();
+    },
+    attentionTick,
+    notifications,
+    stopNotifications: unsubscribeNotifications,
   };
 }

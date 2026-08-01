@@ -1799,8 +1799,15 @@ export class RunService {
    */
   private phaseContext(sessionId: string): {
     readonly waitingOnClaim: boolean;
+    readonly pendingApproval: boolean;
   } {
-    return { waitingOnClaim: this.deps.claims.isWaitingOnClaim(sessionId) };
+    return {
+      waitingOnClaim: this.deps.claims.isWaitingOnClaim(sessionId),
+      // The other gate PlotRoom owns (§6.6): a call left blocked because an
+      // approval was raised is `waiting-approval`, and no runtime can report
+      // that either — the approval is PlotRoom's record, not the runtime's.
+      pendingApproval: this.deps.stores.approvals.pending(sessionId).length > 0,
+    };
   }
 
   private publishRun(

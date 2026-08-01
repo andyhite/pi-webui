@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import {
   classifyEnd,
   deriveSessionStatus,
@@ -323,6 +323,69 @@ export class SessionStore {
         seq: row.seq,
         observation: JSON.parse(row.observationJson) as RuntimeObservation,
       }));
+  }
+
+  /**
+   * When this session was last observed doing one of these things, in
+   * milliseconds — or null if it never was.
+   *
+   * The health derivation's "no output for too long" (§7.2) needs the last time
+   * the session *produced* something, which is not the same as the last time
+   * anything at all was observed: a session in a long tool call is quiet by
+   * definition. Answered by the (session, kind) index rather than by folding the
+   * log, because it is asked about every live session on every re-derivation.
+   */
+  lastObservationAt(
+    sessionId: string,
+    kinds: readonly string[],
+  ): number | null {
+    if (kinds.length === 0) return null;
+    const row = this.state.db
+      .select({ at: sessionObservations.at })
+      .from(sessionObservations)
+      .where(
+        and(
+          eq(sessionObservations.sessionId, sessionId),
+          inArray(sessionObservations.kind, [...kinds]),
+        ),
+      )
+      .orderBy(desc(sessionObservations.seq))
+      .limit(1)
+      .get();
+    return row?.at ?? null;
+  }
+
+  /**
+   * What the runtime *reported* spending after a moment, in micros (§7.2's
+   * "cost climbing while nothing in the workspace changes").
+   *
+   * Reported only, deliberately: a turn whose runtime priced nothing is no
+   * evidence about money (the same rule cost estimates follow), so a session on a
+   * runtime that reports no cost simply never trips the spinning alert rather
+   * than tripping it on an inferred number.
+   */
+  reportedCostMicrosSince(sessionId: string, sinceMillis: number): number {
+    const rows = this.state.db
+      .select({ json: sessionObservations.observationJson })
+      .from(sessionObservations)
+      .where(
+        and(
+          eq(sessionObservations.sessionId, sessionId),
+          eq(sessionObservations.kind, "turn-ended"),
+          gt(sessionObservations.at, sinceMillis),
+        ),
+      )
+      .all();
+
+    let micros = 0;
+    for (const row of rows) {
+      const observation = JSON.parse(row.json) as RuntimeObservation;
+      if (observation.kind !== "turn-ended") continue;
+      const cost = observation.usage.costUsd;
+      if (cost === undefined) continue;
+      micros += Math.round(cost * 1_000_000);
+    }
+    return micros;
   }
 
   observations(sessionId: string): RuntimeObservation[] {

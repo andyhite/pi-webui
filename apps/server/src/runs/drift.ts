@@ -4,6 +4,7 @@ import {
   type DriftReport,
   type NodeId,
   type ObjectId,
+  type TriageLedger,
   type VersionId,
   type WorkstreamId,
 } from "@plotroom/core";
@@ -25,7 +26,19 @@ import type { ApiStores } from "../routes/api.js";
  * consumed some older version, so counting them all would report a command as
  * drifted for every run it ever had rather than for what it currently reflects.
  */
-export function deriveBoardDrift(stores: ApiStores): DriftReport {
+export function deriveBoardDrift(
+  stores: ApiStores,
+  context: {
+    /**
+     * The triage ledger (§4.5). Acknowledging a drift row advances the
+     * consumer's baseline, and `deriveDrift` is where that rule lives — so the
+     * ledger is handed to it rather than filtered afterwards, which would leave
+     * an acknowledged flag visible until its object changed again.
+     */
+    readonly triage?: TriageLedger;
+    readonly now?: number;
+  } = {},
+): DriftReport {
   const consumptions: {
     readonly consumer: NodeId;
     readonly objectId: ObjectId;
@@ -88,7 +101,10 @@ export function deriveBoardDrift(stores: ApiStores): DriftReport {
       consumerWorkstreams,
       objectWorkstreams,
     },
-    { now: stores.clock() },
+    {
+      now: context.now ?? stores.clock(),
+      ...(context.triage === undefined ? {} : { triage: context.triage }),
+    },
   );
 }
 

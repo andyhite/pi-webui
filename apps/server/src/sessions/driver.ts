@@ -282,6 +282,13 @@ interface EndInput {
  * gate; this only carries the answer back. With no gate wired the request is
  * **denied**, not allowed: a write nothing could check is exactly the fail-open
  * the C6 verification exists to rule out.
+ *
+ * **A call that raised an approval is left blocked**, exactly like a question
+ * (§6.4): the approval outlives the call, and answering it settles *that* call
+ * rather than a copy of it (`ApprovalService.answer` responds). Sending the
+ * refusal that accompanies a raise would settle the call before anybody was
+ * asked, and the session would be told "no" for a question the operator was
+ * about to answer "yes".
  */
 async function answerRequest(
   deps: SessionDriverDeps,
@@ -293,19 +300,30 @@ async function answerRequest(
     readonly request: RuntimeRequest;
   },
 ): Promise<void> {
+  const decision = deps.gate?.decide({
+    sessionId: input.sessionId,
+    adapterId: input.adapterId,
+    requestId: input.requestId,
+    request: input.request,
+  });
+
+  if (decision?.pendingApprovalId != null) {
+    deps.logger.info("a runtime call is waiting on an approval", {
+      sessionId: input.sessionId,
+      requestId: input.requestId,
+      approvalId: decision.pendingApprovalId,
+    });
+    return;
+  }
+
   const outcome =
-    deps.gate === undefined
+    decision === undefined
       ? ({
           kind: "deny",
           reason:
             "no claim gate is wired, so nothing could check this write (§3.4)",
         } as const)
-      : deps.gate.decide({
-          sessionId: input.sessionId,
-          adapterId: input.adapterId,
-          requestId: input.requestId,
-          request: input.request,
-        }).outcome;
+      : decision.outcome;
 
   try {
     await input.handle.respond(input.requestId, outcome);

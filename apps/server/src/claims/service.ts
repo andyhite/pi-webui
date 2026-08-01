@@ -180,6 +180,16 @@ export class ClaimService {
     );
   }
 
+  /**
+   * Is this wait still on the list? Asked by the approvals path (§6.6): a claim
+   * wait no policy covers is raised as an approval, and one that was granted or
+   * withdrawn some other way leaves nothing to answer — so the row stops asking
+   * rather than sitting in the queue about something that no longer exists.
+   */
+  waitExists(waitId: string): boolean {
+    return this.deps.claims.workstreamOfWait(waitId) !== undefined;
+  }
+
   withdrawWait(waitId: string, by: Author) {
     const workstreamId = this.workstreamOfWait(waitId);
     return this.decide(workstreamId, by, (state) =>

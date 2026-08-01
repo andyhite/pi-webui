@@ -1,5 +1,7 @@
 import { systemClock, type Author, type Clock } from "@plotroom/core";
 import {
+  ApprovalStore,
+  AttentionStore,
   BroadcastStore,
   BudgetStore,
   ClaimStore,
@@ -48,6 +50,10 @@ export interface ApiStores {
   readonly questions: QuestionStore;
   /** Broadcasts, their rate window, and handoff briefs (§6.5, §6.3). */
   readonly broadcasts: BroadcastStore;
+  /** Approvals and the standing decisions that answer for them (§6.6). */
+  readonly approvals: ApprovalStore;
+  /** Triage for every attention feed, and the outbound routes (§4.5, §7.3). */
+  readonly attention: AttentionStore;
   /** Spend attributed up the initiating chain (§3.6, principle 2). */
   readonly spend: SpendStore;
   /** Budgets at workstream and global scope (§8); a run's cap lives on the run. */
@@ -76,6 +82,8 @@ export function createStores(
     claims: new ClaimStore(db, clock),
     questions: new QuestionStore(db, clock),
     broadcasts: new BroadcastStore(db, clock),
+    approvals: new ApprovalStore(db, clock),
+    attention: new AttentionStore(db, clock),
     spend: new SpendStore(db, clock),
     budgets: new BudgetStore(db, clock),
     // The workspace record's own vocabulary is milliseconds (§3.4), so its

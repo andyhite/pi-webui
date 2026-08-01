@@ -156,6 +156,58 @@ const OPERATOR_ONLY_ROUTES: readonly {
     why: "removing a ceiling is the same operator decision as setting one, from the other side (§8). An agent deleting the budget that bounds it is the exact hole principle 2's transitive guarantee exists to close.",
   },
   {
+    path: "/api/approvals",
+    why: "\u00a76.6's approvals are the operator's. A session reading the queue of what other sessions are asking for is not a gesture the product mirrors, and the one thing a session needs to know \u2014 how its own blocked call was answered \u2014 reaches it as the tool result, not as a read.",
+  },
+  {
+    path: "/api/approvals/:id",
+    why: "the same read, for one approval (\u00a76.6).",
+  },
+  {
+    path: "/api/approvals/:id/answer",
+    why: "principle 1: a session answering an approval would be granting itself the capability the approval exists to gate \u2014 `answerApproval` refuses every session author, and there is no tool because there is no gesture.",
+  },
+  {
+    path: "/api/pre-grants",
+    why: '\u00a76.6\'s pre-grant is "a human decision about capability made in advance". A session declaring one is principle 1 in advance, and reading the standing decisions that bind it would only tell it which shapes of call to try.',
+  },
+  {
+    path: "/api/pre-grants/:id",
+    why: "withdrawing a standing decision is the same operator decision as making one, from the other side (\u00a76.6).",
+  },
+  {
+    path: "/api/attention",
+    why: "\u00a77's queue is where the operator decides what to look at. A session reading it would be reading the human's own attention state \u2014 every fact in it is already the session's own record where it is the session's business.",
+  },
+  {
+    path: "/api/attention/:id/acknowledge",
+    why: "\u00a74.5's triage verbs are the operator clearing their own queue; a session acknowledging a row would be deciding what the human gets to see.",
+  },
+  {
+    path: "/api/attention/:id/snooze",
+    why: "the same, for a snooze (\u00a74.5).",
+  },
+  {
+    path: "/api/attention/:id/mute",
+    why: "the same, for a mute (\u00a74.5) \u2014 and the most emphatic of the three, since a muted item never returns.",
+  },
+  {
+    path: "/api/attention/:id/triage",
+    why: "undoing a triage decision, which is the operator's for exactly the same reason making one is (\u00a74.5).",
+  },
+  {
+    path: "/api/activity",
+    why: '\u00a77.3\'s "what changed while I was away" is written for somebody who was away. Every entry in it is derived from records an agent already has its own reads for.',
+  },
+  {
+    path: "/api/notification-routes",
+    why: "\u00a77.3's outbound routes carry attention off this machine to a destination the operator configured. An agent creating one would be choosing where PlotRoom sends notifications, which is not a gesture the product mirrors at any level.",
+  },
+  {
+    path: "/api/notification-routes/:id",
+    why: "editing or removing one, for the same reason as creating one (\u00a77.3).",
+  },
+  {
     path: "/api/nodes/:id/position",
     why: "the arrangement is the operator's authored spatial work (§5): an agent rearranging the canvas somebody else is reading is not a wanted gesture, and nothing an agent does depends on where a node sits.",
   },

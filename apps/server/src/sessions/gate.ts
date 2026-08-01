@@ -1,12 +1,18 @@
 import {
   createPiWriteIntents,
   decideToolPermission,
+  isApproved,
   sessionAuthor,
   UNKNOWN_WRITE_INTENTS,
+  type Approval,
+  type ApprovalAsk,
+  type PiercedPreGrant,
+  type PreGrant,
   type RequestOutcome,
   type RuntimeRequest,
   type SessionId,
   type ToolGateDecision,
+  type WorkstreamId,
   type WriteIntentDeclaration,
 } from "@plotroom/core";
 import type { SessionStore } from "@plotroom/db";
@@ -36,6 +42,13 @@ import {
 export interface SessionGateDecision extends ToolGateDecision {
   /** True when the decision consulted claims rather than an approval. */
   readonly claimChecked: boolean;
+  /**
+   * The approval this call is waiting on (§6.6). Set whenever the gate raised
+   * one **or** found one already raised for this call and still unanswered —
+   * which is what tells the pump to leave the request blocked rather than
+   * settling it with the refusal that accompanies a raise.
+   */
+  readonly pendingApprovalId: string | null;
 }
 
 export interface SessionGate {
@@ -53,6 +66,42 @@ export interface SessionGateDeps {
   readonly logger: Logger;
   /** Per-adapter declarations, so a new adapter registers one rather than none. */
   readonly intents?: ReadonlyMap<string, WriteIntentDeclaration>;
+  /**
+   * §6.6's half of the gate: the standing decisions that may answer for a call,
+   * the approval already raised for it, and where a new one is recorded.
+   *
+   * Optional only so a test can drive the gate without it — and absent, nothing
+   * is pre-granted and nothing is approved, which is the safe direction: an ask
+   * that needs an answer is refused rather than allowed because there was
+   * nowhere to look for one.
+   */
+  readonly approvals?: GateApprovals;
+}
+
+/**
+ * What the gate needs from `ApprovalService`, as an interface so the two are not
+ * circular — and so what the gate may do with approvals is exactly three things:
+ * read the standing decisions, find the approval for **this call**, and raise one.
+ *
+ * The lookup is by **call id**, never by session. An ask with no target (a
+ * tool-permission or integration-write raise) matches on the tool alone in
+ * `settlesAsk`, so "an approval this session has for this tool" would let one
+ * approved `shell` call authorize a different one the operator never saw.
+ */
+export interface GateApprovals {
+  preGrantsFor(
+    sessionId: string,
+    workstreamId: string | null,
+  ): readonly PreGrant[];
+  forCall(sessionId: string, callId: string): Approval | undefined;
+  raise(input: {
+    readonly sessionId: string;
+    readonly workstreamId?: string;
+    readonly ask: ApprovalAsk;
+    readonly requestId?: string | null;
+    readonly callId?: string | null;
+    readonly pierced?: PiercedPreGrant | null;
+  }): Approval;
 }
 
 export function defaultWriteIntents(): ReadonlyMap<
@@ -76,6 +125,15 @@ export function createSessionGate(deps: SessionGateDeps): SessionGate {
       const workstreamId = session.session.workstreamId;
       const declaration = intents.get(input.adapterId) ?? UNKNOWN_WRITE_INTENTS;
 
+      // The approval for **this call**, if one was already raised. Answered, it
+      // is what `approvedCallIds` reports; unanswered, it is what keeps the call
+      // blocked instead of raising a second row for one question.
+      const raised = deps.approvals?.forCall(input.sessionId, input.requestId);
+      const approvedCallIds =
+        raised !== undefined && isApproved(raised)
+          ? new Set([input.requestId])
+          : undefined;
+
       const decision = decideToolPermission(input.request, {
         sessionId: input.sessionId as SessionId,
         // The live state, swept: a lapsed lease authorizes nothing (§3.4).
@@ -83,6 +141,10 @@ export function createSessionGate(deps: SessionGateDeps): SessionGate {
         manager: deps.claims.claimManager,
         intents: declaration,
         callId: input.requestId,
+        workstreamId: workstreamId as WorkstreamId,
+        preGrants:
+          deps.approvals?.preGrantsFor(input.sessionId, workstreamId) ?? [],
+        ...(approvedCallIds === undefined ? {} : { approvedCallIds }),
       });
 
       // An allowed, path-bounded write is recorded as a write and renews the
@@ -101,15 +163,39 @@ export function createSessionGate(deps: SessionGateDeps): SessionGate {
         }
       }
 
+      // §6.6: a call the gate cannot answer **asks**, and the record outlives the
+      // call it blocks. Raising is idempotent in the call id, so a runtime that
+      // re-raises finds the approval already waiting rather than asking the
+      // operator the same question twice (principle 9).
+      let pendingApprovalId: string | null = null;
+      if (decision.raisesApproval && decision.ask !== null) {
+        pendingApprovalId =
+          deps.approvals?.raise({
+            sessionId: input.sessionId,
+            workstreamId,
+            ask: decision.ask,
+            requestId: input.requestId,
+            callId: input.requestId,
+            pierced: decision.piercedPreGrant,
+          }).id ?? null;
+      } else if (raised !== undefined && raised.answer === null) {
+        pendingApprovalId = raised.id;
+      }
+
       if (decision.outcome.kind === "deny") {
         deps.logger.info("a runtime write was refused", {
           sessionId: input.sessionId,
           reason: decision.outcome.reason,
           raisesApproval: decision.raisesApproval,
+          approvalId: pendingApprovalId,
         });
       }
 
-      return { ...decision, claimChecked: decision.paths.length > 0 };
+      return {
+        ...decision,
+        claimChecked: decision.paths.length > 0,
+        pendingApprovalId,
+      };
     },
   };
 }
