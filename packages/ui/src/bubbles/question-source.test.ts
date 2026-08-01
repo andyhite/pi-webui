@@ -245,4 +245,57 @@ describe("createApiQuestionDataSource", () => {
 
     expect(post).not.toHaveBeenCalled();
   });
+
+  it("re-bootstraps on reconnect instead of swallowing the resync (bootstrapped-guard regression)", async () => {
+    vi.useFakeTimers();
+    try {
+      const sockets = [fakeSocket(), fakeSocket()];
+      let created = 0;
+      const createSocket: WebSocketFactory = vi.fn(() => {
+        const next = sockets[created];
+        created += 1;
+        if (!next) throw new Error("unexpected extra socket");
+        return next;
+      });
+
+      let questionIds = ["q1"];
+      const get = vi.fn(async (path: string) => {
+        if (path === "/api/sessions") {
+          return { sessions: [{ session: { id: "session-1" } }] };
+        }
+        return {
+          questions: questionIds.map((id) => ({
+            question: sessionQuestion({ id }),
+            pathsNotTaken: [],
+          })),
+        };
+      });
+      const http = { get } as unknown as HttpClient;
+
+      const source = createApiQuestionDataSource({ http, createSocket });
+      const onChange = vi.fn();
+      source.subscribe(onChange);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onChange.mock.calls.at(-1)?.[0]).toHaveLength(1);
+
+      // The server raised a second question while the socket was down, and
+      // the drop means the `session_question` event for it was missed —
+      // only a fresh bootstrap on reconnect can recover it.
+      questionIds = ["q1", "q2"];
+      sockets[0]?.onclose?.();
+      await vi.advanceTimersByTimeAsync(1_000);
+      sockets[1]?.onopen?.();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(get).toHaveBeenCalledWith("/api/sessions");
+      const sessionsCalls = get.mock.calls.filter(
+        ([path]) => path === "/api/sessions",
+      );
+      expect(sessionsCalls.length).toBeGreaterThanOrEqual(2);
+      expect(onChange.mock.calls.at(-1)?.[0]).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

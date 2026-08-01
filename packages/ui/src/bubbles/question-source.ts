@@ -134,7 +134,7 @@ export function createApiQuestionDataSource(
 
   let questionsById = new Map<string, SessionQuestion>();
   let started = false;
-  let bootstrapped = false;
+  let seeded = false;
   let socket: ReturnType<typeof createReconnectingSocket> | null = null;
   const listeners = new Set<(open: readonly OpenQuestion[]) => void>();
 
@@ -153,15 +153,18 @@ export function createApiQuestionDataSource(
   }
 
   /**
-   * The one-time seed: `session_question` has no snapshot-level feed of its
-   * own (unlike the board's `/api/snapshot`), so every currently-open
-   * question is read by asking every session for its questions once, in
-   * parallel, at connect time — after this, only `/ws`'s own events change
-   * anything.
+   * The resync: `session_question` has no snapshot-level feed of its own
+   * (unlike the board's `/api/snapshot`), so every currently-open question
+   * is read by asking every session for its questions once, in parallel.
+   * Always unconditional — called at first connect *and* on every
+   * reconnect (`onStatusChange` below), because a socket drop can miss
+   * `session_question` events the same way it can miss any other one. An
+   * earlier version guarded this with a once-only flag, which made a
+   * reconnect's resync a silent no-op and left `questionsById` stale for
+   * the rest of the session; that guard lived here and is gone for good,
+   * not just relaxed — `ensureSeeded` below is where "only once" belongs.
    */
-  async function bootstrap(): Promise<void> {
-    if (bootstrapped) return;
-    bootstrapped = true;
+  async function resync(): Promise<void> {
     const { sessions } = await http.get<{
       readonly sessions: readonly {
         readonly session: { readonly id: string };
@@ -182,18 +185,31 @@ export function createApiQuestionDataSource(
         next.set(question.id, question);
     }
     questionsById = next;
+    seeded = true;
     notify();
+  }
+
+  /**
+   * The one-time seed for a caller with no live socket of its own
+   * (`listOpen`): fetches once and leaves whatever the socket has since
+   * done — live-updated or event-driven state — alone on every later call,
+   * so answering a question and then calling `listOpen` again does not get
+   * clobbered by a fresh fetch racing the optimistic update.
+   */
+  async function ensureSeeded(): Promise<void> {
+    if (seeded) return;
+    await resync();
   }
 
   function ensureStarted(): void {
     if (started) return;
     started = true;
-    void bootstrap();
+    void ensureSeeded();
 
     socket = createReconnectingSocket({
       createSocket,
       onStatusChange: (status) => {
-        if (status === "open") void bootstrap();
+        if (status === "open") void resync();
       },
       onMessage: (data) => {
         const message = parseWsMessage(data);
@@ -209,13 +225,13 @@ export function createApiQuestionDataSource(
     socket?.close();
     socket = null;
     started = false;
-    bootstrapped = false;
+    seeded = false;
     questionsById = new Map();
   }
 
   return {
     listOpen(): Promise<readonly OpenQuestion[]> {
-      return bootstrap().then(currentOpen);
+      return ensureSeeded().then(currentOpen);
     },
 
     subscribe(onChange): Unsubscribe {
