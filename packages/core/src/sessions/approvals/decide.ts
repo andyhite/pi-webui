@@ -90,22 +90,19 @@ export function decideApproval(
     };
   }
 
-  const answered = context.approval?.answer ?? null;
-  if (
-    context.approval !== null &&
-    context.approval !== undefined &&
-    answered !== null
-  ) {
+  const raised = context.approval ?? null;
+  const answered = raised?.answer ?? null;
+  if (raised !== null && answered !== null) {
     if (answered.decision === "approve-once") {
       return {
         kind: "allowed",
-        by: { kind: "approval", approvalId: context.approval.id },
+        by: { kind: "approval", approvalId: raised.id },
         reason: `approved once by the operator: ${describeAsk(ask)}`,
       };
     }
     return {
       kind: "denied",
-      by: { kind: "approval", approvalId: context.approval.id },
+      by: { kind: "approval", approvalId: raised.id },
       reason:
         answered.reason ??
         "declined by the operator; this is feedback about how to proceed, not a failure (§6.6)",
