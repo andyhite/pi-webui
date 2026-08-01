@@ -951,6 +951,23 @@ exactly the rect `placement.ts` collision-checked, so DOM text wrapping
 taller than the `measureLines` estimate can no longer spill into a region
 the engine proved clear._
 
+_**Second-look correction:** the contained-node fix above landed inert at
+its own call site. `PlotCanvas` built `computeAbsoluteScreenExtents`'s
+input by filtering to box nodes first, so every container — the very
+thing a contained node's absolute position is computed *against* — never
+reached the lookup; the parent id still resolved to something (a
+plausible-looking result), found no entry, and silently fell back to no
+offset, so every contained node's bubble kept rendering at its bare
+parent-relative position, offset by exactly its workstream frame's own
+position. `canvas/node-extents.ts` now also exports `toExtentAwareNodes`,
+the exact wiring `PlotCanvas` calls — handed the *entire* node array,
+containers included, with no filter in front of it — and a call-site-shaped
+test (`toExtentAwareNodes` piped straight into
+`computeAbsoluteScreenExtents`, exactly as `PlotCanvas` does) asserts a
+contained node's position lands at parent.position + child.position; it
+fails if a type filter is reintroduced anywhere in that pipeline. The gap
+is closed now, where the first pass only closed it on paper._
+
 ### Epic 5.4 — Resume, fork, handoff (`sessions`)
 
 - [ ] Explicit resume-vs-fork choice, never implicit on typing (§6.3)
