@@ -37,6 +37,30 @@ export interface ToolTarget {
  * Which sessions a call would author into. Supplied by the caller (Track A over
  * the graph) rather than derived here: `core` states the rule, and the graph
  * answers what a node feeds.
+ *
+ * **Mounting contract.** This index decides which calls principle 1 refuses, so
+ * resolving a target too widely refuses legitimate work and resolving it too
+ * narrowly makes the rule advisory. Every lineage-checked tool states its own
+ * required resolution in `requires.targetResolution` (`catalog.ts`, enforced by
+ * that module's test) — that list is normative. The two that are easiest to get
+ * backwards, restated here because getting them wrong breaks the product rather
+ * than a test:
+ *
+ * - **`session_dispatch`** resolves to the sessions the command has *already*
+ *   run — what a re-run or resume would touch (§4.1: a session may not run,
+ *   resume, or re-run work inside its own initiation chain). It must **never**
+ *   include the child about to be created: a fresh child is a descendant by
+ *   construction, so including it would refuse every delegation principle 1
+ *   explicitly permits ("a delegation's result returning to the delegator is not
+ *   this").
+ * - **`claim_answer`** (and the claim-policy tools) resolve to the **empty set**,
+ *   never the waiting session, however tempting the capability class makes it.
+ *   §3.4 states the exemption outright: "a child asking its parent for write
+ *   access reads like a chain granting itself capability. It is not — a claim can
+ *   only be granted from capability the granter already holds." Including the
+ *   waiter would refuse exactly the parent-to-child grant the claim model is
+ *   built on; what bounds those grants is the claim manager's extent check, not
+ *   this one.
  */
 export interface ToolTargetIndex {
   sessionsAffected(target: ToolTarget): readonly SessionId[];

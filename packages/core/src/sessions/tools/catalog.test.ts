@@ -230,6 +230,41 @@ describe("the catalog", () => {
     }
   });
 
+  it("states how every lineage-checked tool's target must resolve", () => {
+    // The mounting contract as data rather than prose someone may not read: a
+    // resolution nobody wrote down is a refusal that fires on the wrong calls,
+    // which is how a principle-1 check becomes either advisory or obstructive.
+    const checked = AGENT_TOOL_CATALOG.filter((tool) =>
+      ["target-session", "capability", "budget"].includes(
+        tool.requires.reflexivity,
+      ),
+    );
+    expect(checked.length).toBeGreaterThan(5);
+    const undeclared = checked.filter(
+      (tool) => (tool.requires.targetResolution ?? "").length < 20,
+    );
+    expect(undeclared.map((tool) => tool.name)).toEqual([]);
+  });
+
+  it("makes §4.1 expressible for dispatch, and keeps claims exempt (§3.4)", () => {
+    const dispatch = toolByName("session_dispatch");
+    expect(dispatch?.requires.reflexivity).toBe("target-session");
+    expect(dispatch?.requires.targetResolution).toContain("already run");
+    // The trap: resolving a dispatch to its own new child would refuse every
+    // delegation the spec permits, so the contract says so in capitals.
+    expect(dispatch?.requires.targetResolution).toContain("NEVER");
+
+    for (const name of [
+      "claim_answer",
+      "claim_policy_declare",
+      "claim_policy_withdraw",
+    ]) {
+      expect(toolByName(name)?.requires.targetResolution, name).toContain(
+        "empty set",
+      );
+    }
+  });
+
   it("declares a claim requirement on the tools that name a workspace path", () => {
     const claiming = AGENT_TOOL_CATALOG.filter(
       (tool) => tool.requires.claimOnInput !== undefined,

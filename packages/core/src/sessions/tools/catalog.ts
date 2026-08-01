@@ -74,6 +74,15 @@ export type ToolReflexivityClass = (typeof TOOL_REFLEXIVITY_CLASSES)[number];
 
 export interface ToolRequirements {
   readonly reflexivity: ToolReflexivityClass;
+  /**
+   * How `ToolTargetIndex.sessionsAffected` must resolve this call's target for
+   * the lineage check to mean what the spec says — the **mounting contract** for
+   * whoever implements the index, carried as data beside the tool rather than as
+   * a comment somewhere else. Required for every lineage-checked tool (the
+   * catalog test enforces that), because a resolution nobody wrote down is a
+   * refusal that fires on the wrong calls.
+   */
+  readonly targetResolution?: string;
   /** The operator's alone. A session calling it is refused, not advised. */
   readonly humanOnly: boolean;
   /** Names the input field carrying a workspace path a write claim is needed for (§3.4). */
@@ -96,6 +105,28 @@ export interface AgentTool {
   readonly input: ToolInputSchema;
   readonly requires: ToolRequirements;
 }
+
+/**
+ * The resolution most lineage-checked tools share: what a node *feeds*.
+ *
+ * Authoring context into a command node reaches whatever that command runs, so
+ * the check has to see through the node to the sessions behind it — otherwise
+ * routing an edit through a command a session created would slip past principle
+ * 1's "or route around any of this through a chain it started".
+ */
+const NODE_TARGETS =
+  "the sessions the target node feeds: a running session directly, or every session a command node has run and would run next.";
+
+/**
+ * §3.4 exempts claims from the reflexivity rule, and says why: "a child asking
+ * its parent for write access reads like a chain granting itself capability. It
+ * is not — a claim can only be granted from capability the granter already
+ * holds." Resolving these to the waiter would refuse the parent-to-child grant
+ * the whole claim model is built on. The real bound is the claim manager's extent
+ * check (`exceeds_grant`), which no grant can talk its way past.
+ */
+const CLAIM_EXEMPT_TARGETS =
+  "the empty set: never the waiting or receiving session (§3.4's stated exemption; the claim manager's extent check is what bounds these).";
 
 const NO_REFLEXIVITY: ToolRequirements = {
   reflexivity: "none",
@@ -429,7 +460,10 @@ const graphTools: readonly AgentTool[] = [
         description: "the full edge order",
       },
     },
-    requires: { reflexivity: "target-session" },
+    requires: {
+      reflexivity: "target-session",
+      targetResolution: NODE_TARGETS,
+    },
   }),
   mutate({
     name: "edge_wire",
@@ -454,7 +488,10 @@ const graphTools: readonly AgentTool[] = [
         description: "assembly position",
       },
     },
-    requires: { reflexivity: "target-session" },
+    requires: {
+      reflexivity: "target-session",
+      targetResolution: NODE_TARGETS,
+    },
   }),
   mutate({
     name: "edge_delete",
@@ -463,7 +500,11 @@ const graphTools: readonly AgentTool[] = [
     method: "DELETE",
     endpoint: "/api/edges/:id",
     input: { id: ID },
-    requires: { reflexivity: "target-session", approval: "always" },
+    requires: {
+      reflexivity: "target-session",
+      approval: "always",
+      targetResolution: NODE_TARGETS,
+    },
   }),
   mutate({
     name: "edge_restore",
@@ -472,7 +513,10 @@ const graphTools: readonly AgentTool[] = [
     method: "POST",
     endpoint: "/api/edges/:id/restore",
     input: { id: ID },
-    requires: { reflexivity: "target-session" },
+    requires: {
+      reflexivity: "target-session",
+      targetResolution: NODE_TARGETS,
+    },
   }),
 ];
 
@@ -530,7 +574,11 @@ const commandTools: readonly AgentTool[] = [
         description: "organizing folder",
       },
     },
-    requires: { reflexivity: "capability" },
+    requires: {
+      reflexivity: "capability",
+      targetResolution:
+        "the empty set: a definition nobody has instantiated grants nothing to anyone yet. `command_definition_edit` is where changing what a session may do actually reaches a chain.",
+    },
   }),
   read(
     "command_definition_list",
@@ -565,7 +613,11 @@ const commandTools: readonly AgentTool[] = [
         description: "new tool permissions",
       },
     },
-    requires: { reflexivity: "capability" },
+    requires: {
+      reflexivity: "capability",
+      targetResolution:
+        "every session run from this definition, plus the sessions of every command node instantiated from it — editing tool permissions changes what those may do, which is granting capability (principle 1).",
+    },
   }),
   mutate({
     name: "command_definition_duplicate",
@@ -623,7 +675,11 @@ const commandTools: readonly AgentTool[] = [
         description: "node ids wired as context",
       },
     },
-    requires: { reflexivity: "target-session" },
+    requires: {
+      reflexivity: "target-session",
+      targetResolution:
+        "the sessions any wired context node already feeds — a running session directly, or a command's own sessions. A command nobody has run reaches nothing, so instantiating one is usually unchecked; wiring context into it later is where the check bites.",
+    },
   }),
   read(
     "command_get",
@@ -806,7 +862,10 @@ const claimTools: readonly AgentTool[] = [
         description: "glob relative to the subtree",
       },
     },
-    requires: { reflexivity: "capability" },
+    requires: {
+      reflexivity: "capability",
+      targetResolution: CLAIM_EXEMPT_TARGETS,
+    },
   }),
   mutate({
     name: "claim_policy_withdraw",
@@ -816,7 +875,10 @@ const claimTools: readonly AgentTool[] = [
     endpoint: "/api/claim-policies/:id",
     availability: "pending",
     input: { id: id("the policy id") },
-    requires: { reflexivity: "capability" },
+    requires: {
+      reflexivity: "capability",
+      targetResolution: CLAIM_EXEMPT_TARGETS,
+    },
   }),
   mutate({
     name: "claim_answer",
@@ -829,7 +891,11 @@ const claimTools: readonly AgentTool[] = [
       id: id("the claim wait id"),
       decision: { type: "string", required: true, description: "grant | deny" },
     },
-    requires: { reflexivity: "capability" },
+    requires: {
+      reflexivity: "capability",
+      targetResolution:
+        'the empty set: NEVER the waiting session. §3.4 states this exemption outright — "a child asking its parent for write access reads like a chain granting itself capability. It is not — a claim can only be granted from capability the granter already holds." Including the waiter would refuse exactly the parent-to-child grant the claim model is built on.',
+    },
   }),
   mutate({
     name: "claim_grant",
@@ -912,10 +978,19 @@ const agencyTools: readonly AgentTool[] = [
         description: "why, recorded with the provenance",
       },
     },
-    // Delegation is not reflexive: "a delegation's result returning to the
-    // delegator is not this — the delegator authored that intent when it
-    // delegated" (principle 1). A *new* child has no existing chain to reach.
-    requires: { reflexivity: "none", approval: "outside-policy" },
+    // Dispatch is lineage-checked, but not because delegating is reflexive: "a
+    // delegation's result returning to the delegator is not this — the delegator
+    // authored that intent when it delegated" (principle 1). What §4.1 does
+    // forbid is a session running, resuming, or re-running work *already in its
+    // own chain*, and that is expressible only if the target resolves to the
+    // command's existing sessions. Server enforcement is Track A's; this declares
+    // what it must enforce.
+    requires: {
+      reflexivity: "target-session",
+      approval: "outside-policy",
+      targetResolution:
+        "the sessions this command has already run — the ones a re-run or resume would touch. NEVER the child about to be created: a fresh child is a descendant by construction, so including it would refuse every delegation principle 1 explicitly permits.",
+    },
   }),
   mutate({
     name: "proposal_create",

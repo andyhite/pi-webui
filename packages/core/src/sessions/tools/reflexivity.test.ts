@@ -178,9 +178,46 @@ describe("checkToolCall", () => {
   });
 
   it("lets a session dispatch a child — a delegation is not reflexive", () => {
+    // A command nobody has run resolves to no sessions, which is why dispatch can
+    // be lineage-checked without refusing delegation: "a delegation's result
+    // returning to the delegator is not this" (principle 1).
     const check = checkToolCall(
       { actor: sessionAuthor(CHILD), lineage, targets },
-      { tool: "session_dispatch", input: { commandId: "cmd_new" } },
+      {
+        tool: "session_dispatch",
+        input: { commandId: "cmd_new" },
+        target: { kind: "command", id: "cmd_new" },
+      },
+    );
+    expect(check.allowed).toBe(true);
+  });
+
+  it("refuses re-running a command whose session is in the caller's own chain", () => {
+    // §4.1's rule, now expressible: dispatch resolves to the sessions the command
+    // has already run, so re-running work inside its own chain is refused while
+    // starting new work is not.
+    const check = checkToolCall(
+      { actor: sessionAuthor(CHILD), lineage, targets },
+      {
+        tool: "session_dispatch",
+        input: { commandId: "cmd_grandchild" },
+        target: { kind: "command", id: "cmd_grandchild" },
+      },
+    );
+    expect(check.allowed).toBe(false);
+    if (check.allowed) return;
+    expect(check.refusal.reason).toBe("own_chain");
+    expect(check.refusal.details?.targetSessionId).toBe(GRANDCHILD);
+  });
+
+  it("still lets a session dispatch work outside its chain", () => {
+    const check = checkToolCall(
+      { actor: sessionAuthor(CHILD), lineage, targets },
+      {
+        tool: "session_dispatch",
+        input: { commandId: "cmd_stranger" },
+        target: commandFeedingStranger,
+      },
     );
     expect(check.allowed).toBe(true);
   });
