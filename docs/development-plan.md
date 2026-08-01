@@ -367,7 +367,10 @@ port to it directly and derives the `/api`/`/ws` proxy target one port above
 (documented in-file; the exact offset convention needs Track A's
 acknowledgment once a real dev-mode server port exists to target), with
 `PLOTROOM_HMR_CLIENT_PORT` overriding HMR's reconnect port for asymmetric
-tunnels. `apps/desktop`'s `spawnOrAttach` (probe → attach, or spawn → poll
+tunnels. The state-dir clause of that knob is not implemented here: state
+dir is server-owned, nothing in this epic passes one anywhere, and the knob
+will carry it once the server reads a state-dir setting — completed at
+Sync 2. `apps/desktop`'s `spawnOrAttach` (probe → attach, or spawn → poll
 → throw on timeout) is pure and unit-tested with a mocked probe/spawn/wait;
 `main.ts` wires it to real Electron/`child_process`/`fetch` and spawns
 `apps/server`'s compiled entry point — which does not listen on a port yet
