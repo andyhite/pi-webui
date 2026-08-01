@@ -541,6 +541,49 @@ describe("run-history retention (§4.4)", () => {
     );
   });
 
+  it("keeps an old run that `latest` still resolves to for its output name", () => {
+    // The output name matches no declared placeholder, so nothing is bound to
+    // this run and it is not the newest run of its command. `latest` for that
+    // name still points at it, so retention must leave it alone — an address
+    // that answers null after compaction is the failure the rule forbids.
+    const command = wired(["input"]);
+    const commandId = command.command.id as CommandId;
+
+    const holder = runs.start({ commandId }).run;
+    const side = produced("a side note");
+    runs.complete(holder.id, {
+      outputs: [
+        {
+          name: "side_note",
+          objectId: side.objectId,
+          versionId: side.versionId,
+        },
+      ],
+    });
+    clock.advance(60);
+
+    // Five later runs, none of which produce `side_note`.
+    manyRuns(5, commandId);
+    clock.advance(policy.windowSeconds + 1);
+
+    const before = runs.resolve({
+      commandId,
+      name: "side_note",
+      at: "latest",
+    });
+    expect(before?.runId).toBe(holder.id);
+    expect(commands.outputs(commandId).map((each) => each.name)).not.toContain(
+      "side_note",
+    );
+
+    const { removed } = runs.compactRuns(policy);
+
+    expect(removed).toBeGreaterThan(0);
+    expect(
+      runs.resolve({ commandId, name: "side_note", at: "latest" }),
+    ).toEqual(before);
+  });
+
   it("keeps everything inside the window, however far past N", () => {
     const command = wired(["input"]);
     // Five runs, 60 seconds apart, all comfortably inside a wide window.

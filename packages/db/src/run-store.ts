@@ -412,25 +412,7 @@ export class RunStore {
       .all();
 
     const rankByDefinition = new Map<string, number>();
-    const newestOrdinal = new Map<string, number>();
-    for (const row of all) {
-      newestOrdinal.set(
-        row.commandId,
-        Math.max(newestOrdinal.get(row.commandId) ?? 0, row.ordinal),
-      );
-    }
-
-    // Any run an output is currently bound to is what `latest` resolves to for
-    // that output, whatever its ordinal — retention must never make a live
-    // address stop answering.
-    const bound = new Set(
-      this.state.db
-        .select({ runId: commandOutputs.boundRunId })
-        .from(commandOutputs)
-        .all()
-        .flatMap((row) => (row.runId ? [row.runId] : [])),
-    );
-
+    const addressed = this.addressedByLatest();
     const doomed: RunRow[] = [];
 
     for (const row of all) {
@@ -442,9 +424,7 @@ export class RunStore {
           pinned: row.pinned,
           startedAt: row.startedAt,
           recencyRank: rank,
-          addressedByLatest:
-            bound.has(row.id) ||
-            newestOrdinal.get(row.commandId) === row.ordinal,
+          addressedByLatest: addressed.has(row.id),
         },
         { now, policy },
       );
@@ -591,6 +571,49 @@ export class RunStore {
       .get();
 
     return output?.boundObjectId ?? null;
+  }
+
+  /**
+   * The runs an `output@latest` address currently resolves to — computed the
+   * same way `resolve` computes it, per (command, output name) over the
+   * highest run ordinal. Anything coarser (newest run per command, say) is an
+   * approximation, and an approximation here makes a live address answer null
+   * after compaction: retention must never do that (§4.4, §15-4).
+   */
+  private addressedByLatest(): Set<string> {
+    const best = new Map<string, { runId: string; ordinal: number }>();
+
+    for (const row of this.state.db
+      .select({
+        runId: runOutputs.runId,
+        name: runOutputs.name,
+        commandId: runs.commandId,
+        ordinal: runs.ordinal,
+      })
+      .from(runOutputs)
+      .innerJoin(runs, eq(runs.id, runOutputs.runId))
+      .all()) {
+      const key = `${row.commandId}\u0000${row.name}`;
+      const current = best.get(key);
+      if (!current || row.ordinal > current.ordinal) {
+        best.set(key, { runId: row.runId, ordinal: row.ordinal });
+      }
+    }
+
+    const addressed = new Set([...best.values()].map((each) => each.runId));
+
+    // A placeholder's bound run must also keep existing, because
+    // command_outputs.bound_run_id is a real foreign key. Binding follows the
+    // newest run producing that name, so this is belt and braces rather than a
+    // second rule — but a hard FK failure is not the way to discover that.
+    for (const row of this.state.db
+      .select({ runId: commandOutputs.boundRunId })
+      .from(commandOutputs)
+      .all()) {
+      if (row.runId) addressed.add(row.runId);
+    }
+
+    return addressed;
   }
 
   private referencedVersions(runIds: readonly string[]): string[] {
