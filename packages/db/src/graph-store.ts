@@ -50,6 +50,32 @@ export class ScopeRefused extends Error {
   }
 }
 
+/** Why a subject cannot be placed right now, distinct from an illegal wire. */
+export type PlacementRefusal = {
+  readonly reason: "node_deleted";
+  readonly message: string;
+};
+
+export class PlacementRefused extends Error {
+  constructor(readonly refusal: PlacementRefusal) {
+    super(refusal.message);
+    this.name = "PlacementRefused";
+  }
+}
+
+/**
+ * What a removal or restoration touched (principle 10). The edges travel with
+ * the node because they went down with it, and a caller announcing only the
+ * node would leave every subscriber drawing wires to something that is gone.
+ * `changed` is false when the gesture was a no-op — already removed, already
+ * back — so nothing announces a change that did not happen.
+ */
+export interface NodeRemoval {
+  readonly node: NodeRow;
+  readonly edges: readonly EdgeRow[];
+  readonly changed: boolean;
+}
+
 export interface PlaceNodeInput {
   readonly role: NodeRole;
   /** The object, command, or session this node stands for. */
@@ -87,7 +113,19 @@ export class GraphStore {
 
     // One gesture creates one thing (principle 9): placing the same subject
     // twice returns the same node rather than a second one.
-    if (existing) return existing;
+    if (existing) {
+      // — unless that node was removed. Silently handing it back would be a
+      // placement gesture that changes nothing visible, and resurrecting it
+      // here would quietly bring back the wires the removal took down (§10's
+      // undo is a gesture of its own, and it is the one that does that).
+      if (existing.deletedAt !== null) {
+        throw new PlacementRefused({
+          reason: "node_deleted",
+          message: `that ${existing.role} was removed from the board; restore it instead of placing it again`,
+        });
+      }
+      return existing;
+    }
 
     // Scope rule (§3.3): a local object is placed only in the workstream
     // that owns it. Commands and sessions are confined by construction —
@@ -142,6 +180,11 @@ export class GraphStore {
   /**
    * The same lookup for callers where "nothing is placed for this subject" is
    * an ordinary answer — an object can exist without being on the board.
+   *
+   * Removed nodes are returned, deliberately: a soft-deleted node is still
+   * addressable and still restorable (principle 10), and the callers that
+   * need to exclude it — {@link place} refuses, the board reads filter — say
+   * so themselves rather than being unable to see it at all.
    */
   findNodeFor(role: NodeRole, refId: string): NodeRow | undefined {
     return this.state.db
@@ -169,6 +212,18 @@ export class GraphStore {
     const toRow = this.node(input.to);
     const from = this.toGraphNode(fromRow);
     const to = this.toGraphNode(toRow);
+
+    // A removed node is not on the board, so nothing wires to or from it: the
+    // edge would be authored into a topology nobody can see, and restoring
+    // the node later would bring back wires its removal never took down.
+    for (const row of [fromRow, toRow]) {
+      if (row.deletedAt !== null) {
+        throw new ConnectionRefused({
+          reason: "node_deleted",
+          message: `that ${row.role} was removed from the board; restore it before wiring it`,
+        });
+      }
+    }
 
     const legality = checkConnection(from, to);
     if (!legality.legal) throw new ConnectionRefused(legality.refusal);
@@ -314,18 +369,35 @@ export class GraphStore {
     });
   }
 
-  /** Soft delete: authored state is recoverable, agent deletions too (§10). */
-  removeEdge(edgeId: string): void {
-    this.edge(edgeId);
+  /**
+   * Soft delete: authored state is recoverable, agent deletions too (§10).
+   *
+   * Context edges only. Provenance is recorded as work happens and never
+   * authored (§3.7), so there is no gesture that removes one — removing the
+   * record that a session created an object would make the graph lie about
+   * what happened, and no undo restores a history nobody can see is missing.
+   */
+  removeEdge(edgeId: string): EdgeRow {
+    const row = this.edge(edgeId);
+
+    if (row.kind !== "context") {
+      throw new ConnectionRefused({
+        reason: "provenance_not_authored",
+        message:
+          "provenance is recorded as work happens, never authored; it cannot be removed",
+      });
+    }
 
     this.state.db
       .update(edges)
       .set({ deletedAt: this.now() })
       .where(eq(edges.id, edgeId))
       .run();
+
+    return this.edge(edgeId);
   }
 
-  restoreEdge(edgeId: string): void {
+  restoreEdge(edgeId: string): EdgeRow {
     this.edge(edgeId);
 
     this.state.db
@@ -333,6 +405,8 @@ export class GraphStore {
       .set({ deletedAt: null })
       .where(eq(edges.id, edgeId))
       .run();
+
+    return this.edge(edgeId);
   }
 
   /**
@@ -341,13 +415,27 @@ export class GraphStore {
    * the node's own deletion time, so restoring the node puts back exactly what
    * its removal took down and nothing a later gesture removed separately.
    */
-  removeNode(nodeId: string): NodeRow {
+  removeNode(nodeId: string): NodeRemoval {
     const row = this.node(nodeId);
-    if (row.deletedAt !== null) return row;
+    if (row.deletedAt !== null) return { node: row, edges: [], changed: false };
 
     const at = this.now();
 
     return this.state.db.transaction(() => {
+      // Read the wires before stamping them, so the caller can announce each
+      // one: a subscriber that only heard "node deleted" would keep drawing
+      // edges to a node that is gone (§2.1's stream is what the canvas renders).
+      const touched = this.state.db
+        .select()
+        .from(edges)
+        .where(
+          and(
+            isNull(edges.deletedAt),
+            or(eq(edges.fromNode, nodeId), eq(edges.toNode, nodeId)),
+          ),
+        )
+        .all();
+
       this.state.db
         .update(edges)
         .set({ deletedAt: at })
@@ -365,17 +453,32 @@ export class GraphStore {
         .where(eq(nodes.id, nodeId))
         .run();
 
-      return this.node(nodeId);
+      return {
+        node: this.node(nodeId),
+        edges: touched.map((edge) => this.edge(edge.id)),
+        changed: true,
+      };
     });
   }
 
-  restoreNode(nodeId: string): NodeRow {
+  restoreNode(nodeId: string): NodeRemoval {
     const row = this.node(nodeId);
-    if (row.deletedAt === null) return row;
+    if (row.deletedAt === null) return { node: row, edges: [], changed: false };
 
     const at = row.deletedAt;
 
     return this.state.db.transaction(() => {
+      const touched = this.state.db
+        .select()
+        .from(edges)
+        .where(
+          and(
+            eq(edges.deletedAt, at),
+            or(eq(edges.fromNode, nodeId), eq(edges.toNode, nodeId)),
+          ),
+        )
+        .all();
+
       this.state.db
         .update(edges)
         .set({ deletedAt: null })
@@ -393,7 +496,11 @@ export class GraphStore {
         .where(eq(nodes.id, nodeId))
         .run();
 
-      return this.node(nodeId);
+      return {
+        node: this.node(nodeId),
+        edges: touched.map((edge) => this.edge(edge.id)),
+        changed: true,
+      };
     });
   }
 

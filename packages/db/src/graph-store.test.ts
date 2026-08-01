@@ -5,7 +5,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { humanAuthor, sessionAuthor, type SessionId } from "@plotroom/core";
 import { makeRenderings } from "@plotroom/core/testing";
 import { openDatabase, type PlotroomDatabase } from "./client.js";
-import { ConnectionRefused, GraphStore, ScopeRefused } from "./graph-store.js";
+import {
+  ConnectionRefused,
+  GraphStore,
+  PlacementRefused,
+  ScopeRefused,
+} from "./graph-store.js";
 import { ObjectStore } from "./object-store.js";
 
 let dir: string;
@@ -493,5 +498,91 @@ describe("removing a node takes its wires with it (principle 10)", () => {
 
   it("refuses to remove a node that does not exist", () => {
     expect(() => graph.removeNode("node_nope")).toThrow(/unknown node/);
+  });
+
+  it("reports the wires it took down, and reports a no-op as one", () => {
+    const target = place.command("cmd_1").id;
+    const source = place.content("obj_1").id;
+    const edge = graph.addContextEdge({
+      from: source,
+      to: target,
+      author: humanAuthor,
+    });
+
+    const removal = graph.removeNode(source);
+    expect(removal.changed).toBe(true);
+    expect(removal.edges.map((row) => row.id)).toEqual([edge.id]);
+
+    // Removing it again changes nothing, and says so — nothing downstream
+    // should announce a deletion that did not happen.
+    const again = graph.removeNode(source);
+    expect(again.changed).toBe(false);
+    expect(again.edges).toEqual([]);
+
+    const restoration = graph.restoreNode(source);
+    expect(restoration.changed).toBe(true);
+    expect(restoration.edges.map((row) => row.id)).toEqual([edge.id]);
+    expect(graph.restoreNode(source).changed).toBe(false);
+  });
+});
+
+describe("a removed node is off the board until it is restored", () => {
+  it("refuses to place a subject whose node was removed", () => {
+    const node = place.content("obj_1");
+    graph.removeNode(node.id);
+
+    expect(() => place.content("obj_1")).toThrow(PlacementRefused);
+    try {
+      place.content("obj_1");
+    } catch (err) {
+      expect((err as PlacementRefused).refusal.reason).toBe("node_deleted");
+    }
+
+    // The undo verb is the one that puts it back, and then placing works.
+    graph.restoreNode(node.id);
+    expect(place.content("obj_1").id).toBe(node.id);
+  });
+
+  it("refuses to wire a removed node, at either end", () => {
+    const source = place.content("obj_1").id;
+    const target = place.command("cmd_1").id;
+    graph.removeNode(source);
+
+    const wire = () =>
+      graph.addContextEdge({ from: source, to: target, author: humanAuthor });
+
+    expect(wire).toThrow(ConnectionRefused);
+    try {
+      wire();
+    } catch (err) {
+      expect((err as ConnectionRefused).refusal.reason).toBe("node_deleted");
+    }
+
+    graph.restoreNode(source);
+    graph.removeNode(target);
+
+    expect(wire).toThrow(/removed from the board/);
+  });
+});
+
+describe("provenance is recorded, never authored (§3.7)", () => {
+  it("refuses to remove a provenance edge", () => {
+    const command = place.command("cmd_1").id;
+    const output = place.content("out_1").id;
+    const edge = graph.recordProvenance(
+      command,
+      output,
+      "command_declares_output",
+    );
+
+    expect(() => graph.removeEdge(edge.id)).toThrow(ConnectionRefused);
+    try {
+      graph.removeEdge(edge.id);
+    } catch (err) {
+      expect((err as ConnectionRefused).refusal.reason).toBe(
+        "provenance_not_authored",
+      );
+    }
+    expect(graph.edge(edge.id).deletedAt).toBeNull();
   });
 });
