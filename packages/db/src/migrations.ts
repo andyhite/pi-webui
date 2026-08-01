@@ -707,4 +707,25 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX run_initiations_command_idx ON run_initiations (command_id);
     `,
   },
+  {
+    id: 8,
+    name: "arrangement_and_spend_caps",
+    sql: `
+      -- Durable placement (§5, Epic 3.1): the arrangement is authored state, so
+      -- it belongs in the one portable store like everything else — the canvas
+      -- kept it in the browser only because there was no server to keep it in.
+      -- NULL means no authored position: a derived initial arrangement decides
+      -- where such a node starts, and "reset arrangement" puts them all back to
+      -- NULL rather than inventing coordinates of its own (§12).
+      ALTER TABLE nodes ADD COLUMN x REAL;
+      ALTER TABLE nodes ADD COLUMN y REAL;
+
+      -- The spend cap the operator accepted at the run preview (§4.1, §8).
+      -- Recorded on the run because it is part of what the run was authorised to
+      -- do (§15-1): "what did we agree to spend on this" is unanswerable
+      -- afterwards if only the estimate was ever written down. NULL means no cap
+      -- was accepted; enforcing one is Phase 6's job, recording it is not.
+      ALTER TABLE runs ADD COLUMN spend_cap_micros INTEGER;
+    `,
+  },
 ];

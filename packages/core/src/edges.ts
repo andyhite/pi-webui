@@ -23,10 +23,28 @@ export interface GraphNode {
  * removing are gestures like any other, so this is what the state-change
  * stream carries when one happens.
  */
+/**
+ * Where a node sits on the board (§5). Canvas coordinates, owned by whoever
+ * arranged them: the product derives an initial arrangement and pushes nodes
+ * apart, but an arrangement at rest is authored state and stays where it was put.
+ */
+export interface NodePosition {
+  readonly x: number;
+  readonly y: number;
+}
+
 export interface PlacedNode extends GraphNode {
   /** The object, command, or session this node stands for. */
   readonly refId: string;
   readonly workstreamId: WorkstreamId | null;
+  /**
+   * The authored position, or null when none has been authored yet — a derived
+   * initial arrangement decides where such a node starts (§5).
+   *
+   * Optional only so a caller building a node need not invent coordinates for
+   * one; every node the API and the event stream carry states it explicitly.
+   */
+  readonly position?: NodePosition | null;
   readonly createdAt: number;
   /** Soft delete: authored state is recoverable (principle 10). */
   readonly deletedAt: number | null;

@@ -586,3 +586,58 @@ describe("provenance is recorded, never authored (§3.7)", () => {
     expect(graph.edge(edge.id).deletedAt).toBeNull();
   });
 });
+
+describe("durable placement (§5)", () => {
+  it("keeps an authored position, and starts with none", () => {
+    const node = graph.place({ role: "content", refId: "obj_1" });
+
+    expect(node.x).toBeNull();
+    expect(node.y).toBeNull();
+
+    const moved = graph.setPosition(node.id, { x: 120.5, y: -40 });
+
+    expect(moved.x).toBe(120.5);
+    expect(moved.y).toBe(-40);
+    expect(graph.node(node.id).x).toBe(120.5);
+  });
+
+  it("moves a whole selection in one act", () => {
+    const first = graph.place({ role: "content", refId: "obj_1" });
+    const second = graph.place({ role: "content", refId: "obj_2" });
+
+    graph.setPositions([
+      { nodeId: first.id, position: { x: 1, y: 2 } },
+      { nodeId: second.id, position: { x: 3, y: 4 } },
+    ]);
+
+    expect(graph.node(first.id).x).toBe(1);
+    expect(graph.node(second.id).y).toBe(4);
+  });
+
+  it("refuses the whole arrangement when one node in it is unknown", () => {
+    const node = graph.place({ role: "content", refId: "obj_1" });
+    graph.setPosition(node.id, { x: 9, y: 9 });
+
+    expect(() =>
+      graph.setPositions([
+        { nodeId: node.id, position: { x: 1, y: 1 } },
+        { nodeId: "node_nope", position: { x: 2, y: 2 } },
+      ]),
+    ).toThrow();
+
+    // Nothing moved: a half-applied arrangement is not what was asked for.
+    expect(graph.node(node.id).x).toBe(9);
+  });
+
+  it("resets to no position at all, inventing no coordinates of its own", () => {
+    const first = graph.place({ role: "content", refId: "obj_1" });
+    const second = graph.place({ role: "content", refId: "obj_2" });
+    graph.setPosition(first.id, { x: 1, y: 2 });
+
+    expect(graph.clearPositions()).toEqual({ cleared: 1 });
+
+    expect(graph.node(first.id).x).toBeNull();
+    expect(graph.node(second.id).y).toBeNull();
+    expect(graph.clearPositions()).toEqual({ cleared: 0 });
+  });
+});

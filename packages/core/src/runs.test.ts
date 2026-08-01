@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_RUN_RETENTION_POLICY,
+  estimateRunCost,
+  formatMicros,
   isRunCompactable,
+  DEFAULT_RUN_RETENTION_POLICY,
   type RunRetentionFacts,
 } from "./runs.js";
 
@@ -51,5 +53,94 @@ describe("the run-history retention rule (spec §4.4)", () => {
         policy: { keepPerDefinition: 1, windowSeconds: 50 },
       }),
     ).toBe(true);
+  });
+});
+
+describe("cost estimates state their basis and render as ranges (§4.1)", () => {
+  it("prices from this definition's own run history", () => {
+    const estimate = estimateRunCost({
+      inputTokens: 1_200,
+      priorRuns: [
+        { costMicros: 30_000, inputTokens: 1_000, outputTokens: 300 },
+        { costMicros: 10_000, inputTokens: 900, outputTokens: 200 },
+        { costMicros: 20_000, inputTokens: 1_100, outputTokens: 250 },
+      ],
+    });
+
+    expect(estimate.basis).toBe("prior-runs");
+    expect(estimate.priorRuns).toBe(3);
+    expect(estimate.range).toEqual({
+      lowMicros: 10_000,
+      highMicros: 30_000,
+      medianMicros: 20_000,
+    });
+    // A range and its basis, in words — never a bare number.
+    expect(estimate.description).toBe(
+      "$0.01–$0.03 based on 3 prior runs of this definition",
+    );
+  });
+
+  it("says so, and prices nothing, when there is no history", () => {
+    const estimate = estimateRunCost({ inputTokens: 4_000, priorRuns: [] });
+
+    expect(estimate.basis).toBe("input-size-only");
+    expect(estimate.priorRuns).toBe(0);
+    // Null rather than zero: there is no number to render, so none is offered.
+    expect(estimate.range).toBeNull();
+    expect(estimate.inputTokens).toBe(4_000);
+    expect(estimate.description).toMatch(/no priced history/);
+    expect(estimate.description).toMatch(/input size only/);
+  });
+
+  it("ignores runs whose runtime reported no cost, rather than averaging in a zero", () => {
+    const estimate = estimateRunCost({
+      inputTokens: 100,
+      priorRuns: [
+        { costMicros: 0, inputTokens: 100, outputTokens: 10 },
+        { costMicros: 50_000, inputTokens: 100, outputTokens: 10 },
+      ],
+    });
+
+    expect(estimate.basis).toBe("prior-runs");
+    expect(estimate.priorRuns).toBe(1);
+    expect(estimate.range).toEqual({
+      lowMicros: 50_000,
+      highMicros: 50_000,
+      medianMicros: 50_000,
+    });
+    // One run is still a range, and it says it is one run.
+    expect(estimate.description).toMatch(
+      /based on 1 prior run of this definition/,
+    );
+  });
+
+  it("keeps every priced run's evidence with no history at all priced away", () => {
+    const estimate = estimateRunCost({
+      inputTokens: 100,
+      priorRuns: [{ costMicros: 0, inputTokens: 100, outputTokens: 10 }],
+    });
+
+    // A history that recorded no money is no evidence about money.
+    expect(estimate.basis).toBe("input-size-only");
+    expect(estimate.range).toBeNull();
+  });
+
+  it("takes the median of an even number of priced runs", () => {
+    const estimate = estimateRunCost({
+      inputTokens: 10,
+      priorRuns: [
+        { costMicros: 1_000, inputTokens: 1, outputTokens: 1 },
+        { costMicros: 2_000, inputTokens: 1, outputTokens: 1 },
+        { costMicros: 3_000, inputTokens: 1, outputTokens: 1 },
+        { costMicros: 6_000, inputTokens: 1, outputTokens: 1 },
+      ],
+    });
+
+    expect(estimate.range?.medianMicros).toBe(2_500);
+  });
+
+  it("formats money from integer micros, once, for every surface", () => {
+    expect(formatMicros(1_500_000)).toBe("$1.50");
+    expect(formatMicros(2_500)).toBe("$0.0025");
   });
 });

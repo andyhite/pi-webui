@@ -54,6 +54,10 @@ export function toPlacedNode(row: NodeRow): PlacedNode {
     running: row.running,
     refId: row.refId,
     workstreamId: (row.workstreamId ?? null) as WorkstreamId | null,
+    // Always stated, never omitted: null is "no authored position yet" (§5), and
+    // a subscriber that had to guess which it was would guess differently from
+    // the one next to it.
+    position: row.x === null || row.y === null ? null : { x: row.x, y: row.y },
     createdAt: row.createdAt,
     deletedAt: row.deletedAt,
   };

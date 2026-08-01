@@ -743,3 +743,129 @@ describe("the content-budget verdict is recomputed, never remembered (§15-1)", 
     expect(runs.contentBudget(run.id).state).toBe("ok");
   });
 });
+
+describe("the run preview (§4.1)", () => {
+  it("says exactly what would execute, and records nothing", () => {
+    const command = wired(["first input", "second input"]);
+
+    const preview = runs.preview(command.command.id);
+
+    expect(preview.runnable).toBe(true);
+    expect(preview.inputs.map((each) => each.ordinal)).toEqual([1, 2]);
+    expect(preview.body.indexOf("first input")).toBeLessThan(
+      preview.body.indexOf("second input"),
+    );
+    expect(preview.bytes).toBe(Buffer.byteLength(preview.body, "utf8"));
+    expect(preview.estimatedTokens).toBeGreaterThan(0);
+    expect(preview.nextOrdinal).toBe(1);
+    expect(preview.configuration?.instruction).toBe(
+      "Implement it and open a pull request.",
+    );
+
+    // A preview is a read: no run exists afterwards, and the next run still
+    // takes ordinal 1.
+    expect(runs.history(command.command.id)).toHaveLength(0);
+    expect(runs.start({ commandId: command.command.id }).run.ordinal).toBe(1);
+  });
+
+  it("is byte-identical to what the run then records (§15-1)", () => {
+    const command = wired(["what the agent will read"]);
+
+    const preview = runs.preview(command.command.id);
+    const { run } = runs.start({ commandId: command.command.id });
+
+    expect(runs.assembledContent(run.id)).toBe(preview.body);
+    expect(run.inputs.map((each) => each.versionId)).toEqual(
+      preview.inputs.map((each) => each.versionId),
+    );
+  });
+
+  it("reports every blocker instead of refusing, and says it is not runnable", () => {
+    const definition = define({
+      parameters: [
+        { name: "repo", label: "Repository", type: "text", required: true },
+      ],
+    });
+    const command = wired(["input"], definition.id);
+    commands.proposeDefault(
+      command.command.id,
+      "repo",
+      "guessed",
+      "the target",
+    );
+
+    const preview = runs.preview(command.command.id);
+
+    expect(preview.runnable).toBe(false);
+    expect(preview.configuration).toBeNull();
+    expect(preview.blockers.map((each) => each.reason)).toEqual([
+      "parameters_unconfirmed",
+    ]);
+    // The same command refuses to start, with the reason the preview showed.
+    expect(() => runs.start({ commandId: command.command.id })).toThrow(
+      RunRefused,
+    );
+  });
+
+  it("reports a content budget refusal as a blocker, not as a truncation", () => {
+    const definition = define({
+      budget: { modelWindowTokens: 100, warnAtFraction: 0.5, hardCapTokens: 5 },
+    });
+    const command = wired(["y".repeat(400)], definition.id);
+
+    const preview = runs.preview(command.command.id);
+
+    expect(preview.runnable).toBe(false);
+    expect(preview.budget.state).toBe("refused");
+    expect(preview.blockers.map((each) => each.reason)).toEqual([
+      "content_budget",
+    ]);
+    // The content is still reported whole: the preview shows what was asked
+    // for, so removing an input is a decision the operator can make.
+    expect(preview.body).toContain("y".repeat(400));
+  });
+
+  it("prices from this definition's history once there is some", () => {
+    const definition = define();
+    const first = wired(["input"], definition.id);
+    const second = wired(["input"], definition.id);
+
+    expect(runs.preview(first.command.id).estimate.basis).toBe(
+      "input-size-only",
+    );
+
+    const one = runs.start({ commandId: first.command.id });
+    runs.complete(one.run.id, {
+      cost: { inputTokens: 100, outputTokens: 20, costMicros: 40_000 },
+    });
+    const two = runs.start({ commandId: second.command.id });
+    runs.complete(two.run.id, {
+      cost: { inputTokens: 90, outputTokens: 10, costMicros: 20_000 },
+    });
+
+    const estimate = runs.preview(first.command.id).estimate;
+    expect(estimate.basis).toBe("prior-runs");
+    expect(estimate.priorRuns).toBe(2);
+    expect(estimate.range).toEqual({
+      lowMicros: 20_000,
+      highMicros: 40_000,
+      medianMicros: 30_000,
+    });
+    expect(estimate.description).toMatch(/based on 2 prior runs/);
+  });
+
+  it("records the spend cap the operator accepted (§4.1, §8)", () => {
+    const command = wired(["input"]);
+
+    const { run } = runs.start({
+      commandId: command.command.id,
+      spendCapMicros: 250_000,
+    });
+
+    expect(run.spendCapMicros).toBe(250_000);
+    expect(runs.run(run.id).spendCapMicros).toBe(250_000);
+    // No cap accepted is null, never zero: zero would read as "spend nothing".
+    const other = runs.start({ commandId: wired(["input"]).command.id });
+    expect(other.run.spendCapMicros).toBeNull();
+  });
+});

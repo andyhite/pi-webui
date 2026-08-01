@@ -4,6 +4,7 @@ import {
   index,
   integer,
   primaryKey,
+  real,
   sqliteTable,
   text,
   uniqueIndex,
@@ -160,6 +161,13 @@ export const nodes = sqliteTable(
     refId: text("ref_id").notNull(),
     workstreamId: text("workstream_id"),
     running: integer("running", { mode: "boolean" }).notNull().default(false),
+    /**
+     * Durable placement (§5). Null means no authored position: a derived
+     * initial arrangement decides where the node starts, and resetting the
+     * arrangement returns these to null rather than to coordinates of its own.
+     */
+    x: real("x"),
+    y: real("y"),
     createdAt: integer("created_at")
       .notNull()
       .default(sql`(unixepoch())`),
@@ -439,6 +447,11 @@ export const runs = sqliteTable(
     costMicros: integer("cost_micros").notNull().default(0),
     outcomeProofJson: text("outcome_proof_json"),
     failureReason: text("failure_reason"),
+    /**
+     * The cap the operator accepted at the preview (§4.1, §8). Null means none
+     * was accepted; Phase 6 enforces it, and this records what was agreed.
+     */
+    spendCapMicros: integer("spend_cap_micros"),
     pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
     startedAt: integer("started_at")
       .notNull()

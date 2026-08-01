@@ -4,6 +4,7 @@ import {
   checkContentBudget,
   checkSubmission,
   effectiveAskPoints,
+  estimateRunCost,
   estimateTokens,
   isRunCompactable,
   newRunId,
@@ -13,6 +14,7 @@ import {
   type AssembledInput,
   type BudgetCheck,
   type Clock,
+  type CostEstimate,
   type CommandDefinitionId,
   type CommandId,
   type CompletionProof,
@@ -20,6 +22,7 @@ import {
   type NodeId,
   type ObjectId,
   type OutputAddress,
+  type PriorRunCost,
   type Run,
   type RunConfiguration,
   type RunCost,
@@ -68,12 +71,59 @@ export class RunRefused extends Error {
 
 export interface StartRunInput {
   readonly commandId: string;
+  /**
+   * The cap the operator accepted at the preview (§4.1). Recorded on the run;
+   * enforcing it is Phase 6's job.
+   */
+  readonly spendCapMicros?: number | null;
 }
 
 export interface StartedRun {
   readonly run: Run;
   /** Present when assembly approached the model's window (§3.5). */
   readonly warning: string | null;
+}
+
+/** One assembled input, with the title and content the preview shows (§4.1). */
+export interface PlannedInput extends AssembledInput {
+  readonly title: string;
+  readonly content: string;
+}
+
+/**
+ * What a run *would* be, computed without writing anything (§4.1).
+ *
+ * This is the one description of a run's inputs and configuration, and both the
+ * preview and {@link RunStore.start} read it — so "exactly what will execute"
+ * means exactly, and a preview that says a run is ready cannot be contradicted
+ * by the run refusing. The difference between them is only what they do with
+ * `blockers`: the preview reports them, the run path refuses on the first.
+ */
+export interface RunPlan {
+  readonly commandId: CommandId;
+  readonly definitionId: CommandDefinitionId;
+  readonly definitionName: string;
+  /** The ordered inputs, exactly as assembly would send them (§3.5). */
+  readonly inputs: readonly PlannedInput[];
+  /** The assembled content itself: what the agent would be given, whole. */
+  readonly body: string;
+  readonly bytes: number;
+  readonly estimatedTokens: number;
+  /** Warn / refuse / ok against this command's content budget (§3.5). */
+  readonly budget: BudgetCheck;
+  /** Null exactly when a parameter is still a proposal (§3.5). */
+  readonly configuration: RunConfiguration | null;
+  /** Everything that would refuse this run, in the order the run path checks. */
+  readonly blockers: readonly RunRefusal[];
+  /** The `n` this run would answer at, were it started now (§15-4). */
+  readonly nextOrdinal: number;
+}
+
+/** A plan plus what history says it will cost (§4.1). */
+export interface RunPreview extends RunPlan {
+  readonly estimate: CostEstimate;
+  /** True when nothing would refuse the run right now. */
+  readonly runnable: boolean;
 }
 
 export interface ProducedOutput {
@@ -151,6 +201,123 @@ export class RunStore {
     this.objects = new ObjectStore(state, now);
   }
 
+  /* --------------------------------------------------------------- the plan */
+
+  /**
+   * What a run of this command would be, written nowhere (§4.1).
+   *
+   * Every refusal the run path would raise is collected here instead of thrown,
+   * in the order the run path checks them, because the preview's job is to say
+   * what is missing — a preview that refused to tell you why you cannot run
+   * would be useless. {@link start} reads the same plan and refuses on the first
+   * blocker, which is what makes "exactly what will execute" true rather than
+   * aspirational.
+   *
+   * Nothing here provisions, starts, or records anything. It is a read.
+   */
+  plan(commandId: string): RunPlan {
+    const command = this.commands.command(commandId);
+    const definition = this.commands.definition(command.definitionId);
+    const node = this.commands.commandNode(commandId);
+    const blockers: RunRefusal[] = [];
+
+    // A soft-deleted command is off the board (principle 10): running it would
+    // produce history for work the human deleted. Restore it first.
+    if (command.deletedAt !== null) {
+      blockers.push({
+        reason: "command_deleted",
+        message: `command ${commandId} is deleted; restore it before running it`,
+      });
+    }
+
+    const parameters = this.commands.parameters(commandId);
+    if (!parameters.ready) {
+      const outstanding = [...parameters.unconfirmed, ...parameters.missing];
+      blockers.push({
+        reason: "parameters_unconfirmed",
+        message: `confirm ${outstanding.join(", ")} before running; a derived default is a proposal, not a value`,
+      });
+    }
+
+    const assembled = this.assemble(node.id);
+    blockers.push(...assembled.blockers);
+
+    const body = assembled.parts
+      .map((part) => `## ${part.title}\n\n${part.content}`)
+      .join("\n\n");
+
+    const estimatedTokens = estimateTokens(body);
+    const budget = checkContentBudget(estimatedTokens, definition.budget);
+    if (budget.state === "refused") {
+      blockers.push({ reason: "content_budget", message: budget.message });
+    }
+
+    return {
+      commandId: command.id as CommandId,
+      definitionId: definition.id,
+      definitionName: definition.name,
+      inputs: assembled.parts,
+      body,
+      bytes: Buffer.byteLength(body, "utf8"),
+      estimatedTokens,
+      budget,
+      configuration: parameters.ready
+        ? {
+            definitionId: definition.id,
+            definitionName: definition.name,
+            instruction: definition.instruction,
+            model: definition.model,
+            permissions: definition.permissions,
+            askPoints: effectiveAskPoints(definition.askPoints),
+            lifecycle: definition.lifecycle,
+            outcome: definition.outcome,
+            parameters: parameters.values,
+            budget: definition.budget,
+          }
+        : null,
+      blockers,
+      nextOrdinal: this.nextOrdinal(commandId),
+    };
+  }
+
+  /**
+   * The run preview (§4.1): the plan, plus what history says it will cost.
+   *
+   * The estimate is priced from this definition's own run history — which is
+   * what §15-1 is for — and states its basis in words. Where there is no priced
+   * history it says so and prices nothing, rather than turning input size into a
+   * number that looks like a quote (principle 7).
+   */
+  preview(commandId: string): RunPreview {
+    const plan = this.plan(commandId);
+
+    return {
+      ...plan,
+      estimate: estimateRunCost({
+        inputTokens: plan.estimatedTokens,
+        priorRuns: this.pricedHistory(plan.definitionId),
+      }),
+      runnable: plan.blockers.length === 0,
+    };
+  }
+
+  /**
+   * What every past run of this definition cost. Per definition rather than per
+   * command node, matching retention's own grain (§4.4) — the same recipe run in
+   * two workstreams is the same evidence about what it costs.
+   */
+  pricedHistory(definitionId: string): PriorRunCost[] {
+    return this.state.db
+      .select({
+        costMicros: runs.costMicros,
+        inputTokens: runs.inputTokens,
+        outputTokens: runs.outputTokens,
+      })
+      .from(runs)
+      .where(eq(runs.definitionId, definitionId))
+      .all();
+  }
+
   /**
    * Assemble and record a run. Refused rather than degraded when a parameter
    * is still a proposal, when an input is a placeholder nothing has produced
@@ -158,55 +325,22 @@ export class RunStore {
    * silently truncates and never silently guesses (§3.5, principle 12).
    */
   start(input: StartRunInput): StartedRun {
-    const command = this.commands.command(input.commandId);
+    const plan = this.plan(input.commandId);
 
-    // A soft-deleted command is off the board (principle 10): running it
-    // would produce history for work the human deleted. Restore it first.
-    if (command.deletedAt !== null) {
-      throw new RunRefused({
-        reason: "command_deleted",
-        message: `command ${input.commandId} is deleted; restore it before running it`,
-      });
-    }
+    // Every refusal the preview would have reported, in the order it reports
+    // them: the run path and the preview read one plan, so a preview that says
+    // "this will run" and a run that refuses cannot disagree (§4.1).
+    const blocker = plan.blockers[0];
+    if (blocker) throw new RunRefused(blocker);
 
-    const definition = this.commands.definition(command.definitionId);
-    const node = this.commands.commandNode(input.commandId);
-
-    const parameters = this.commands.parameters(input.commandId);
-    if (!parameters.ready) {
-      const outstanding = [...parameters.unconfirmed, ...parameters.missing];
+    const { inputs, body, budget, configuration } = plan;
+    if (configuration === null) {
+      // Unreachable: a null configuration always comes with a blocker above.
       throw new RunRefused({
         reason: "parameters_unconfirmed",
-        message: `confirm ${outstanding.join(", ")} before running; a derived default is a proposal, not a value`,
+        message: "this command has no runnable configuration",
       });
     }
-
-    const assembled = this.assemble(node.id);
-    const body = assembled
-      .map((part) => `## ${part.title}\n\n${part.content}`)
-      .join("\n\n");
-
-    const estimated = estimateTokens(body);
-    const budget = checkContentBudget(estimated, definition.budget);
-    if (budget.state === "refused") {
-      throw new RunRefused({
-        reason: "content_budget",
-        message: budget.message,
-      });
-    }
-
-    const configuration: RunConfiguration = {
-      definitionId: definition.id,
-      definitionName: definition.name,
-      instruction: definition.instruction,
-      model: definition.model,
-      permissions: definition.permissions,
-      askPoints: effectiveAskPoints(definition.askPoints),
-      lifecycle: definition.lifecycle,
-      outcome: definition.outcome,
-      parameters: parameters.values,
-      budget: definition.budget,
-    };
 
     const id = newRunId();
     const at = this.now();
@@ -223,18 +357,21 @@ export class RunStore {
         .values({
           id,
           commandId: input.commandId,
-          definitionId: definition.id,
+          definitionId: configuration.definitionId,
           ordinal: this.nextOrdinal(input.commandId),
           status: "running",
           assembledBlobId: blob.id,
           assembledHash: createHash("sha256").update(body).digest("hex"),
           assembledBytes: Buffer.byteLength(body, "utf8"),
           configJson: JSON.stringify(configuration),
+          // §4.1: the cap the operator accepted at the preview, recorded with
+          // the rest of what this run was authorised to do.
+          spendCapMicros: input.spendCapMicros ?? null,
           startedAt: at,
         })
         .run();
 
-      for (const part of assembled) {
+      for (const part of inputs) {
         this.state.db
           .insert(runInputs)
           .values({
@@ -251,7 +388,7 @@ export class RunStore {
 
       // §15 invariant 3's other half: a version a run consumed is retained, so
       // any two runs stay comparable forever (§4.4).
-      this.objects.markRunReferenced(assembled.map((part) => part.versionId));
+      this.objects.markRunReferenced(inputs.map((part) => part.versionId));
 
       return {
         run: this.run(id),
@@ -751,31 +888,32 @@ export class RunStore {
    * Assemble the ordered inputs (§3.5). A placeholder nothing has produced yet
    * blocks the run and says which one, rather than being quietly skipped.
    */
-  private assemble(
-    commandNodeId: string,
-  ): Array<
-    AssembledInput & { readonly title: string; readonly content: string }
-  > {
-    const assembled: Array<
-      AssembledInput & { readonly title: string; readonly content: string }
-    > = [];
+  private assemble(commandNodeId: string): {
+    readonly parts: PlannedInput[];
+    readonly blockers: RunRefusal[];
+  } {
+    const parts: PlannedInput[] = [];
+    const blockers: RunRefusal[] = [];
 
     for (const edge of this.graph.contextInputs(commandNodeId)) {
       const source = this.graph.node(edge.fromNode);
       const objectId = this.objectIdOf(source.refId);
 
       if (!objectId) {
-        throw new RunRefused({
+        // Reported rather than thrown, because the preview's job is to say what
+        // this command is waiting on (§4.1); the run path refuses on it.
+        blockers.push({
           reason: "blocked_input",
           message: `an input has not been produced yet; this command is blocked on ${source.refId}`,
         });
+        continue;
       }
 
       const content = this.objects.read(objectId);
       const object = this.objects.get(objectId);
 
-      assembled.push({
-        ordinal: edge.ordinal ?? assembled.length + 1,
+      parts.push({
+        ordinal: edge.ordinal ?? parts.length + 1,
         nodeId: source.id as NodeId,
         objectId: objectId as ObjectId,
         versionId: content.versionId as VersionId,
@@ -788,7 +926,7 @@ export class RunStore {
       });
     }
 
-    return assembled;
+    return { parts, blockers };
   }
 
   /**
@@ -952,6 +1090,7 @@ export class RunStore {
         outputTokens: row.outputTokens,
         costMicros: row.costMicros,
       },
+      spendCapMicros: row.spendCapMicros,
       pinned: row.pinned,
       startedAt: row.startedAt,
       endedAt: row.endedAt,

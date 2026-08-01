@@ -200,6 +200,8 @@ export function makeRun(overrides: Partial<Run> = {}): Run {
     configuration: makeRunConfiguration(),
     inputs: [],
     cost: ZERO_COST,
+    /** No cap accepted, which is what a run with no preview behind it means. */
+    spendCapMicros: null,
     pinned: false,
     startedAt: TEST_EPOCH,
     endedAt: TEST_EPOCH + 60,

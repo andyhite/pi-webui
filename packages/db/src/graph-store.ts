@@ -13,6 +13,7 @@ import {
   type ConnectionRefusal,
   type GraphNode,
   type NodeId,
+  type NodePosition,
   type NodeRole,
   type OutputCrossingFacts,
   type ProvenanceKind,
@@ -200,6 +201,61 @@ export class GraphStore {
       .set({ running })
       .where(eq(nodes.id, nodeId))
       .run();
+  }
+
+  /**
+   * Durable placement (§5): an arrangement at rest is authored state, so it is
+   * kept in the one portable store like everything else. `null` means "no
+   * authored position", which is what a derived initial arrangement fills in and
+   * what resetting the arrangement returns a node to.
+   */
+  setPosition(nodeId: string, position: NodePosition | null): NodeRow {
+    this.node(nodeId);
+
+    this.state.db
+      .update(nodes)
+      .set({ x: position?.x ?? null, y: position?.y ?? null })
+      .where(eq(nodes.id, nodeId))
+      .run();
+
+    return this.node(nodeId);
+  }
+
+  /**
+   * Move many nodes at once, which is what one drag of a selection is (§5). One
+   * transaction, so an arrangement is never half-applied — a partially moved
+   * selection is not something the operator asked for.
+   */
+  setPositions(
+    positions: readonly {
+      readonly nodeId: string;
+      readonly position: NodePosition | null;
+    }[],
+  ): NodeRow[] {
+    for (const entry of positions) this.node(entry.nodeId);
+
+    return this.state.db.transaction(() =>
+      positions.map((entry) => this.setPosition(entry.nodeId, entry.position)),
+    );
+  }
+
+  /**
+   * Reset the arrangement (§5, §12): forget every authored position, so the
+   * derived initial arrangement decides again. It invents no coordinates of its
+   * own — "reset" means back to none, not back to some other opinion.
+   */
+  clearPositions(): { readonly cleared: number } {
+    const placed = this.state.db
+      .select({ id: nodes.id })
+      .from(nodes)
+      .where(and(isNotNull(nodes.x), isNotNull(nodes.y)))
+      .all();
+
+    if (placed.length === 0) return { cleared: 0 };
+
+    this.state.db.update(nodes).set({ x: null, y: null }).run();
+
+    return { cleared: placed.length };
   }
 
   /**

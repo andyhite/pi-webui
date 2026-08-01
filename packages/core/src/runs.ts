@@ -103,10 +103,130 @@ export interface Run {
   readonly configuration: RunConfiguration;
   readonly inputs: readonly AssembledInput[];
   readonly cost: RunCost;
+  /**
+   * The spend cap the operator accepted before this ran (§4.1, §8), or null when
+   * none was accepted. Recorded beside what it actually cost, because an
+   * estimate nobody wrote down cannot be compared with the bill afterwards.
+   * Enforcing a cap is Phase 6's job; recording what was agreed is not.
+   */
+  readonly spendCapMicros: number | null;
   /** Pinning is the human's word for "never compact this" (§4.4). */
   readonly pinned: boolean;
   readonly startedAt: number;
   readonly endedAt: number | null;
+}
+
+/* --------------------------------------------------------- cost estimation */
+
+/**
+ * Cost estimation for the run preview (§4.1).
+ *
+ * "Estimates state their basis and render as ranges — 'based on N prior runs' /
+ * 'no history; input size only' — never a bare number."
+ *
+ * That sentence is the whole design. A bare number invites the reader to treat
+ * a guess as a quote, so this type cannot express one: there is no single
+ * figure, the basis is not optional, and the range is allowed to be absent
+ * entirely — which is what honesty looks like when nothing has ever been priced
+ * (principle 7: report what was observed, never infer past it).
+ */
+export const COST_ESTIMATE_BASES = [
+  /** Priced from this definition's own run history — the only real evidence. */
+  "prior-runs",
+  /**
+   * No priced history: the size of what will be sent is all that is known, so
+   * that is all that is reported. No money figure is invented from it.
+   */
+  "input-size-only",
+] as const;
+
+export type CostEstimateBasis = (typeof COST_ESTIMATE_BASES)[number];
+
+/** What one prior run of the same definition cost, as history recorded it. */
+export interface PriorRunCost {
+  readonly costMicros: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
+export interface CostRange {
+  /** Cheapest prior run of this definition, in micros. */
+  readonly lowMicros: number;
+  readonly highMicros: number;
+  /** The middle of the observed range, for a surface that wants one line. */
+  readonly medianMicros: number;
+}
+
+export interface CostEstimate {
+  readonly basis: CostEstimateBasis;
+  /** How many priced runs the range came from; 0 for input-size-only. */
+  readonly priorRuns: number;
+  /**
+   * Null exactly when nothing could be priced. A caller cannot accidentally
+   * render a zero: there is no number to render.
+   */
+  readonly range: CostRange | null;
+  /** What assembly will send, which is known either way (§3.5). */
+  readonly inputTokens: number;
+  /** The sentence a surface shows, stating the basis in words (§4.1). */
+  readonly description: string;
+}
+
+/**
+ * Estimate from history where there is history, and refuse to invent one where
+ * there is not.
+ *
+ * Only runs that actually recorded a cost count: a run whose runtime reported no
+ * cost contributes no evidence about money, and averaging a zero into the range
+ * would quietly halve the estimate. `§15-1` is what makes this possible at all —
+ * the history holds what each past run really consumed.
+ */
+export function estimateRunCost(input: {
+  readonly inputTokens: number;
+  readonly priorRuns: readonly PriorRunCost[];
+}): CostEstimate {
+  const priced = input.priorRuns
+    .filter((run) => run.costMicros > 0)
+    .map((run) => run.costMicros)
+    .sort((a, b) => a - b);
+
+  if (priced.length === 0) {
+    return {
+      basis: "input-size-only",
+      priorRuns: 0,
+      range: null,
+      inputTokens: input.inputTokens,
+      description: `no priced history for this definition; input size only (about ${input.inputTokens} tokens in)`,
+    };
+  }
+
+  const lowMicros = priced[0] as number;
+  const highMicros = priced[priced.length - 1] as number;
+  const middle = Math.floor(priced.length / 2);
+  const medianMicros =
+    priced.length % 2 === 1
+      ? (priced[middle] as number)
+      : Math.round(
+          ((priced[middle - 1] as number) + (priced[middle] as number)) / 2,
+        );
+
+  return {
+    basis: "prior-runs",
+    priorRuns: priced.length,
+    range: { lowMicros, highMicros, medianMicros },
+    inputTokens: input.inputTokens,
+    description: `${formatMicros(lowMicros)}–${formatMicros(highMicros)} based on ${priced.length} prior ${
+      priced.length === 1 ? "run" : "runs"
+    } of this definition`,
+  };
+}
+
+/**
+ * Money as text, from integer micros. Kept beside the estimate so no surface
+ * invents its own rounding and makes two screens disagree about the same run.
+ */
+export function formatMicros(micros: number): string {
+  return `$${(micros / 1_000_000).toFixed(micros >= 10_000 ? 2 : 4)}`;
 }
 
 /** One produced output of one run, addressable as `command/name@n` (§15-4). */
