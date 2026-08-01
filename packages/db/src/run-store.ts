@@ -37,9 +37,12 @@ import {
   commandOutputs,
   objectVersions,
   objects,
+  runInitiations,
   runInputs,
   runOutputs,
+  runSubmissions,
   runs,
+  type RunInitiationRow,
   type RunRow,
 } from "./schema.js";
 
@@ -51,7 +54,9 @@ export type RunRefusal =
   | { readonly reason: "parameters_unconfirmed"; readonly message: string }
   | { readonly reason: "blocked_input"; readonly message: string }
   | { readonly reason: "content_budget"; readonly message: string }
-  | { readonly reason: "already_ended"; readonly message: string };
+  | { readonly reason: "already_ended"; readonly message: string }
+  | { readonly reason: "initiation_key_reused"; readonly message: string }
+  | { readonly reason: "initiation_in_flight"; readonly message: string };
 
 export class RunRefused extends Error {
   constructor(readonly refusal: RunRefusal) {
@@ -81,6 +86,30 @@ export interface CompleteRunInput {
   readonly cost?: RunCost;
   /** World-condition results, evaluated by whoever can observe them (§3.5). */
   readonly evaluations?: readonly ConditionEvaluation[];
+}
+
+export interface RecordSubmissionInput {
+  readonly runId: string;
+  readonly sessionId?: string | null;
+  readonly accepted: boolean;
+  readonly evaluations: readonly ConditionEvaluation[];
+  /** Present exactly when the submission was not accepted (§3.5). */
+  readonly feedback?: string | null;
+}
+
+export type InitiationClaim =
+  | { readonly state: "claimed" }
+  | { readonly state: "settled"; readonly initiation: RunInitiationRow }
+  | { readonly state: "in_flight"; readonly initiation: RunInitiationRow };
+
+export interface RunSubmission {
+  readonly runId: RunId;
+  readonly ordinal: number;
+  readonly sessionId: string | null;
+  readonly at: number;
+  readonly accepted: boolean;
+  readonly evaluations: readonly ConditionEvaluation[];
+  readonly feedback: string | null;
 }
 
 export type CompleteResult =
@@ -329,9 +358,144 @@ export class RunStore {
     return this.end(runId, "out_of_budget", cost, null);
   }
 
-  /** A human stopped it. */
-  stop(runId: string, cost?: RunCost): Run {
-    return this.end(runId, "stopped", cost, null);
+  /**
+   * A human stopped it, or the work stopped without failing and without
+   * proving its outcome. `reason` is recorded verbatim when there is one: a run
+   * cut short by a restart says "interrupted" rather than looking like a
+   * decision somebody made (principle 11).
+   *
+   * The session is where the end-state taxonomy lives (§3.6), and it keeps the
+   * distinction exactly; `runs.status` has no `interrupted` member, so the
+   * reason string is what carries it here until a schema change can widen it.
+   */
+  stop(runId: string, cost?: RunCost, reason?: string): Run {
+    return this.end(runId, "stopped", cost, reason ?? null);
+  }
+
+  /**
+   * One submission attempt in the producing completion loop (§3.5): what was
+   * checked, what held, and the feedback the session got back. Recorded whole,
+   * so "how many tries did this take, and why" is answerable afterwards (§6.4)
+   * without re-evaluating anything — proof stays point-in-time.
+   */
+  recordSubmission(input: RecordSubmissionInput): RunSubmission {
+    const at = this.now();
+
+    return this.state.db.transaction(() => {
+      const max = this.state.db
+        .select({ max: sql<number | null>`MAX(${runSubmissions.ordinal})` })
+        .from(runSubmissions)
+        .where(eq(runSubmissions.runId, input.runId))
+        .get();
+      const ordinal = (max?.max ?? 0) + 1;
+
+      this.state.db
+        .insert(runSubmissions)
+        .values({
+          runId: input.runId,
+          ordinal,
+          sessionId: input.sessionId ?? null,
+          at,
+          accepted: input.accepted,
+          evaluationsJson: JSON.stringify(input.evaluations),
+          feedback: input.feedback ?? null,
+        })
+        .run();
+
+      return {
+        runId: input.runId as RunId,
+        ordinal,
+        sessionId: input.sessionId ?? null,
+        at,
+        accepted: input.accepted,
+        evaluations: input.evaluations,
+        feedback: input.feedback ?? null,
+      };
+    });
+  }
+
+  /* ------------------------------------------------- idempotent initiation */
+
+  /**
+   * Claim a client-supplied initiation key (principle 9: one gesture, one run
+   * and one session, across retries and reconnects).
+   *
+   * Three answers, and no fourth: the key is new and now claimed; the key
+   * already produced a run, which is what a retry gets handed back; or the key
+   * is claimed but not settled, meaning the first attempt is still in flight and
+   * a second must not start a second run.
+   */
+  claimInitiation(key: string, commandId: string): InitiationClaim {
+    return this.state.db.transaction(() => {
+      const existing = this.initiation(key);
+
+      if (existing) {
+        if (existing.commandId !== commandId) {
+          throw new RunRefused({
+            reason: "initiation_key_reused",
+            message: `initiation key ${key} already started a run of a different command; use a new key`,
+          });
+        }
+        return existing.settledAt === null || existing.runId === null
+          ? { state: "in_flight" as const, initiation: existing }
+          : { state: "settled" as const, initiation: existing };
+      }
+
+      this.state.db
+        .insert(runInitiations)
+        .values({ initiationKey: key, commandId, createdAt: this.now() })
+        .run();
+
+      return { state: "claimed" as const };
+    });
+  }
+
+  /** The gesture produced this run and this session; a retry now replays it. */
+  settleInitiation(key: string, runId: string, sessionId: string): void {
+    this.state.db
+      .update(runInitiations)
+      .set({ runId, sessionId, settledAt: this.now() })
+      .where(eq(runInitiations.initiationKey, key))
+      .run();
+  }
+
+  /**
+   * The gesture failed before it produced anything, so the key is free again.
+   * Holding it would turn one refused attempt into a permanently unusable key.
+   */
+  releaseInitiation(key: string): void {
+    this.state.db
+      .delete(runInitiations)
+      .where(eq(runInitiations.initiationKey, key))
+      .run();
+  }
+
+  initiation(key: string): RunInitiationRow | undefined {
+    return this.state.db
+      .select()
+      .from(runInitiations)
+      .where(eq(runInitiations.initiationKey, key))
+      .get();
+  }
+
+  submissions(runId: string): RunSubmission[] {
+    return this.state.db
+      .select()
+      .from(runSubmissions)
+      .where(eq(runSubmissions.runId, runId))
+      .orderBy(runSubmissions.ordinal)
+      .all()
+      .map((row) => ({
+        runId: row.runId as RunId,
+        ordinal: row.ordinal,
+        sessionId: row.sessionId,
+        at: row.at,
+        accepted: row.accepted,
+        evaluations: JSON.parse(
+          row.evaluationsJson,
+        ) as readonly ConditionEvaluation[],
+        feedback: row.feedback,
+      }));
   }
 
   run(runId: string): Run {

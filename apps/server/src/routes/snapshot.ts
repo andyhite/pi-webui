@@ -37,7 +37,7 @@ import {
  */
 export function snapshotRoutes(stores: ApiStores): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
-  const { db, bus, objects, graph, workstreams, commands } = stores;
+  const { db, bus, objects, graph, workstreams, commands, sessions } = stores;
 
   app.get("/snapshot", (c) => {
     // Captured before the read and never touched again: nothing else can
@@ -63,6 +63,16 @@ export function snapshotRoutes(stores: ApiStores): Hono<ApiEnv> {
       commandDefinitions: commands.definitions(),
       commands: commands.liveCommands().map((row) => toCommandNode(row)),
       outputs: commands.allOutputs(),
+      // Sessions travel with the phase PlotRoom derived, the same shape the
+      // `session` event carries, so a resync lands on the same picture the
+      // stream would have produced. Runs are deliberately absent: history is
+      // per command and unbounded, so it is read at
+      // `GET /api/commands/:id/runs` rather than shipped with every snapshot.
+      sessions: sessions.list().map((stored) => ({
+        session: stored.session,
+        runId: stored.runId,
+        phase: stored.phase,
+      })),
     }));
 
     return c.json(snapshot);

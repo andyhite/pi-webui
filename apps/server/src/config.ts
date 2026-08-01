@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_BRANCH_TEMPLATE } from "@plotroom/core";
 
 /**
  * Server configuration (Epic 2.1, spec §11/§12).
@@ -34,6 +35,53 @@ export interface ServerConfig {
   /** Directory of the built renderer to serve single-origin (Epic 3.0). */
   readonly staticDir: string;
   readonly logLevel: "debug" | "info" | "warn" | "error";
+  /** Which session runtime runs work (decision 0001, Epic 4.1). */
+  readonly runtime: RuntimeConfig;
+  /** How the first run provisions a workspace (§3.4, Epic 4.3). */
+  readonly workspace: WorkspaceConfig;
+}
+
+export interface RuntimeConfig {
+  /**
+   * The adapter id. `pi-coding-agent` is adapter v1; `scripted` replays a
+   * declared script and is opt-in, so a default install cannot run one.
+   */
+  readonly adapterId: string;
+  /** The pi binary, for hosts that keep it somewhere other than `PATH`. */
+  readonly piProgram: string;
+  /** A script file the scripted runtime replays when a launch supplies none. */
+  readonly scriptPath: string | null;
+}
+
+/**
+ * Where a workspace comes from at first run. There is no discovery UI yet
+ * (§3.4's scan is Epic 4.3's, its surface is later), so the repository to branch
+ * from is configured; a run with none configured is refused with that reason
+ * rather than run somewhere arbitrary.
+ */
+export interface WorkspaceConfig {
+  readonly kind: string;
+  /** An existing checkout to branch from, shared via `git worktree`. */
+  readonly repositoryPath: string | null;
+  /** Cloned from when there is no local checkout to share. */
+  readonly remoteUrl: string | null;
+  /** Where provisioned workspaces live; one directory per workstream. */
+  readonly directory: string;
+  readonly branchTemplate: string;
+  readonly baseRef: string | null;
+  /**
+   * The settings-override half of §3.4's setup declaration. The in-repository
+   * reader is Track C's deferral, so this is the only source for now — and it
+   * is the one that wins where both exist.
+   */
+  readonly setup: WorkspaceSetupConfig | null;
+}
+
+export interface WorkspaceSetupConfig {
+  readonly program: string;
+  readonly args: readonly string[];
+  readonly workingSubdirectory: string;
+  readonly label: string;
 }
 
 export const DEFAULT_PORT = 4600;
@@ -82,6 +130,42 @@ export interface ServerConfigOverrides {
   readonly trustedOrigins?: readonly string[];
   readonly staticDir?: string;
   readonly logLevel?: ServerConfig["logLevel"];
+  readonly runtime?: Partial<RuntimeConfig>;
+  readonly workspace?: Partial<WorkspaceConfig>;
+}
+
+export const DEFAULT_RUNTIME_ADAPTER = "pi-coding-agent";
+
+function parseSetup(value: string | undefined): WorkspaceSetupConfig | null {
+  if (!value) return null;
+
+  // Malformed configuration is reported, never guessed at: a setup step that
+  // silently did not run would let a not-ready workspace look ready (§3.4).
+  const raw: unknown = JSON.parse(value);
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("PLOTROOM_WORKSPACE_SETUP must be a JSON object");
+  }
+
+  const record = raw as Record<string, unknown>;
+  const program = record["program"];
+  if (typeof program !== "string" || program.length === 0) {
+    throw new Error("PLOTROOM_WORKSPACE_SETUP needs a program");
+  }
+
+  const args = Array.isArray(record["args"])
+    ? record["args"].filter((one): one is string => typeof one === "string")
+    : [];
+
+  return {
+    program,
+    args,
+    workingSubdirectory:
+      typeof record["workingSubdirectory"] === "string"
+        ? record["workingSubdirectory"]
+        : "",
+    label:
+      typeof record["label"] === "string" ? record["label"] : "workspace setup",
+  };
 }
 
 /**
@@ -113,5 +197,47 @@ export function loadServerConfig(
     staticDir:
       overrides.staticDir ?? env.PLOTROOM_STATIC_DIR ?? defaultStaticDir(),
     logLevel: overrides.logLevel ?? parseLogLevel(env.PLOTROOM_LOG_LEVEL),
+    runtime: {
+      adapterId:
+        overrides.runtime?.adapterId ??
+        env.PLOTROOM_RUNTIME ??
+        DEFAULT_RUNTIME_ADAPTER,
+      piProgram:
+        overrides.runtime?.piProgram ?? env.PLOTROOM_PI_PROGRAM ?? "pi",
+      scriptPath:
+        overrides.runtime?.scriptPath !== undefined
+          ? overrides.runtime.scriptPath
+          : (env.PLOTROOM_RUNTIME_SCRIPT ?? null),
+    },
+    workspace: {
+      kind: overrides.workspace?.kind ?? env.PLOTROOM_WORKSPACE_KIND ?? "git",
+      repositoryPath:
+        overrides.workspace?.repositoryPath !== undefined
+          ? overrides.workspace.repositoryPath
+          : (env.PLOTROOM_WORKSPACE_REPO ?? null),
+      remoteUrl:
+        overrides.workspace?.remoteUrl !== undefined
+          ? overrides.workspace.remoteUrl
+          : (env.PLOTROOM_WORKSPACE_REMOTE ?? null),
+      directory:
+        overrides.workspace?.directory ??
+        env.PLOTROOM_WORKSPACE_DIR ??
+        join(
+          overrides.stateDir ?? env.PLOTROOM_STATE_DIR ?? defaultStateDir(),
+          "workspaces",
+        ),
+      branchTemplate:
+        overrides.workspace?.branchTemplate ??
+        env.PLOTROOM_WORKSPACE_BRANCH_TEMPLATE ??
+        DEFAULT_BRANCH_TEMPLATE,
+      baseRef:
+        overrides.workspace?.baseRef !== undefined
+          ? overrides.workspace.baseRef
+          : (env.PLOTROOM_WORKSPACE_BASE_REF ?? null),
+      setup:
+        overrides.workspace?.setup !== undefined
+          ? overrides.workspace.setup
+          : parseSetup(env.PLOTROOM_WORKSPACE_SETUP),
+    },
   };
 }

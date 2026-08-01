@@ -1,9 +1,11 @@
-import type { Author } from "@plotroom/core";
+import { systemClock, type Author, type Clock } from "@plotroom/core";
 import {
   CommandStore,
   GraphStore,
   ObjectStore,
   RunStore,
+  SessionStore,
+  WorkspaceStore,
   WorkstreamStore,
   type PlotroomDatabase,
 } from "@plotroom/db";
@@ -19,22 +21,40 @@ import { badRequest } from "../http/errors.js";
 export interface ApiStores {
   readonly db: PlotroomDatabase;
   readonly bus: EventBus;
+  /**
+   * Unix seconds, the vocabulary every `created_at` in the schema uses. Shared
+   * with the stores so a test that drives time drives all of it (retention,
+   * idempotency, and end timestamps are untestable against a real clock).
+   */
+  readonly clock: Clock;
   readonly objects: ObjectStore;
   readonly graph: GraphStore;
   readonly workstreams: WorkstreamStore;
   readonly commands: CommandStore;
   readonly runs: RunStore;
+  readonly sessions: SessionStore;
+  readonly workspaces: WorkspaceStore;
 }
 
-export function createStores(db: PlotroomDatabase, bus: EventBus): ApiStores {
+export function createStores(
+  db: PlotroomDatabase,
+  bus: EventBus,
+  clock: Clock = systemClock,
+): ApiStores {
   return {
     db,
     bus,
-    objects: new ObjectStore(db),
-    graph: new GraphStore(db),
-    workstreams: new WorkstreamStore(db),
-    commands: new CommandStore(db),
-    runs: new RunStore(db),
+    clock,
+    objects: new ObjectStore(db, clock),
+    graph: new GraphStore(db, clock),
+    workstreams: new WorkstreamStore(db, clock),
+    commands: new CommandStore(db, clock),
+    runs: new RunStore(db, clock),
+    sessions: new SessionStore(db, clock),
+    // The workspace record's own vocabulary is milliseconds (§3.4), so its
+    // clock is the same instant at a different resolution, never a second
+    // source of time.
+    workspaces: new WorkspaceStore(db, () => clock() * 1000),
   };
 }
 

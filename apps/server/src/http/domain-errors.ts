@@ -6,6 +6,7 @@ import {
   PublishRefused,
   RunRefused,
   ScopeRefused,
+  WorkspaceRefused,
 } from "@plotroom/db";
 import { ApiError, notFound, refused } from "./errors.js";
 
@@ -32,7 +33,10 @@ export function toApiError(err: unknown): ApiError | null {
     err instanceof PlacementRefused ||
     err instanceof LifecycleRefused ||
     err instanceof PublishRefused ||
-    err instanceof RunRefused
+    err instanceof RunRefused ||
+    // The readiness gate and the workspace boundary refuse the same way: with
+    // the predicate's own visible reason (§3.4).
+    err instanceof WorkspaceRefused
   ) {
     return refused(err.refusal);
   }

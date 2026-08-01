@@ -34,7 +34,21 @@ export function startServer(config = loadServerConfig()) {
 
   const app = new Hono();
   const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
-  configureApp(app, { config, db, bus, logger, upgradeWebSocket });
+  const runtime = configureApp(app, {
+    config,
+    db,
+    bus,
+    logger,
+    upgradeWebSocket,
+  });
+
+  // Principle 11, before anything is served: a session that was in flight when
+  // the last process died is recorded as **interrupted** — not stopped, not
+  // failed — so nobody is ever shown a session the product believes is running.
+  // Resuming one is a gesture, never automatic (principle 2).
+  const interrupted = runtime.runs.recoverInterrupted(
+    "the server restarted while this session was in flight",
+  );
 
   const server = serve({
     fetch: app.fetch,
@@ -55,13 +69,24 @@ export function startServer(config = loadServerConfig()) {
     db,
     bus,
     logger,
-    close: () =>
-      new Promise<void>((resolve) => {
+    /** Resolves once boot-time interruption has been recorded. */
+    recovered: interrupted,
+    hub: runtime.hub,
+    runs: runtime.runs,
+    close: async () => {
+      await interrupted;
+      // Let go of the live sessions without ending them: they are genuinely in
+      // flight, and the next start is what names them interrupted. Ending them
+      // here would record a stop nobody asked for.
+      runtime.hub.detachAll();
+
+      await new Promise<void>((resolve) => {
         server.close(() => {
           db.close();
           resolve();
         });
-      }),
+      });
+    },
   };
 }
 

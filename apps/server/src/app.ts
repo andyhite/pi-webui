@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { UpgradeWebSocket } from "hono/ws";
 import type { PlotroomDatabase } from "@plotroom/db";
 import type { ServerConfig } from "./config.js";
+import { createConditionChecks } from "./conditions/registry.js";
 import type { EventBus } from "./events/bus.js";
 import { actorMiddleware } from "./http/actor.js";
 import { toApiError } from "./http/domain-errors.js";
@@ -19,9 +20,16 @@ import { healthRoutes } from "./routes/health.js";
 import { logLevelRoutes } from "./routes/log-level.js";
 import { objectRoutes } from "./routes/objects.js";
 import { restorableRoutes } from "./routes/restorable.js";
+import { runRoutes } from "./routes/runs.js";
+import { sessionRoutes } from "./routes/sessions.js";
 import { snapshotRoutes } from "./routes/snapshot.js";
 import { workstreamRoutes } from "./routes/workstreams.js";
+import { RunService } from "./runs/service.js";
+import { createRuntimeRegistry } from "./runtime/index.js";
+import { SessionHub } from "./sessions/hub.js";
 import { serveRenderer } from "./static/serve.js";
+import { nodeCommandExec } from "./workspaces/exec.js";
+import { createWorkspaceKinds } from "./workspaces/kinds.js";
 import { mountWsRoute } from "./ws/route.js";
 
 export interface AppDependencies {
@@ -33,13 +41,23 @@ export interface AppDependencies {
 }
 
 /**
+ * What the run spine needs after the app is wired: the live session handles (so
+ * shutdown can let go of them without ending anything) and the service that
+ * recovers interrupted sessions at start (principle 11).
+ */
+export interface AppRuntime {
+  readonly hub: SessionHub;
+  readonly runs: RunService;
+}
+
+/**
  * Wires routes and middleware onto an already-constructed `Hono` instance.
  * Takes the instance (rather than constructing and returning one) because
  * `@hono/node-ws`'s `createNodeWebSocket` must be called with the app before
  * this module can hand it the resulting `upgradeWebSocket` — see
  * `apps/server/src/index.ts` for the wiring order.
  */
-export function configureApp(app: Hono, deps: AppDependencies): void {
+export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   const { config, db, bus, logger, upgradeWebSocket } = deps;
   const originPolicy = { trustedOrigins: config.trustedOrigins };
 
@@ -59,12 +77,29 @@ export function configureApp(app: Hono, deps: AppDependencies): void {
 
   const stores = createStores(db, bus);
 
+  // The run spine (Epics 4.1/4.2): one adapter registry over the runtime seam,
+  // one workspace-kind registry over the mechanism contract, one condition-check
+  // registry over the world conditions a submission is proven against.
+  const hub = new SessionHub();
+  const runs = new RunService({
+    config,
+    stores,
+    bus,
+    logger,
+    runtimes: createRuntimeRegistry(config, logger),
+    workspaceKinds: createWorkspaceKinds({ scratchDirectory: config.stateDir }),
+    conditions: createConditionChecks(nodeCommandExec()),
+    hub,
+  });
+
   app.route("/api", healthRoutes(db));
   app.route("/api", logLevelRoutes(logger));
   app.route("/api", workstreamRoutes(stores));
   app.route("/api", objectRoutes(stores));
   app.route("/api", graphRoutes(stores));
   app.route("/api", commandRoutes(stores));
+  app.route("/api", runRoutes(stores, runs));
+  app.route("/api", sessionRoutes(stores, runs));
   app.route("/api", restorableRoutes(stores));
   app.route("/api", snapshotRoutes(stores));
 
@@ -122,4 +157,6 @@ export function configureApp(app: Hono, deps: AppDependencies): void {
       500,
     );
   });
+
+  return { hub, runs };
 }
