@@ -5,6 +5,7 @@ import {
   boot,
   cleanupHarnesses,
   command,
+  endedSession,
   list,
   repository,
   run,
@@ -257,6 +258,209 @@ describe("a session destroying authored state (§6.6, principle 10)", () => {
     expect(at(await harness.ok(`/objects/${otherId}`), "object.id")).toBe(
       otherId,
     );
+  });
+});
+
+describe("the call an approval blocks (§6.6)", () => {
+  /**
+   * A session that calls a tool nothing declares — so its write extent is
+   * unbounded, the gate cannot answer it from claims, and §6.6 asks. The script
+   * plays on once the answer arrives, which is what makes "the call unblocked"
+   * an observation rather than an inference.
+   */
+  const callsAGatedTool: RuntimeScript = {
+    acts: [
+      {
+        on: "start",
+        steps: [
+          { observation: { kind: "turn-started", turn: 1 } },
+          { call: { toolName: "shell", input: { command: "rm -rf build" } } },
+          {
+            observation: {
+              kind: "turn-ended",
+              turn: 1,
+              usage: { inputTokens: 8, outputTokens: 2, costUsd: 0.001 },
+            },
+          },
+          {
+            observation: {
+              kind: "session-ended",
+              reason: { kind: "ended-by-user" },
+            },
+          },
+        ],
+      },
+    ],
+  };
+
+  async function blockedOnApproval(harness: Harness): Promise<{
+    readonly sessionId: string;
+    readonly approvalId: string;
+  }> {
+    const fixture = await command(harness, { lifecycle: "open" });
+    const started = await run(harness, fixture.commandId, callsAGatedTool);
+    const sessionId = str(started, "session.id");
+
+    const approvalId = await waitFor(async () => {
+      const rows = await pendingApprovals(harness);
+      const row = rows.find(
+        (entry) => at(entry, "approval.sessionId") === sessionId,
+      );
+      return row === undefined ? null : str(row, "approval.id");
+    }, "the gated call to raise an approval");
+
+    return { sessionId, approvalId };
+  }
+
+  async function observations(
+    harness: Harness,
+    sessionId: string,
+  ): Promise<unknown[]> {
+    return list(
+      await harness.ok(`/sessions/${sessionId}/observations`),
+      "observations",
+    );
+  }
+
+  it("leaves the runtime call blocked until a human answers, then allows it", async () => {
+    const harness = await boot(repository());
+    const { sessionId, approvalId } = await blockedOnApproval(harness);
+
+    // Blocked, not refused: the refusal that accompanies a raise is never sent,
+    // because sending it would settle the call before anybody was asked.
+    const waiting = await harness.ok(`/sessions/${sessionId}`);
+    expect(at(waiting, "session.end")).toBeNull();
+    expect(at(waiting, "status.phase.kind")).toBe("waiting-approval");
+    const before = await observations(harness, sessionId);
+    expect(
+      before.some(
+        (entry) => at(entry, "observation.kind") === "request-settled",
+      ),
+    ).toBe(false);
+
+    const answered = await harness.ok(`/approvals/${approvalId}/answer`, {
+      method: "POST",
+      body: { decision: "approve-once" },
+    });
+    // The blocked call really was told: `settled` is the runtime taking it.
+    expect(at(answered, "settled")).toBe(true);
+
+    // And the session carried on from where it was waiting.
+    const ended = await endedSession(harness, sessionId);
+    expect(at(ended, "session.end.kind")).toBe("ended-by-user");
+    const after = await observations(harness, sessionId);
+    const settled = after.find(
+      (entry) => at(entry, "observation.kind") === "request-settled",
+    );
+    expect(at(settled, "observation.outcome.kind")).toBe("allow");
+    expect(
+      after.some((entry) =>
+        String(at(entry, "observation.text") ?? "").includes(
+          "shell was approved",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("returns a denial to the session structurally, as feedback rather than failure", async () => {
+    const harness = await boot(repository());
+    const { sessionId, approvalId } = await blockedOnApproval(harness);
+
+    await harness.ok(`/approvals/${approvalId}/answer`, {
+      method: "POST",
+      body: { decision: "deny", reason: "not on this branch" },
+    });
+
+    const ended = await endedSession(harness, sessionId);
+    // Denied is not failed: the session was told how to proceed and ended the
+    // way its script says, not with an error (§6.6).
+    expect(at(ended, "session.end.kind")).toBe("ended-by-user");
+
+    const after = await observations(harness, sessionId);
+    const settled = after.find(
+      (entry) => at(entry, "observation.kind") === "request-settled",
+    );
+    expect(at(settled, "observation.outcome.kind")).toBe("deny");
+    // The operator's own words reach the model, structurally.
+    expect(String(at(settled, "observation.outcome.reason"))).toContain(
+      "not on this branch",
+    );
+    expect(
+      after.some((entry) =>
+        String(at(entry, "observation.text") ?? "").includes(
+          "not on this branch",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("settles a re-raise of a denied call instead of wedging on it", async () => {
+    const harness = await boot(repository());
+
+    // Two gated calls in one act. The scripted runtime numbers a request from
+    // the pending set, which is empty again once the first is settled, so the
+    // second call arrives under **the same call id** — which is precisely the
+    // re-raise a real runtime performs when it retries.
+    const twice: RuntimeScript = {
+      acts: [
+        {
+          on: "start",
+          steps: [
+            { observation: { kind: "turn-started", turn: 1 } },
+            { call: { toolName: "shell", input: { command: "one" } } },
+            { call: { toolName: "shell", input: { command: "two" } } },
+            {
+              observation: {
+                kind: "turn-ended",
+                turn: 1,
+                usage: { inputTokens: 8, outputTokens: 2, costUsd: 0.001 },
+              },
+            },
+            {
+              observation: {
+                kind: "session-ended",
+                reason: { kind: "ended-by-user" },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const fixture = await command(harness, { lifecycle: "open" });
+    const started = await run(harness, fixture.commandId, twice);
+    const sessionId = str(started, "session.id");
+
+    const approvalId = await waitFor(async () => {
+      const rows = await pendingApprovals(harness);
+      const row = rows.find(
+        (entry) => at(entry, "approval.sessionId") === sessionId,
+      );
+      return row === undefined ? null : str(row, "approval.id");
+    }, "the first gated call to raise an approval");
+
+    await harness.ok(`/approvals/${approvalId}/answer`, {
+      method: "POST",
+      body: { decision: "deny", reason: "not that tool" },
+    });
+
+    // The session must reach its end. Before the fix it did not: the re-raise
+    // found the denied row, the pump read a pending approval and left the call
+    // open, and nothing could ever settle it — `answerApproval` refuses a second
+    // answer, so the session waited on a decision already made.
+    const ended = await endedSession(harness, sessionId);
+    expect(at(ended, "session.end.kind")).toBe("ended-by-user");
+
+    // No second approval was raised for a question already answered, and the
+    // session was told the same thing twice rather than asked twice.
+    expect(await pendingApprovals(harness)).toHaveLength(0);
+    const declined = list(
+      await harness.ok(`/sessions/${sessionId}/observations`),
+      "observations",
+    ).filter((entry) =>
+      String(at(entry, "observation.text") ?? "").includes("not that tool"),
+    );
+    expect(declined).toHaveLength(2);
   });
 });
 

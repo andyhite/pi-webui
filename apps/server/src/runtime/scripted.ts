@@ -273,6 +273,30 @@ const question = z.object({
 
 export type ScriptedQuestion = z.infer<typeof question>;
 
+/**
+ * A declared tool call that is **not** a workspace write (§6.6).
+ *
+ * The `effect` step above raises a permission request for a write whose extent
+ * the adapter declares, which claims answer (§3.4). This raises one for a tool
+ * nothing declares — a shell, an integration write — so its extent is unbounded
+ * and the gate cannot answer it from claims: it asks (`undeclared-write-extent`),
+ * and the call stays blocked until the operator answers the approval.
+ *
+ * It exists because the blocked-call loop is otherwise unprovable without a
+ * model: the whole point of the scripted runtime is that the spine can be proved
+ * without one, and "the call really did stay open until a human answered" is a
+ * property of that spine. The act does not end here — the answer arrives as
+ * `respond` and the script plays on, which is what makes "the call unblocked"
+ * observable rather than inferred.
+ */
+const gatedCall = z.object({
+  /** Any name the adapter does not declare, which is what makes it unbounded. */
+  toolName: z.string().min(1),
+  input: z.unknown().optional(),
+});
+
+export type ScriptedGatedCall = z.infer<typeof gatedCall>;
+
 const submission = z.object({
   /** What the session says it produced; PlotRoom checks the conditions itself. */
   outputs: z
@@ -316,6 +340,7 @@ const step = z
     effect: effect.optional(),
     submit: submission.optional(),
     ask: question.optional(),
+    call: gatedCall.optional(),
     delay: delay.optional(),
   })
   .refine(
@@ -325,11 +350,12 @@ const step = z
         value.effect,
         value.submit,
         value.ask,
+        value.call,
         value.delay,
       ].filter((one) => one !== undefined).length === 1,
     {
       message:
-        "a step is exactly one of observation, effect, submit, ask, or delay",
+        "a step is exactly one of observation, effect, submit, ask, call, or delay",
     },
   );
 
@@ -569,6 +595,26 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
           continue;
         }
 
+        if (step.call !== undefined) {
+          // A tool nothing declared: unbounded, therefore approval-raising
+          // (§6.6). The session waits for the answer and then says what it was
+          // told, so both halves of the loop are observable in the log — the
+          // allow it proceeded on, or the operator's own reason for the denial.
+          const outcome = await this.#requestTool(step.call);
+          if (this.#stopped) return;
+          this.#queue.push({
+            kind: "output-delta",
+            text:
+              outcome.kind === "allow"
+                ? `${step.call.toolName} was approved`
+                : `${step.call.toolName} was declined: ${
+                    outcome.kind === "deny" ? outcome.reason : outcome.value
+                  }`,
+            at: this.#now(),
+          });
+          continue;
+        }
+
         if (step.effect !== undefined) {
           // Gated, not assumed. The write raises a `tool-permission` request and
           // waits for PlotRoom's answer; a denial leaves the disk untouched and
@@ -638,6 +684,31 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
           kind: "tool-permission",
           toolName: SCRIPTED_WRITE_TOOL,
           input: { path: declared.path },
+        },
+        at: this.#now(),
+      });
+    });
+  }
+
+  /**
+   * Raise the permission request a declared, undeclared-extent tool call needs
+   * answered, and wait. Unbounded like the write gate's wait, and for the same
+   * reason: a timeout here would be the runtime deciding it may proceed because
+   * nobody replied fast enough (§6.6, principle 2).
+   */
+  #requestTool(declared: ScriptedGatedCall): Promise<RequestOutcome> {
+    const requestId =
+      `call-${this.#pending.size + 1}-${this.#actIndex}` as RuntimeRequestId;
+
+    return new Promise<RequestOutcome>((resolve) => {
+      this.#pending.set(requestId, resolve);
+      this.#queue.push({
+        kind: "request-raised",
+        requestId,
+        request: {
+          kind: "tool-permission",
+          toolName: declared.toolName,
+          input: declared.input ?? {},
         },
         at: this.#now(),
       });

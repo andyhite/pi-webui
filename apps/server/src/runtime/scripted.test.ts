@@ -203,7 +203,7 @@ describe("the script format refuses what it cannot honestly replay", () => {
 
     expect(parsed.success).toBe(false);
     expect(JSON.stringify(parsed.error?.issues)).toMatch(
-      /exactly one of observation, effect, submit, ask, or delay/,
+      /exactly one of observation, effect, submit, ask, call, or delay/,
     );
   });
 });

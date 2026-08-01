@@ -1,4 +1,5 @@
 import {
+  approvalOutcome,
   createPiWriteIntents,
   decideToolPermission,
   isApproved,
@@ -161,6 +162,36 @@ export function createSessionGate(deps: SessionGateDeps): SessionGate {
             path,
           );
         }
+      }
+
+      // **An answered denial settles the call rather than re-asking it.**
+      //
+      // A re-raise of a call id whose approval was already denied would otherwise
+      // take the raise branch below: `raise` is idempotent in the call id, so it
+      // hands back the *denied* row, the pump reads a pending approval and leaves
+      // the request open — blocked on an approval nobody can answer a second time
+      // (`answerApproval` refuses one). That is a wedged session waiting on a
+      // decision that has already been made. What it is owed instead is the
+      // decision: the operator's own reason, carried back as the tool's result,
+      // which is what §6.6 means by "deny is feedback, not failure".
+      const settledDenial =
+        raised !== undefined && raised.answer !== null && !isApproved(raised)
+          ? approvalOutcome(raised)
+          : null;
+
+      if (settledDenial !== null) {
+        deps.logger.info("a re-raised call was settled by its own denial", {
+          sessionId: input.sessionId,
+          requestId: input.requestId,
+          approvalId: raised?.id,
+        });
+        return {
+          ...decision,
+          outcome: settledDenial,
+          raisesApproval: false,
+          claimChecked: decision.paths.length > 0,
+          pendingApprovalId: null,
+        };
       }
 
       // §6.6: a call the gate cannot answer **asks**, and the record outlives the
