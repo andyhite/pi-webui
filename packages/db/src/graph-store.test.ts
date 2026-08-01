@@ -453,3 +453,45 @@ describe("placement and recovery", () => {
     expect(graph.contextInputs(target)).toHaveLength(1);
   });
 });
+
+describe("removing a node takes its wires with it (principle 10)", () => {
+  it("soft-deletes the node and its context edges as one gesture", () => {
+    const target = place.command("cmd_1").id;
+    const source = place.content("obj_1").id;
+    graph.addContextEdge({ from: source, to: target, author: humanAuthor });
+
+    graph.removeNode(source);
+
+    expect(graph.node(source).deletedAt).toBe(1_000_000);
+    expect(graph.contextInputs(target)).toHaveLength(0);
+    expect(graph.deletedNodes().map((row) => row.id)).toEqual([source]);
+    expect(graph.deletedEdges()).toHaveLength(1);
+  });
+
+  it("restores exactly what the removal took down", () => {
+    const target = place.command("cmd_1").id;
+    const kept = place.content("obj_kept").id;
+    const removed = place.content("obj_removed").id;
+    const separately = graph.addContextEdge({
+      from: kept,
+      to: target,
+      author: humanAuthor,
+    });
+    graph.addContextEdge({ from: removed, to: target, author: humanAuthor });
+
+    // An edge removed by its own gesture stays removed when an unrelated
+    // node's removal is undone.
+    graph.removeEdge(separately.id);
+    graph.removeNode(removed);
+    graph.restoreNode(removed);
+
+    expect(graph.node(removed).deletedAt).toBeNull();
+    expect(graph.contextInputs(target).map((row) => row.fromNode)).toEqual([
+      removed,
+    ]);
+  });
+
+  it("refuses to remove a node that does not exist", () => {
+    expect(() => graph.removeNode("node_nope")).toThrow(/unknown node/);
+  });
+});

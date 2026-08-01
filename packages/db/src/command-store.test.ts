@@ -639,3 +639,87 @@ describe("the pre-bind/post-bind two-state rule (§3.5)", () => {
     expect(store.output(upstream.outputs[0]!.id).brokenAt).toBeNull();
   });
 });
+
+describe("definitions are content, and deleting one is recoverable (§3.5)", () => {
+  it("hides a deleted definition from the list and puts it back", () => {
+    const definition = store.define({
+      name: "Review the diff",
+      instruction: "Review it.",
+      model: "fixture-model",
+      effort: "low",
+      lifecycle: "open",
+    });
+
+    store.deleteDefinition(definition.id);
+
+    expect(store.definitions().map((row) => row.id)).not.toContain(
+      definition.id,
+    );
+    expect(store.deletedDefinitions().map((row) => row.id)).toEqual([
+      definition.id,
+    ]);
+
+    store.restoreDefinition(definition.id);
+
+    expect(store.definitions().map((row) => row.id)).toContain(definition.id);
+  });
+
+  it("leaves command nodes already instantiated from it alone", () => {
+    const definition = store.define({
+      name: "Implement it",
+      instruction: "Implement it.",
+      model: "fixture-model",
+      effort: "medium",
+      lifecycle: "open",
+    });
+    const instance = store.instantiate({
+      definitionId: definition.id,
+      workstreamId,
+      author: humanAuthor,
+    });
+
+    store.deleteDefinition(definition.id);
+
+    expect(store.command(instance.command.id).deletedAt).toBeNull();
+  });
+
+  it("refuses to delete a definition that does not exist", () => {
+    expect(() => store.deleteDefinition("cmddef_nope")).toThrow(
+      /unknown command definition/,
+    );
+  });
+});
+
+describe("instantiation is one gesture, or none of it (principle 9)", () => {
+  it("leaves no command node behind when the wiring is refused", () => {
+    const definition = store.define({
+      name: "Implement it",
+      instruction: "Implement it.",
+      model: "fixture-model",
+      effort: "medium",
+      lifecycle: "open",
+    });
+    const otherCommand = store.instantiate({
+      definitionId: definition.id,
+      workstreamId,
+      author: humanAuthor,
+    });
+    const commandsBefore = state.sqlite
+      .prepare("SELECT COUNT(*) AS n FROM commands")
+      .get() as { n: number };
+
+    expect(() =>
+      store.instantiate({
+        definitionId: definition.id,
+        workstreamId,
+        author: humanAuthor,
+        // A command is not content: §3.7 refuses this connection.
+        context: [store.commandNode(otherCommand.command.id).id],
+      }),
+    ).toThrow(ConnectionRefused);
+
+    expect(
+      state.sqlite.prepare("SELECT COUNT(*) AS n FROM commands").get(),
+    ).toEqual(commandsBefore);
+  });
+});

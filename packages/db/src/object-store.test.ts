@@ -269,3 +269,29 @@ describe("last-known content survives (spec §3.2)", () => {
     );
   });
 });
+
+describe("deletion is recoverable (principle 10)", () => {
+  it("soft-deletes an object and keeps its content readable on restore", () => {
+    const written = store.write({
+      kind: "note",
+      title: "thought",
+      renderings: ticket("still here"),
+    });
+
+    store.delete(written.objectId);
+
+    expect(store.get(written.objectId)?.deletedAt).toBe(clock);
+    expect(store.deleted().map((row) => row.id)).toEqual([written.objectId]);
+
+    store.restore(written.objectId);
+
+    expect(store.get(written.objectId)?.deletedAt).toBeNull();
+    expect(store.read(written.objectId).renderings.agentContent).toBe(
+      "still here",
+    );
+  });
+
+  it("refuses to delete an object that does not exist", () => {
+    expect(() => store.delete("obj_nope")).toThrow(/unknown object/);
+  });
+});

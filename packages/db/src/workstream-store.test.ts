@@ -254,3 +254,31 @@ describe("attention rolls up onto the card (§3.3, §7)", () => {
     expect(store.events(stream.id)).toHaveLength(1);
   });
 });
+
+describe("deletion is recoverable, and attributed (principle 10)", () => {
+  it("takes a deleted workstream off the board and puts it back", () => {
+    const stream = store.create({ author: humanAuthor });
+
+    store.delete(stream.id, humanAuthor);
+
+    expect(store.list()).toHaveLength(0);
+    expect(store.list({ includeArchived: true })).toHaveLength(0);
+    expect(store.deleted().map((row) => row.id)).toEqual([stream.id]);
+
+    store.restore(stream.id, humanAuthor);
+
+    expect(store.list().map((row) => row.id)).toEqual([stream.id]);
+    expect(store.deleted()).toHaveLength(0);
+  });
+
+  it("records who deleted it — an agent deletion is recoverable too", () => {
+    const stream = store.create({ author: humanAuthor });
+
+    store.delete(stream.id, sessionAuthor("sess_agent" as SessionId));
+
+    const [, deletion] = store.events(stream.id);
+    expect(deletion?.kind).toBe("deleted");
+    expect(deletion?.authorKind).toBe("session");
+    expect(deletion?.authorSession).toBe("sess_agent");
+  });
+});

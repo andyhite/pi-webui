@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import {
   chooseDelta,
   isCompactable,
@@ -17,6 +17,7 @@ import {
 } from "@plotroom/core";
 import { BlobStore } from "./blob-store.js";
 import type { PlotroomDatabase } from "./client.js";
+import { EntityNotFound } from "./errors.js";
 import {
   objectVersions,
   objects,
@@ -165,7 +166,13 @@ export class ObjectStore {
           .get()
       : this.latestVersionRow(objectId);
 
-    if (!row) throw new Error(`no version for object ${objectId}`);
+    if (!row) {
+      throw new EntityNotFound(
+        "object version",
+        objectId,
+        `no version for object ${objectId}`,
+      );
+    }
 
     return {
       objectId: row.objectId,
@@ -224,7 +231,7 @@ export class ObjectStore {
    */
   promote(objectId: string): void {
     const row = this.get(objectId);
-    if (!row) throw new Error(`unknown object ${objectId}`);
+    if (!row) throw new EntityNotFound("object", objectId);
     if (row.scope === "world") return;
 
     this.state.db
@@ -232,6 +239,49 @@ export class ObjectStore {
       .set({ scope: "world", workstreamId: null, promotedAt: this.now() })
       .where(eq(objects.id, objectId))
       .run();
+  }
+
+  /**
+   * Delete an object. Soft, because deletion is recoverable for authored
+   * state — including when an agent did the deleting (principle 10). The
+   * versions stay exactly where they are: a run that consumed this object
+   * must remain comparable (§15-1), and an undone deletion that lost the
+   * content would not be an undo.
+   */
+  delete(objectId: string): ObjectRow {
+    const row = this.get(objectId);
+    if (!row) throw new EntityNotFound("object", objectId);
+    if (row.deletedAt !== null) return row;
+
+    this.state.db
+      .update(objects)
+      .set({ deletedAt: this.now() })
+      .where(eq(objects.id, objectId))
+      .run();
+
+    return this.require(objectId);
+  }
+
+  restore(objectId: string): ObjectRow {
+    const row = this.get(objectId);
+    if (!row) throw new EntityNotFound("object", objectId);
+
+    this.state.db
+      .update(objects)
+      .set({ deletedAt: null })
+      .where(eq(objects.id, objectId))
+      .run();
+
+    return this.require(objectId);
+  }
+
+  /** What the undo verb can put back (principle 10). */
+  deleted(): ObjectRow[] {
+    return this.state.db
+      .select()
+      .from(objects)
+      .where(isNotNull(objects.deletedAt))
+      .all();
   }
 
   /**
@@ -322,6 +372,12 @@ export class ObjectStore {
       .from(objects)
       .where(and(eq(objects.scope, "world"), isNull(objects.externalSystem)))
       .all();
+  }
+
+  private require(objectId: string): ObjectRow {
+    const row = this.get(objectId);
+    if (!row) throw new EntityNotFound("object", objectId);
+    return row;
   }
 
   private latestVersionRow(objectId: string): ObjectVersionRow | undefined {

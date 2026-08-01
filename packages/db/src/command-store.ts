@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import {
   checkPublish,
   confirmParameter,
@@ -35,6 +35,7 @@ import {
   type ToolPermissions,
 } from "@plotroom/core";
 import type { PlotroomDatabase } from "./client.js";
+import { EntityNotFound } from "./errors.js";
 import { GraphStore } from "./graph-store.js";
 import { ObjectStore } from "./object-store.js";
 import {
@@ -273,31 +274,36 @@ export class CommandStore {
     const definition = this.definition(input.definitionId);
     const id = newCommandId();
 
-    this.state.db
-      .insert(commands)
-      .values({
-        id,
-        definitionId: definition.id,
+    // One gesture, one transaction (principle 9): a refused context edge must
+    // not leave a half-instantiated command — a node with no command row, or
+    // a placeholder wired nowhere — behind on the board.
+    return this.state.db.transaction(() => {
+      this.state.db
+        .insert(commands)
+        .values({
+          id,
+          definitionId: definition.id,
+          workstreamId: input.workstreamId,
+          createdAt: this.now(),
+        })
+        .run();
+
+      const node = this.graph.place({
+        role: "command",
+        refId: id,
         workstreamId: input.workstreamId,
-        createdAt: this.now(),
-      })
-      .run();
+      });
 
-    const node = this.graph.place({
-      role: "command",
-      refId: id,
-      workstreamId: input.workstreamId,
+      const outputs = definition.outcome
+        ? [this.declareOutput(id as CommandId, definition.outcome, node.id)]
+        : [];
+
+      for (const from of input.context ?? []) {
+        this.graph.addContextEdge({ from, to: node.id, author: input.author });
+      }
+
+      return { command: this.commandRow(id), node, outputs };
     });
-
-    const outputs = definition.outcome
-      ? [this.declareOutput(id as CommandId, definition.outcome, node.id)]
-      : [];
-
-    for (const from of input.context ?? []) {
-      this.graph.addContextEdge({ from, to: node.id, author: input.author });
-    }
-
-    return { command: this.commandRow(id), node, outputs };
   }
 
   command(commandId: string): CommandRow {
@@ -434,7 +440,7 @@ export class CommandStore {
       .from(commandOutputs)
       .where(eq(commandOutputs.id, outputId))
       .get();
-    if (!row) throw new Error(`unknown output ${outputId}`);
+    if (!row) throw new EntityNotFound("output", outputId);
     return toOutput(row);
   }
 
@@ -496,49 +502,106 @@ export class CommandStore {
    * untouched (§3.5).
    */
   delete(commandId: string): ProducerDeletionEffect[] {
+    this.commandRow(commandId);
     const at = this.now();
-    const effects: ProducerDeletionEffect[] = [];
 
-    for (const output of this.outputs(commandId)) {
-      const effect = effectOfDeletingProducer(output);
-      effects.push(effect);
+    // Marking the placeholders broken and marking the command deleted are one
+    // gesture: a partially applied delete would leave downstream silently
+    // unblocked, which is exactly what §3.5's two-state rule forbids.
+    return this.state.db.transaction(() => {
+      const effects: ProducerDeletionEffect[] = [];
 
-      if (effect.effect === "broken_placeholder") {
-        this.state.db
-          .update(commandOutputs)
-          .set({ brokenAt: at })
-          .where(eq(commandOutputs.id, output.id))
-          .run();
+      for (const output of this.outputs(commandId)) {
+        const effect = effectOfDeletingProducer(output);
+        effects.push(effect);
+
+        if (effect.effect === "broken_placeholder") {
+          this.state.db
+            .update(commandOutputs)
+            .set({ brokenAt: at })
+            .where(eq(commandOutputs.id, output.id))
+            .run();
+        }
       }
-    }
 
-    this.state.db
-      .update(commands)
-      .set({ deletedAt: at })
-      .where(eq(commands.id, commandId))
-      .run();
+      this.state.db
+        .update(commands)
+        .set({ deletedAt: at })
+        .where(eq(commands.id, commandId))
+        .run();
 
-    return effects;
+      return effects;
+    });
   }
 
   /** Recoverable, because the deletion was (principle 10). */
   restore(commandId: string): CommandRow {
+    this.commandRow(commandId);
+
+    return this.state.db.transaction(() => {
+      this.state.db
+        .update(commands)
+        .set({ deletedAt: null })
+        .where(eq(commands.id, commandId))
+        .run();
+
+      for (const output of this.outputs(commandId)) {
+        if (output.brokenAt === null) continue;
+        this.state.db
+          .update(commandOutputs)
+          .set({ brokenAt: null })
+          .where(eq(commandOutputs.id, output.id))
+          .run();
+      }
+
+      return this.commandRow(commandId);
+    });
+  }
+
+  /** Soft-deleted commands, the restorable set the undo verb lists (§10). */
+  deletedCommands(): CommandRow[] {
+    return this.state.db
+      .select()
+      .from(commands)
+      .where(isNotNull(commands.deletedAt))
+      .all();
+  }
+
+  /**
+   * Deleting a definition removes the recipe, never the command nodes already
+   * instantiated from it: those carry their own configuration into run history
+   * (§15-1). Soft, and restorable, like every authored deletion.
+   */
+  deleteDefinition(definitionId: string): CommandDefinitionRow {
+    this.definitionRow(definitionId);
+
     this.state.db
-      .update(commands)
-      .set({ deletedAt: null })
-      .where(eq(commands.id, commandId))
+      .update(commandDefinitions)
+      .set({ deletedAt: this.now() })
+      .where(eq(commandDefinitions.id, definitionId))
       .run();
 
-    for (const output of this.outputs(commandId)) {
-      if (output.brokenAt === null) continue;
-      this.state.db
-        .update(commandOutputs)
-        .set({ brokenAt: null })
-        .where(eq(commandOutputs.id, output.id))
-        .run();
-    }
+    return this.definitionRow(definitionId);
+  }
 
-    return this.commandRow(commandId);
+  restoreDefinition(definitionId: string): CommandDefinitionRow {
+    this.definitionRow(definitionId);
+
+    this.state.db
+      .update(commandDefinitions)
+      .set({ deletedAt: null })
+      .where(eq(commandDefinitions.id, definitionId))
+      .run();
+
+    return this.definitionRow(definitionId);
+  }
+
+  deletedDefinitions(): CommandDefinitionRow[] {
+    return this.state.db
+      .select()
+      .from(commandDefinitions)
+      .where(isNotNull(commandDefinitions.deletedAt))
+      .all();
   }
 
   /** Effective ask-points: what would actually be asked at run time (§6.6). */
@@ -587,7 +650,7 @@ export class CommandStore {
       .from(commandOutputs)
       .where(eq(commandOutputs.id, id))
       .get();
-    if (!row) throw new Error(`unknown output ${id}`);
+    if (!row) throw new EntityNotFound("output", id);
     return row;
   }
 
@@ -597,7 +660,9 @@ export class CommandStore {
       .from(commandDefinitions)
       .where(eq(commandDefinitions.id, definitionId))
       .get();
-    if (!row) throw new Error(`unknown command definition ${definitionId}`);
+    if (!row) {
+      throw new EntityNotFound("command definition", definitionId);
+    }
     return row;
   }
 
@@ -607,7 +672,7 @@ export class CommandStore {
       .from(commands)
       .where(eq(commands.id, commandId))
       .get();
-    if (!row) throw new Error(`unknown command ${commandId}`);
+    if (!row) throw new EntityNotFound("command", commandId);
     return row;
   }
 }

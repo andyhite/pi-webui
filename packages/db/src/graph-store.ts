@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import {
   checkAuthoring,
   checkConnection,
@@ -21,6 +21,7 @@ import {
   type WorkstreamId,
 } from "@plotroom/core";
 import type { PlotroomDatabase } from "./client.js";
+import { EntityNotFound } from "./errors.js";
 import {
   commandOutputs,
   commands,
@@ -125,7 +126,7 @@ export class GraphStore {
       .from(nodes)
       .where(eq(nodes.id, id))
       .get();
-    if (!row) throw new Error(`unknown node ${id}`);
+    if (!row) throw new EntityNotFound("node", id);
     return row;
   }
 
@@ -136,7 +137,9 @@ export class GraphStore {
       .from(nodes)
       .where(and(eq(nodes.role, role), eq(nodes.refId, refId)))
       .get();
-    if (!row) throw new Error(`no ${role} node for ${refId}`);
+    if (!row) {
+      throw new EntityNotFound("node", refId, `no ${role} node for ${refId}`);
+    }
     return row;
   }
 
@@ -305,6 +308,8 @@ export class GraphStore {
 
   /** Soft delete: authored state is recoverable, agent deletions too (§10). */
   removeEdge(edgeId: string): void {
+    this.edge(edgeId);
+
     this.state.db
       .update(edges)
       .set({ deletedAt: this.now() })
@@ -313,11 +318,92 @@ export class GraphStore {
   }
 
   restoreEdge(edgeId: string): void {
+    this.edge(edgeId);
+
     this.state.db
       .update(edges)
       .set({ deletedAt: null })
       .where(eq(edges.id, edgeId))
       .run();
+  }
+
+  /**
+   * Remove a node from the board, with the edges that ran through it — one
+   * gesture, one undo (principle 9, principle 10). The edges are stamped with
+   * the node's own deletion time, so restoring the node puts back exactly what
+   * its removal took down and nothing a later gesture removed separately.
+   */
+  removeNode(nodeId: string): NodeRow {
+    const row = this.node(nodeId);
+    if (row.deletedAt !== null) return row;
+
+    const at = this.now();
+
+    return this.state.db.transaction(() => {
+      this.state.db
+        .update(edges)
+        .set({ deletedAt: at })
+        .where(
+          and(
+            isNull(edges.deletedAt),
+            or(eq(edges.fromNode, nodeId), eq(edges.toNode, nodeId)),
+          ),
+        )
+        .run();
+
+      this.state.db
+        .update(nodes)
+        .set({ deletedAt: at })
+        .where(eq(nodes.id, nodeId))
+        .run();
+
+      return this.node(nodeId);
+    });
+  }
+
+  restoreNode(nodeId: string): NodeRow {
+    const row = this.node(nodeId);
+    if (row.deletedAt === null) return row;
+
+    const at = row.deletedAt;
+
+    return this.state.db.transaction(() => {
+      this.state.db
+        .update(edges)
+        .set({ deletedAt: null })
+        .where(
+          and(
+            eq(edges.deletedAt, at),
+            or(eq(edges.fromNode, nodeId), eq(edges.toNode, nodeId)),
+          ),
+        )
+        .run();
+
+      this.state.db
+        .update(nodes)
+        .set({ deletedAt: null })
+        .where(eq(nodes.id, nodeId))
+        .run();
+
+      return this.node(nodeId);
+    });
+  }
+
+  /** What the undo verb can put back (principle 10). */
+  deletedNodes(): NodeRow[] {
+    return this.state.db
+      .select()
+      .from(nodes)
+      .where(isNotNull(nodes.deletedAt))
+      .all();
+  }
+
+  deletedEdges(): EdgeRow[] {
+    return this.state.db
+      .select()
+      .from(edges)
+      .where(and(eq(edges.kind, "context"), isNotNull(edges.deletedAt)))
+      .all();
   }
 
   edge(id: string): EdgeRow {
@@ -326,7 +412,7 @@ export class GraphStore {
       .from(edges)
       .where(eq(edges.id, id))
       .get();
-    if (!row) throw new Error(`unknown edge ${id}`);
+    if (!row) throw new EntityNotFound("edge", id);
     return row;
   }
 

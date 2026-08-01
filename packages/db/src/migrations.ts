@@ -420,4 +420,52 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX run_outputs_version_idx ON run_outputs (version_id);
     `,
   },
+  {
+    id: 6,
+    name: "recoverable_deletion",
+    sql: `
+      -- Principle 10: deletion is recoverable for authored state, including
+      -- when an agent did the deleting. Nodes, edges, commands, and command
+      -- definitions already carried deleted_at; objects and workstreams did
+      -- not, so "delete a workstream" and "delete an object" had no
+      -- representation that could be undone. They do now.
+      ALTER TABLE objects ADD COLUMN deleted_at INTEGER;
+      ALTER TABLE workstreams ADD COLUMN deleted_at INTEGER;
+
+      -- The restorable list is a query over these, so it is cheap enough to
+      -- offer as a first-class verb rather than a maintenance tool.
+      CREATE INDEX objects_deleted_idx ON objects (deleted_at);
+      CREATE INDEX workstreams_deleted_idx ON workstreams (deleted_at);
+
+      -- Widen the attribution trail to cover deletion and restoration: a
+      -- CHECK constraint cannot be altered in place, so the table is rebuilt.
+      -- "Who deleted this, and when" is the question the restore list has to
+      -- answer, and an untracked deletion cannot answer it.
+      CREATE TABLE workstream_events_new (
+        id             TEXT PRIMARY KEY,
+        workstream_id  TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        kind           TEXT NOT NULL CHECK (kind IN
+                         ('created', 'subject_set', 'status_set', 'archived',
+                          'unarchived', 'deleted', 'restored')),
+        value          TEXT,
+        author_kind    TEXT NOT NULL CHECK (author_kind IN ('human', 'session')),
+        author_session TEXT,
+        created_at     INTEGER NOT NULL DEFAULT (unixepoch()),
+        CHECK (
+          (author_kind = 'session' AND author_session IS NOT NULL) OR
+          (author_kind = 'human' AND author_session IS NULL)
+        )
+      );
+
+      INSERT INTO workstream_events_new
+        SELECT id, workstream_id, kind, value, author_kind, author_session, created_at
+        FROM workstream_events;
+
+      DROP TABLE workstream_events;
+      ALTER TABLE workstream_events_new RENAME TO workstream_events;
+
+      CREATE INDEX workstream_events_stream_idx
+        ON workstream_events (workstream_id, created_at);
+    `,
+  },
 ];

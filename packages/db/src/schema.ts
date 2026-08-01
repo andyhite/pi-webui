@@ -92,6 +92,8 @@ export const objects = sqliteTable(
       .notNull()
       .default(sql`(unixepoch())`),
     promotedAt: integer("promoted_at"),
+    /** Soft delete: authored state is recoverable (principle 10). */
+    deletedAt: integer("deleted_at"),
   },
   (table) => [
     uniqueIndex("objects_external_idx")
@@ -99,6 +101,7 @@ export const objects = sqliteTable(
       .where(sql`external_system IS NOT NULL`),
     index("objects_kind_idx").on(table.kind),
     index("objects_workstream_idx").on(table.workstreamId),
+    index("objects_deleted_idx").on(table.deletedAt),
   ],
 );
 
@@ -227,9 +230,16 @@ export const workstreams = sqliteTable(
     createdAt: integer("created_at")
       .notNull()
       .default(sql`(unixepoch())`),
+    /**
+     * Soft delete, distinct from the archive gesture: archived is "off the
+     * board, still searchable, reported as archived"; deleted is "undone, and
+     * undoable" (§3.3, principle 10).
+     */
+    deletedAt: integer("deleted_at"),
   },
   (table) => [
     index("workstreams_board_idx").on(table.status, table.archivedAt),
+    index("workstreams_deleted_idx").on(table.deletedAt),
   ],
 );
 
@@ -245,7 +255,15 @@ export const workstreamEvents = sqliteTable(
       .notNull()
       .references(() => workstreams.id, { onDelete: "cascade" }),
     kind: text("kind", {
-      enum: ["created", "subject_set", "status_set", "archived", "unarchived"],
+      enum: [
+        "created",
+        "subject_set",
+        "status_set",
+        "archived",
+        "unarchived",
+        "deleted",
+        "restored",
+      ],
     }).notNull(),
     value: text("value"),
     authorKind: text("author_kind", { enum: ["human", "session"] }).notNull(),

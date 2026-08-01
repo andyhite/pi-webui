@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import {
   checkLifecycleAuthoring,
   newWorkstreamId,
@@ -13,6 +13,7 @@ import {
   type WorkstreamStatus,
 } from "@plotroom/core";
 import type { PlotroomDatabase } from "./client.js";
+import { EntityNotFound } from "./errors.js";
 import {
   nodes,
   objects,
@@ -87,13 +88,21 @@ export class WorkstreamStore {
       .get();
   }
 
-  /** The board: active by default; archived reported as archived on demand. */
+  /**
+   * The board: active by default; archived reported as archived on demand.
+   * Deleted workstreams are never on the board — they are listed by the undo
+   * verb ({@link deleted}) and put back by {@link restore}.
+   */
   list(options: ListOptions = {}): WorkstreamRow[] {
     const query = this.state.db.select().from(workstreams);
 
     return options.includeArchived
-      ? query.all()
-      : query.where(isNull(workstreams.archivedAt)).all();
+      ? query.where(isNull(workstreams.deletedAt)).all()
+      : query
+          .where(
+            and(isNull(workstreams.archivedAt), isNull(workstreams.deletedAt)),
+          )
+          .all();
   }
 
   /** The subject is authored: dragging a ticket in names the container (§3.3). */
@@ -179,6 +188,55 @@ export class WorkstreamStore {
     return this.workstream(id);
   }
 
+  /**
+   * Delete a workstream. Soft, and attributed, because deletion is
+   * recoverable for authored state — including when an agent did the deleting
+   * (principle 10). Distinct from archive: archived stays reported on demand
+   * (§3.3), deleted is off the board until someone undoes it.
+   *
+   * Deliberately not gated by {@link checkLifecycleAuthoring}: lifecycle is
+   * the human's to set, but a session may delete — that is precisely the case
+   * principle 10 names, and the answer is recoverability, not refusal.
+   */
+  delete(id: string, author: Author): WorkstreamRow {
+    const current = this.workstream(id);
+    if (current.deletedAt !== null) return current;
+
+    this.state.db
+      .update(workstreams)
+      .set({ deletedAt: this.now() })
+      .where(eq(workstreams.id, id))
+      .run();
+
+    this.recordEvent(id, "deleted", null, author);
+
+    return this.workstream(id);
+  }
+
+  restore(id: string, author: Author): WorkstreamRow {
+    const current = this.workstream(id);
+    if (current.deletedAt === null) return current;
+
+    this.state.db
+      .update(workstreams)
+      .set({ deletedAt: null })
+      .where(eq(workstreams.id, id))
+      .run();
+
+    this.recordEvent(id, "restored", null, author);
+
+    return this.workstream(id);
+  }
+
+  /** What the undo verb can put back (principle 10). */
+  deleted(): WorkstreamRow[] {
+    return this.state.db
+      .select()
+      .from(workstreams)
+      .where(isNotNull(workstreams.deletedAt))
+      .all();
+  }
+
   /** The attribution trail: who set what, in order (§3.3, principle 10). */
   events(id: string): WorkstreamEventRow[] {
     return (
@@ -242,7 +300,7 @@ export class WorkstreamStore {
 
   private workstream(id: string): WorkstreamRow {
     const row = this.get(id);
-    if (!row) throw new Error(`unknown workstream ${id}`);
+    if (!row) throw new EntityNotFound("workstream", id);
     return row;
   }
 

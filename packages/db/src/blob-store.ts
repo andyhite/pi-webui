@@ -4,6 +4,7 @@ import { and, eq, isNull, notInArray, sql } from "drizzle-orm";
 import { dirname } from "node:path";
 import { systemClock, type Clock } from "@plotroom/core";
 import type { PlotroomDatabase } from "./client.js";
+import { EntityNotFound } from "./errors.js";
 import { blobPath } from "./paths.js";
 import { blobRefs, blobs, INLINE_MAX_BYTES } from "./schema.js";
 
@@ -103,7 +104,7 @@ export class BlobStore {
       .from(blobs)
       .where(eq(blobs.id, id))
       .get();
-    if (!row) throw new Error(`unknown blob ${id}`);
+    if (!row) throw new EntityNotFound("blob", id);
     if (row.releasedAt !== null) throw new BlobReleasedError(row.hash);
 
     if (row.isExternal) {
