@@ -118,8 +118,19 @@ export type ResumeResult =
 export interface ResumeRequest {
   readonly resumedBy: Author;
   readonly firstTurn?: string | null;
-  /** The workspace as it stands now, against the session's own fingerprint. */
-  readonly divergence?: DivergenceReport | null;
+  /**
+   * The workspace as it stands now, compared against the session's own
+   * fingerprint (`deriveDivergence`).
+   *
+   * **Required, and explicitly `null` when there is nothing to compare.** It was
+   * optional, which meant a caller that left it out skipped §4.3's forced-fresh
+   * gate and resumed a session whose picture is stale — and the caller most
+   * likely to leave it out is the one that never looked at the workspace. Both
+   * states have to be said out loud, because only one of them is safe: `null`
+   * means "no workspace to compare" (never provisioned, or removed), a report
+   * means "here is what changed".
+   */
+  readonly divergence: DivergenceReport | null;
   readonly at: number;
 }
 
@@ -318,8 +329,14 @@ export interface ContinueVsFreshInput {
   readonly changedSinceTokens: number;
   readonly windowTokens: number;
   readonly requiredHeadroomFraction?: number;
-  /** The workspace against the session's own fingerprint; null when unknown. */
-  readonly divergence?: DivergenceReport | null;
+  /**
+   * The workspace against the session's own fingerprint. **Required**, and `null`
+   * only when there is genuinely nothing to compare: §4.3's "workspace divergence
+   * forces fresh" is not a gate a caller may skip by leaving a field out, and a
+   * preview that skipped it is exactly the one that spends money on a confused
+   * continuation.
+   */
+  readonly divergence: DivergenceReport | null;
   readonly priorRuns: readonly PriorRunCost[];
   readonly defaultMode?: ContinuationMode;
 }

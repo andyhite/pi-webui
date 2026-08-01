@@ -82,6 +82,7 @@ describe("resume continues the same record (§6.3)", () => {
     const peer = newSessionId();
     const resumed = planResume(ENDED, {
       resumedBy: sessionAuthor(peer),
+      divergence: null,
       at: 10_000,
     });
 
@@ -96,6 +97,7 @@ describe("resume continues the same record (§6.3)", () => {
   it("refuses a session that never stopped: that is injection", () => {
     const resumed = planResume(makeSession(), {
       resumedBy: humanAuthor,
+      divergence: null,
       at: 10_000,
     });
 
@@ -107,12 +109,22 @@ describe("resume continues the same record (§6.3)", () => {
   it("refuses a deleted session rather than un-deleting it", () => {
     const resumed = planResume(
       { ...ENDED, deletion: markDeleted(ENDED.deletion, 6_000, humanAuthor) },
-      { resumedBy: humanAuthor, at: 10_000 },
+      { resumedBy: humanAuthor, divergence: null, at: 10_000 },
     );
 
     expect(resumed.ok).toBe(false);
     if (resumed.ok) return;
     expect(resumed.refusal.reason).toBe("deleted");
+  });
+
+  it("cannot be asked to resume without saying what the workspace looks like", () => {
+    // §4.3's forced-fresh gate is not skippable by omission: a caller that never
+    // looked at the workspace is exactly the one that would have left it out.
+    // Never invoked: the assertion is that it does not compile.
+    const missing = () =>
+      // @ts-expect-error divergence is required; `null` says "nothing to compare"
+      planResume(ENDED, { resumedBy: humanAuthor, at: 10_000 });
+    expect(typeof missing).toBe("function");
   });
 
   it("refuses when the workspace diverged, and says what changed", () => {
@@ -235,6 +247,7 @@ describe("continue or fresh, side by side (§4.3)", () => {
       assemblyTokens: 40_000,
       changedSinceTokens: 2_000,
       windowTokens: 200_000,
+      divergence: null,
       priorRuns: [],
     });
 
@@ -316,12 +329,31 @@ describe("continue or fresh, side by side (§4.3)", () => {
     ]);
   });
 
+  it("cannot be previewed without saying what the workspace looks like", () => {
+    const missing = () =>
+      // @ts-expect-error divergence is required; `null` says "nothing to compare"
+      compareContinueVsFresh({
+        priorSession: {
+          sessionId: newSessionId(),
+          running: true,
+          deleted: false,
+          historyTokens: 10_000,
+        },
+        assemblyTokens: 40_000,
+        changedSinceTokens: 1_000,
+        windowTokens: 200_000,
+        priorRuns: [],
+      });
+    expect(typeof missing).toBe("function");
+  });
+
   it("offers only fresh when the command has never run", () => {
     const comparison = compareContinueVsFresh({
       priorSession: null,
       assemblyTokens: 12_000,
       changedSinceTokens: 0,
       windowTokens: 200_000,
+      divergence: null,
       priorRuns: [],
     });
 
