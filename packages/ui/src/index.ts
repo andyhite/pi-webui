@@ -34,3 +34,6 @@ export * from "./panels/DockRail.js";
 export * from "./transport/http.js";
 export * from "./transport/ws.js";
 export * from "./data-source/types.js";
+export * from "./data-source/board-state.js";
+export * from "./data-source/build-snapshot.js";
+export * from "./data-source/api.js";
