@@ -582,6 +582,42 @@ describe("approvals for claims outside every standing policy (§6.6)", () => {
     expect(byOperator.result.kind).toBe("granted");
   });
 
+  it("sweeps lapsed leases before it answers, like a request or a grant does", () => {
+    // Consistency, not latency: an answer can grant, and a grant decided against
+    // an unswept lapse can leave a stale row beside the new claim. An approval
+    // that sat for a while is exactly when the availability it was raised under
+    // has gone stale.
+    const { manager, state, clock } = setup(600);
+    const held = granted(manager, state, A, "src");
+    const asked = ok(
+      manager.request(held.state, { sessionId: B, path: "src/auth.ts" }),
+    );
+    if (asked.result.kind !== "approval-required") {
+      throw new Error("expected an approval");
+    }
+
+    // A's lease lapses while the approval sits unanswered. The operator answers
+    // anyway (only the operator can, now that A's claim is due to go).
+    const answered = ok(
+      manager.answerApproval(asked.state, {
+        waitId: asked.result.wait.id,
+        by: humanAuthor,
+        decision: "grant",
+        at: clock.tick(601),
+      }),
+    );
+    expect(
+      answered.effects.some(
+        (effect) =>
+          effect.kind === "claim-released" && effect.reason === "expired",
+      ),
+    ).toBe(true);
+    expect(
+      answered.state.claims.some((claim) => claim.id === held.claim.id),
+    ).toBe(false);
+    expect(violatesSingleWriter(answered.state)).toEqual([]);
+  });
+
   it("records a denial as an answer, not as a silent drop", () => {
     const { manager, state } = setup();
     const held = granted(manager, state, A, "src");

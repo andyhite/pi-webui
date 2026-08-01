@@ -1161,7 +1161,30 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
     };
   }
 
+  /**
+   * Answering sweeps lapsed leases first, like `request` and `grant` do.
+   *
+   * An answer can grant, and a grant decided against an unswept lapse can leave a
+   * stale row beside the new claim — the same reason those two sweep. It also
+   * makes the answer act on the availability that is true *now* rather than the
+   * one that was true when the approval was raised, which for an approval that sat
+   * for a while is the whole question.
+   */
   function answerApproval(
+    state: ClaimState,
+    answer: ClaimApprovalAnswer,
+  ): ClaimOutcome<
+    ClaimRequestResult | { kind: "denied"; waitId: ClaimWaitId }
+  > {
+    const at = now(answer.at);
+    const swept = sweepExpired(state, at);
+    return withPriorEffects(
+      swept.effects,
+      answerApprovalAgainst(swept.state, { ...answer, at }),
+    );
+  }
+
+  function answerApprovalAgainst(
     state: ClaimState,
     answer: ClaimApprovalAnswer,
   ): ClaimOutcome<
