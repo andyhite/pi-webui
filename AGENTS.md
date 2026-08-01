@@ -191,8 +191,11 @@ Two rules qualify that, and both are decisions rather than implementation detail
 **The in-batch rule:** a subgraph was previewed as a chain, so an input produced by
 another command in the same batch is the contract _executing_, not drifting — those
 inputs and the `runnable` flip they cause are excluded from that entry's hash, and
-the entry is not admitted until its in-batch producer is `done`. Drift from outside
-the batch re-asks exactly as before. **Confirming answers to the batch:** into a
+the entry waits rather than being admitted while its in-batch producer is still to
+run. A producer that _settled_ without producing is not a producer to wait for
+("not done" and "not finished yet" are different facts): the entry is settled with a
+reason naming it, unless the output arrived anyway, in which case the ordinary
+contract check re-asks. Drift from outside the batch re-asks exactly as before. **Confirming answers to the batch:** into a
 paused batch a confirmation is kept and the entry parked (resuming is still the
 operator's separate gesture); into an aborted or completed one it is refused.
 

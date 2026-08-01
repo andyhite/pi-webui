@@ -1307,9 +1307,25 @@ order)`. At admission the preview is taken again and compared; a mismatch does n
   untouched**: an input the batch does not produce is exactly as binding as before,
   and re-asks. The second half of the same rule is an admission gate: an entry whose
   in-batch producer has not finished is not admitted at all, so it waits rather than
-  being run and refused for an input nothing had produced yet. `done` is the only
-  state that counts as produced — a sibling that failed, was interrupted, or was
-  cancelled will never produce it, and the batch's own pause is what decides that.
+  being run and refused for an input nothing had produced yet.
+
+  The gate asks three questions, not one, because asking only "is the producer
+  done?" stranded the downstream for ever the moment a producer failed, was
+  cancelled, or was interrupted — **"not done" and "not finished yet" are different
+  facts**, and a run waiting on a settled producer is waiting for something that is
+  not coming. So: a producer still to run means **wait** (the entry stays queued); a
+  producer that settled without producing, where the output is still unbound, means
+  **this can never run** — the entry is settled `cancelled` with a reason naming the
+  producer, at the queue rather than down the run path, which would have provisioned
+  a workspace before refusing and recorded the refusal as this command _failing_
+  when it never started; and a producer that settled while the output arrived
+  anyway means **ready** — the ordinary contract check then re-asks, because
+  somebody supplying that input another way is a change to what this would assemble.
+  Abandonment is decided before waiting: one dead producer makes an entry unviable
+  however long its other producers take. Cancelling an entry drains for the same
+  reason — the entry it just made unviable should hear about it from the gesture that
+  caused it, not from whatever unrelated session ends next.
+
 - **The queue is admission, and it has no timer.** It subscribes to the session
   event stream and drains when a session ends — including a session that never went
   through it, since an ordinary run under the limit holds a slot too. Nothing the
@@ -1350,9 +1366,12 @@ order)`. At admission the preview is taken again and compared; a mismatch does n
 _A batch pauses on a failed, out-of-budget, or interrupted session and is resumable
 by a human gesture only; a user stop **aborts** the remainder and an aborted batch is
 refused a resume, because stopped means stopped. The switch from a session end to an
-entry outcome is exhaustive with no `default`, so a seventh end kind fails to compile
-rather than being quietly recorded as success — which is exactly how an interrupted
-run used to be reported as done. `GET /api/run-batches/:id` returns every entry
+entry outcome is exhaustive by assertion — `end satisfies never` in the default
+branch — so a seventh end kind fails to compile rather than being quietly recorded as
+success, which is exactly how an interrupted run used to be reported as done. The
+assertion is the whole mechanism and not decoration: a `switch` of bare `return`s
+over a union compiles happily with a case missing, so "no `default`" on its own
+proves nothing, which an earlier version of this note claimed it did. `GET /api/run-batches/:id` returns every entry
 including settled ones, because a paused batch's failed run is precisely what
 "address it and resume" is about._
 
@@ -1360,7 +1379,10 @@ _Confirming a re-ask answers to the **batch**, not only to the entry: into a pau
 batch the contract is accepted and the entry parked, so the operator's answer is kept
 and resuming remains the separate gesture that starts the remainder; into an aborted
 or completed one it is refused, because there is nothing left for a confirmation to
-start. Admission order across batches is gesture order first (`enqueued_at`) with the
+start. Resuming settles the batch if the resume found nothing to do — a batch of one
+whose run a restart interrupted has nothing left, and resuming it is exactly what the
+pause instructs, so the remedy must not be how the batch gets stuck at "running" with
+nothing running. Admission order across batches is gesture order first (`enqueued_at`) with the
 scope's dependency order as the tie-break, so a batch admitted this minute cannot
 overtake one admitted an hour ago just because both have a position 1._
 
@@ -1369,11 +1391,31 @@ in its own sentence — a scope where only some commands have priced history has
 incomplete range, and the range is `null` rather than zero when none of them do;
 `unblockWith` is always `missing` because that is the only unblocking scope §4.1
 names; and the spend cap is recorded per run in the scope and enforced by Phase 6,
-not here. `spend_attributions.session_id` cascades on a deleted session while its
-comment claimed the row survives — the cascade is what shipped and what the code
-assumes, so the comment now says so and making spend outlive its spender is a future
-migration plus a decision about what a total means when the spender is gone (§8 with
-principle 10), not a comment edit._
+not here._
+
+_**Two known defects in the record rather than in the code**, because fixing either
+means editing something that must not be edited or making a decision that is not this
+epic's:_
+
+- _`spend_attributions.session_id` **cascades** on a deleted session, while the
+  migration's own comment beside it says the row survives. The cascade is the
+  behaviour — deleting a session deletes what it was charged — and the comment is
+  wrong. It is left wrong on purpose: migrations are append-only, and a comment inside
+  a migration's SQL is part of that migration. Correcting it means a new migration,
+  which needs the decision the comment is really about — what a spend total means once
+  its spender is gone (§8 with principle 10). Recorded here, which is where a reader
+  looks, rather than silently rewritten where they will not._
+- _**The in-batch exclusion has an edge it does not cover.** An input excluded because
+  the batch produces it stops being watched for the rest of that entry's wait, so if a
+  human edits the produced object after the upstream bound it and before the
+  downstream is admitted, the downstream does **not** re-ask — it runs against the
+  edited content. Nothing silently wrong happens (the run records exactly what it
+  assembled, §15-1), and the window is the seconds between one command finishing and
+  the next starting, but it is a real hole in "the preview is the contract" and it is
+  the price of the rule: telling a hand edit apart from the upstream's own write needs
+  the claim ledger's authorship (§3.4), which knows who wrote a **path** and not who
+  wrote an **object**. It closes when object writes carry the same attribution
+  workspace writes already do._
 
 ---
 

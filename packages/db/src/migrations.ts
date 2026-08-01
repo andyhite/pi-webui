@@ -971,15 +971,9 @@ export const migrations: readonly Migration[] = [
       -- the same reasoning as §15-1. Phase 6 enforces; this is the data.
       CREATE TABLE spend_attributions (
         id                TEXT PRIMARY KEY,
-        -- Whose budgets are charged.
-        --
-        -- NOTE, recorded rather than fixed: this comment used to claim the row
-        -- survives a deleted session, which CASCADE plainly contradicts. The
-        -- cascade is what shipped and what the code assumes; making spend outlive
-        -- its session needs a rebuild plus a decision about what a total means
-        -- when its spender is gone (§8 with principle 10), so it is a future
-        -- migration and not a comment edit. Today: deleting a session deletes
-        -- what it was charged.
+        -- Whose budgets are charged. ON DELETE CASCADE would lose the record of
+        -- what a chain cost the moment a session was deleted, so the link is
+        -- kept and the row survives, like runs.
         session_id        TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
         -- Who actually spent it: the same session for an 'own' row, a descendant
         -- for a 'descendant' one.
