@@ -15,7 +15,9 @@ import {
   ADAPTER_REPORTABLE_END_KINDS,
   checkPermissionEnforcement,
   checkToolPermissions,
+  checkProvenCompletion,
   classifyEnd,
+  UNPROVEN_COMPLETION_REASONS,
   isAdapterReportable,
   type RuntimeCapabilities,
   type SessionEndReason,
@@ -75,10 +77,6 @@ describe("SessionEndReason reconciled with the end-state taxonomy", () => {
   });
 
   it("passes every other reason through unchanged", () => {
-    expect(classifyEnd({ kind: "completed" }, 10)).toEqual({
-      kind: "completed",
-      at: 10,
-    });
     expect(classifyEnd({ kind: "stopped", by: "session" }, 10)).toEqual({
       kind: "stopped",
       by: "session",
@@ -89,6 +87,117 @@ describe("SessionEndReason reconciled with the end-state taxonomy", () => {
       message: "gone",
       at: 10,
     });
+  });
+});
+
+describe("completion is proven, not claimed (principle 3, §3.5)", () => {
+  const submitted = {
+    lifecycle: "producing",
+    outcomeSubmitted: true,
+    failedConditionIds: [],
+  } as const;
+
+  it("records a completion the world agrees with", () => {
+    const end = classifyEnd({ kind: "completed" }, 10, {
+      completion: submitted,
+    });
+    expect(end).toEqual({ kind: "completed", at: 10 });
+    expect(endStateFacts(end).proven).toBe(true);
+  });
+
+  it("refuses to record a completion nobody checked", () => {
+    // The rule lives here rather than in driver code: a `completed` with no
+    // evidence is the agent's own statement that it finished, which principle 3
+    // exists to refuse. It fails loudly — with a message naming what is missing —
+    // rather than marking work done that nothing proved.
+    const end = classifyEnd({ kind: "completed" }, 10);
+    expect(end.kind).toBe("failed");
+    expect(endStateFacts(end).proven).toBe(false);
+    if (end.kind !== "failed") return;
+    expect(end.message).toContain("never proven");
+  });
+
+  it("refuses a completion whose outcome was never submitted", () => {
+    const end = classifyEnd({ kind: "completed" }, 10, {
+      completion: {
+        lifecycle: "producing",
+        outcomeSubmitted: false,
+        failedConditionIds: [],
+      },
+    });
+    expect(end.kind).toBe("failed");
+  });
+
+  it("names the failing world condition rather than paraphrasing it", () => {
+    const end = classifyEnd({ kind: "completed" }, 10, {
+      completion: {
+        lifecycle: "producing",
+        outcomeSubmitted: true,
+        failedConditionIds: ["checks-green", "pr-open"],
+      },
+    });
+    expect(end.kind).toBe("failed");
+    if (end.kind !== "failed") return;
+    expect(end.message).toContain("checks-green");
+    expect(end.message).toContain("pr-open");
+  });
+
+  it("treats an open session's finish as an end, not as proof", () => {
+    // An open session declares no outcome, so there is nothing to prove; its end
+    // is the end an open session has (§3.5), and `proven` stays false.
+    const end = classifyEnd({ kind: "completed" }, 10, {
+      completion: { lifecycle: "open" },
+    });
+    expect(end.kind).toBe("ended-by-user");
+    expect(endStateFacts(end).proven).toBe(false);
+  });
+
+  it("lets PlotRoom's own state still win over the runtime's report", () => {
+    const end = classifyEnd({ kind: "completed" }, 10, {
+      completion: submitted,
+      budgetStop: { scope: "run" },
+    });
+    expect(end.kind).toBe("out-of-budget");
+  });
+
+  it("shares one answer with the run loop's continue-or-end decision", () => {
+    // §3.5: "a submission whose conditions fail is rejected, with the failing
+    // condition returned as feedback, and the session continues." The run loop and
+    // `classifyEnd` read the same predicate, so they cannot disagree about whether
+    // this submission counted.
+    const failing = checkProvenCompletion({
+      lifecycle: "producing",
+      outcomeSubmitted: true,
+      failedConditionIds: ["checks-green"],
+    });
+    expect(failing.proven).toBe(false);
+    if (failing.proven) return;
+    expect(failing.reason).toBe("conditions_failed");
+    expect(failing.failedConditionIds).toEqual(["checks-green"]);
+
+    expect(checkProvenCompletion(submitted).proven).toBe(true);
+  });
+
+  it("covers every unproven reason it declares", () => {
+    const reasons = new Set(
+      [
+        checkProvenCompletion(undefined),
+        checkProvenCompletion({ lifecycle: "open" }),
+        checkProvenCompletion({
+          lifecycle: "producing",
+          outcomeSubmitted: false,
+          failedConditionIds: [],
+        }),
+        checkProvenCompletion({
+          lifecycle: "producing",
+          outcomeSubmitted: true,
+          failedConditionIds: ["x"],
+        }),
+      ].flatMap((check) => (check.proven ? [] : [check.reason])),
+    );
+    expect([...reasons].sort()).toEqual(
+      [...UNPROVEN_COMPLETION_REASONS].sort(),
+    );
   });
 });
 

@@ -241,6 +241,98 @@ export function isAdapterReportable(reason: SessionEndReason): boolean {
 }
 
 /**
+ * What the session was launched to produce, and whether the world agrees it did
+ * (principle 3, §3.5).
+ *
+ * A producing command declares an outcome and optionally world conditions; the
+ * session ends when the outcome is submitted *and* the conditions hold. An open
+ * command declares nothing, so there is nothing to prove — which is why the two
+ * lifecycles are different shapes here rather than one shape with a flag.
+ */
+export type CompletionEvidence =
+  | {
+      readonly lifecycle: "producing";
+      /** Did the session actually submit its declared outcome? */
+      readonly outcomeSubmitted: boolean;
+      /** Declared conditions checked against the world and found false (§3.5). */
+      readonly failedConditionIds: readonly string[];
+    }
+  | { readonly lifecycle: "open" };
+
+export const UNPROVEN_COMPLETION_REASONS = [
+  /** The runtime said it finished without submitting the declared outcome. */
+  "not_submitted",
+  /** The outcome was submitted but a declared world condition is false. */
+  "conditions_failed",
+  /** An open session has no outcome, so completion is not a thing it can claim. */
+  "no_declared_outcome",
+  /** Nobody supplied evidence, so all there is is the agent's own word. */
+  "no_evidence",
+] as const;
+
+export type UnprovenCompletionReason =
+  (typeof UNPROVEN_COMPLETION_REASONS)[number];
+
+export type ProvenCompletionCheck =
+  | { readonly proven: true }
+  | {
+      readonly proven: false;
+      readonly reason: UnprovenCompletionReason;
+      readonly message: string;
+      readonly failedConditionIds: readonly string[];
+    };
+
+/**
+ * Principle 3 as a predicate: "whether work got done is decided by checking the
+ * world — an artifact exists and validates, a pull request is open, checks are
+ * green — never by an agent's own statement that it finished."
+ *
+ * This is the rule the run loop shares with `classifyEnd`: the same answer decides
+ * whether to record a completion and whether to hand the failing condition back
+ * as feedback and let the session continue within its budget (§3.5).
+ */
+export function checkProvenCompletion(
+  evidence?: CompletionEvidence,
+): ProvenCompletionCheck {
+  if (evidence === undefined) {
+    return {
+      proven: false,
+      reason: "no_evidence",
+      message:
+        "completion was reported but never proven: no completion evidence was supplied, so this is the agent's own word (principle 3)",
+      failedConditionIds: [],
+    };
+  }
+  if (evidence.lifecycle === "open") {
+    return {
+      proven: false,
+      reason: "no_declared_outcome",
+      message:
+        "an open session declares no outcome, so it cannot complete; it ends when someone ends it (§3.5)",
+      failedConditionIds: [],
+    };
+  }
+  if (!evidence.outcomeSubmitted) {
+    return {
+      proven: false,
+      reason: "not_submitted",
+      message:
+        "the session reported completion without submitting its declared outcome (principle 3)",
+      failedConditionIds: [],
+    };
+  }
+  if (evidence.failedConditionIds.length > 0) {
+    return {
+      proven: false,
+      reason: "conditions_failed",
+      message: `the declared outcome was submitted but these world conditions are false: ${evidence.failedConditionIds.join(", ")}`,
+      failedConditionIds: evidence.failedConditionIds,
+    };
+  }
+  return { proven: true };
+}
+
+/**
  * PlotRoom's state wins over the runtime's report.
  *
  * A runtime that was stopped because the budget ran out sees a user-initiated
@@ -253,8 +345,21 @@ export interface EndClassificationContext {
   readonly budgetStop?: { readonly scope: BudgetScope };
   /** The server restarted while this session was in flight (principle 11). */
   readonly interrupted?: { readonly message: string };
+  /**
+   * What the world says about the declared outcome (principle 3). Supplying it is
+   * how a `completed` becomes recordable: **absent evidence is not proof**, so a
+   * reported completion with none is recorded as a failure that says exactly that
+   * rather than as a completion nobody checked.
+   */
+  readonly completion?: CompletionEvidence;
 }
 
+/**
+ * The runtime's report becomes PlotRoom's record here, and nowhere else — which
+ * is why the proven-completion clause lives here too. A driver that decided
+ * "completed" for itself would be principle 3 as driver code, true in one path and
+ * false in the next.
+ */
 export function classifyEnd(
   reason: SessionEndReason,
   at: number,
@@ -268,8 +373,16 @@ export function classifyEnd(
   }
 
   switch (reason.kind) {
-    case "completed":
-      return { kind: "completed", at };
+    case "completed": {
+      const proof = checkProvenCompletion(context.completion);
+      if (proof.proven) return { kind: "completed", at };
+      // An open session had nothing to prove: its end is the end an open session
+      // has (§3.5), not a failure. Anything else is work reported done that the
+      // world does not agree is done.
+      return proof.reason === "no_declared_outcome"
+        ? { kind: "ended-by-user", at }
+        : { kind: "failed", message: proof.message, at };
+    }
     case "ended-by-user":
       return { kind: "ended-by-user", at };
     case "stopped":
