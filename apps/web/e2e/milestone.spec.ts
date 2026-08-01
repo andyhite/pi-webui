@@ -11,16 +11,32 @@
  *      context (§3.5, one-gesture flow).
  *   2. Clicking "run" on that command node starts a run (idempotent
  *      initiation key, principle 9) and a session appears on the canvas.
- *   3. Opening the Conversation panel for that session streams the real
- *      observation-derived transcript live: reasoning rendered distinctly
- *      from output, and — after a first submission the declared world
- *      condition (`out.txt` must exist) fails, so PlotRoom's completion
- *      loop hands feedback back and the session continues into a second
- *      turn — a tool call with its input and output.
+ *   3. Opening the Conversation panel *before* turn 1 has said anything —
+ *      the scripted session paces itself with real delays
+ *      (`server-harness.ts`'s `MILESTONE_SCRIPT`) specifically so this test
+ *      opens the panel while nothing has arrived yet — and watching the
+ *      real observation-derived transcript stream in live over `/ws`:
+ *      reasoning rendered distinctly from output, neither present in the
+ *      panel's first paint; then, after a first submission the declared
+ *      world condition (`out.txt` must exist) fails, so PlotRoom's
+ *      completion loop hands feedback back and the session continues into
+ *      a second turn — proven absent right up until then, and then a tool
+ *      call with its input and output, again arriving with no reload or
+ *      refetch this test triggers itself.
  *   4. The second attempt's tool call actually writes `out.txt`; the same
  *      condition now holds, so the run and the session both show proven
  *      completion — on the command node's own label and in the
  *      Conversation panel's status header.
+ *
+ * A prior version of this gate opened the panel only after the whole
+ * scripted session had already finished (no pacing), so every assertion
+ * passed off `subscribeTranscript`'s one-time initial refetch alone —
+ * deleting the live `/ws` observation-handling branch entirely still
+ * passed. This version does not: verified by temporarily deleting the
+ * `session_observation`/`session_transcript` branch of `applyBufferedEvent`
+ * in `packages/ui/src/sessions/data-source.ts` and re-running (the turn-1
+ * reasoning/output and turn-2 assertions below time out, since nothing
+ * after the initial empty paint is ever refetched), then restoring it.
  *
  * Run locally: `pnpm build && pnpm --filter @plotroom/web e2e` (root
  * `pnpm build` — or at least `@plotroom/core`, `@plotroom/ui`,
@@ -40,15 +56,28 @@ import {
   type MilestoneServer,
 } from "./server-harness.js";
 
-let server: MilestoneServer;
+let server: MilestoneServer | undefined;
 
 test.beforeAll(async () => {
   server = await startMilestoneServer();
 });
 
+// Review finding n6: Playwright still runs afterAll when beforeAll threw, so
+// an unguarded `server.stop()` would crash on `undefined` and bury the real
+// failure reason under a second, unrelated one. `startMilestoneServer`
+// itself now tears down whatever it already created before rethrowing (see
+// its own doc comment), so there is nothing left to leak either way —
+// this guard exists only so a genuine beforeAll failure surfaces cleanly.
 test.afterAll(async () => {
-  await server.stop();
+  if (server) await server.stop();
 });
+
+function requireServer(): MilestoneServer {
+  if (!server) {
+    throw new Error("the milestone server never started (beforeAll failed)");
+  }
+  return server;
+}
 
 /**
  * Real HTML5 drag-and-drop, dispatched directly with a real `DataTransfer`
@@ -116,7 +145,7 @@ async function ensureNotCollapsed(page: Page): Promise<void> {
 test("drop a command definition onto a ticket, run it, watch the transcript stream live, see proven completion", async ({
   page,
 }) => {
-  const base = server.baseUrl;
+  const base = requireServer().baseUrl;
 
   // Seed a bare ticket and a producing command definition with a real
   // world condition — everything after this is the canvas gesture the
@@ -214,20 +243,42 @@ test("drop a command definition onto a ticket, run it, watch the transcript stre
   // yet (§6.5, Batch 3 scope).
   await expect(page.getByTestId("send-disabled-reason")).toBeVisible();
 
-  // Turn 1: reasoning rendered distinctly from output.
+  // THE LIVE-STREAMING PROOF (gate review finding: this must not pass just
+  // because the whole session finished before the panel ever opened). The
+  // scripted session paces turn 1 with real delays (server-harness.ts), so
+  // the panel opens seconds before turn 2 can possibly exist: turn 2 needs
+  // turn 1 to finish, a submission, and PlotRoom's completion loop to send
+  // feedback back — none of which has happened yet. This absence is the
+  // baseline a genuine live update has to depart from; if it never departs
+  // from it (the WS observation/transcript branch broken), every assertion
+  // below times out instead of passing for the wrong reason.
+  const turn2Reasoning = page.locator('[data-transcript-kind="reasoning"]', {
+    hasText: "the feedback says out.txt is missing",
+  });
+  await expect(turn2Reasoning).toHaveCount(0);
+
+  // Turn 1: reasoning rendered distinctly from output, arriving live —
+  // neither is in the panel's very first (already-asserted-empty-of-turn-2)
+  // paint; both appear only once the scripted delay ahead of each elapses
+  // and the server publishes the observation over /ws.
   await expect(
     page.locator('[data-transcript-kind="reasoning"]').first(),
-  ).toContainText("checking whether out.txt already exists");
+  ).toContainText("checking whether out.txt already exists", {
+    timeout: 10_000,
+  });
   await expect(
     page.locator('[data-transcript-kind="output"]').first(),
-  ).toContainText("I believe the work is already done.");
+  ).toContainText("I believe the work is already done.", { timeout: 10_000 });
+
+  // Still true right up to turn 1 finishing: turn 2 cannot exist until a
+  // submission is checked and feedback comes back.
+  await expect(turn2Reasoning).toHaveCount(0);
 
   // The first submission fails the declared condition; PlotRoom hands the
   // feedback back and the session continues into a second turn — proof the
-  // completion loop is a loop, not a single answer.
-  await expect(
-    page.locator('[data-transcript-kind="reasoning"]').nth(1),
-  ).toContainText("the feedback says out.txt is missing", { timeout: 20_000 });
+  // completion loop is a loop, not a single answer, and that it arrived over
+  // /ws, not from any reload or refetch this test triggers itself.
+  await expect(turn2Reasoning).toBeVisible({ timeout: 20_000 });
 
   // Turn 2's tool call, with its input and output — distinct from the
   // `plotroom_submit_outcome` tool call every attempt also makes.
