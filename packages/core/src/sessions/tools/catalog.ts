@@ -1317,10 +1317,12 @@ const boardTools: readonly AgentTool[] = [
 
 /**
  * The claim tools (§3.4: "sessions get tools to request, yield, and inspect
- * them"), plus the operator's grant and force-release. Their endpoints are
- * Track A's to mount over `@plotroom/core`'s claim manager, so they are `pending`
- * until they exist — visible in the vocabulary, and honest about not being
- * reachable yet.
+ * them"), plus the operator's grant and force-release.
+ *
+ * Live since Epic 5.5: `apps/server/src/routes/claims.ts` mounts them over this
+ * package's own claim manager, and the two operator-only ones are enforced by the
+ * request's actor rather than by the flag below — a flag describes, and the route
+ * is the gate.
  */
 const claimTools: readonly AgentTool[] = [
   mutate({
@@ -1330,7 +1332,6 @@ const claimTools: readonly AgentTool[] = [
     gesture: "the operator granting write access to a path",
     method: "POST",
     endpoint: "/api/workstreams/:id/claims",
-    availability: "pending",
     input: {
       id: id("the workstream whose workspace the path is in"),
       path: {
@@ -1353,7 +1354,6 @@ const claimTools: readonly AgentTool[] = [
     gesture: "release a claim",
     method: "DELETE",
     endpoint: "/api/claims/:id",
-    availability: "pending",
     input: { id: id("the claim id") },
   }),
   {
@@ -1364,7 +1364,6 @@ const claimTools: readonly AgentTool[] = [
       "/api/workstreams/:id/claims",
       { id: id("the workstream") },
     ),
-    availability: "pending",
   },
   mutate({
     name: "claim_policy_declare",
@@ -1373,7 +1372,6 @@ const claimTools: readonly AgentTool[] = [
     gesture: "the operator pre-granting a subtree",
     method: "POST",
     endpoint: "/api/claims/:id/policies",
-    availability: "pending",
     input: {
       id: id("the claim the policy is declared on"),
       subtree: {
@@ -1399,7 +1397,6 @@ const claimTools: readonly AgentTool[] = [
     gesture: "remove a pre-grant",
     method: "DELETE",
     endpoint: "/api/claim-policies/:id",
-    availability: "pending",
     input: { id: id("the policy id") },
     requires: {
       reflexivity: "capability",
@@ -1412,7 +1409,6 @@ const claimTools: readonly AgentTool[] = [
     gesture: "answering a claim approval from the queue (§7.1)",
     method: "POST",
     endpoint: "/api/claim-waits/:id/answer",
-    availability: "pending",
     input: {
       id: id("the claim wait id"),
       decision: { type: "string", required: true, description: "grant | deny" },
@@ -1424,12 +1420,23 @@ const claimTools: readonly AgentTool[] = [
     },
   }),
   mutate({
+    name: "claim_wait_withdraw",
+    summary:
+      'Withdraw your own place in a waitlist — "never mind, I do not need that path".',
+    gesture: "leave the waitlist from the claims panel",
+    method: "DELETE",
+    endpoint: "/api/claim-waits/:id",
+    input: { id: id("the claim wait id") },
+    // Giving up a wait takes nothing and grants nothing; the manager refuses a
+    // caller who is neither the waiter nor the operator.
+    requires: { reflexivity: "none" },
+  }),
+  mutate({
     name: "claim_grant",
     summary: "Grant a claim directly. The operator's alone (§3.4).",
     gesture: "grant a path to a session",
     method: "POST",
     endpoint: "/api/workstreams/:id/claim-grants",
-    availability: "pending",
     input: {
       id: id("the workstream"),
       path: {
@@ -1452,7 +1459,6 @@ const claimTools: readonly AgentTool[] = [
     gesture: "force-release from the claims panel",
     method: "POST",
     endpoint: "/api/claims/:id/force-release",
-    availability: "pending",
     input: {
       id: id("the claim id"),
       cascade: {

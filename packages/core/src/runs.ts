@@ -1,3 +1,4 @@
+import type { Author } from "./author.js";
 import type {
   AskPoint,
   CommandLifecycle,
@@ -13,7 +14,9 @@ import type {
   NodeId,
   ObjectId,
   RunId,
+  SessionId,
   VersionId,
+  WorkstreamId,
 } from "./ids.js";
 
 /**
@@ -296,4 +299,109 @@ export function isRunCompactable(
   if (run.addressedByLatest) return false;
   if (run.recencyRank <= context.policy.keepPerDefinition) return false;
   return run.startedAt < context.now - context.policy.windowSeconds;
+}
+
+/* ------------------------------------------- scoped runs and the queue (§4.1) */
+
+/**
+ * "One initiation may cover" (§4.1). Every scope below is one human or session
+ * gesture over many commands, and the product never adds a fifth of its own:
+ * there is no scope meaning "whatever looks ready", because that would be the
+ * system deciding what to run (principle 2).
+ */
+export const RUN_SCOPE_KINDS = [
+  /** This command. */
+  "one",
+  /** This plus everything downstream that becomes runnable, in dependency order. */
+  "subgraph",
+  /** The upstream chain that would unblock a blocked command, then the command. */
+  "missing",
+  /** Everything drifted inside one workstream. */
+  "drifted-workstream",
+  /** Everything drifted, fleet-wide. */
+  "drifted-fleet",
+] as const;
+
+export type RunScopeKind = (typeof RUN_SCOPE_KINDS)[number];
+
+export type RunBatchState =
+  | "running"
+  /** A failed or out-of-budget session; resumable once the human addresses it. */
+  | "paused"
+  /** A user stop: "stopped means stopped", so the remainder never resumes. */
+  | "aborted"
+  | "completed";
+
+/** One scoped gesture, as a record (§4.1, principle 9). */
+export interface RunBatch {
+  readonly id: string;
+  /** Client-supplied; one key covers the whole scope, however many commands. */
+  readonly initiationKey: string;
+  readonly scope: RunScopeKind;
+  /** The command or workstream the scope was taken from; null fleet-wide. */
+  readonly scopeId: string | null;
+  readonly state: RunBatchState;
+  readonly pauseReason: string | null;
+  readonly initiatedBy: Author;
+  readonly spendCapMicros: number | null;
+  readonly createdAt: number;
+  readonly settledAt: number | null;
+}
+
+export const QUEUED_RUN_STATES = [
+  "queued",
+  "starting",
+  "running",
+  /** Its inputs drifted while it waited, so it asks instead of running (§4.1). */
+  "needs_reask",
+  "done",
+  "failed",
+  "cancelled",
+  "paused",
+] as const;
+
+export type QueuedRunState = (typeof QUEUED_RUN_STATES)[number];
+
+/**
+ * One command's place in the queue.
+ *
+ * "Queuing is admission of already-initiated work, not scheduling" (§4.1), which
+ * is why this record exists at all: the gesture is already in the past, so the
+ * thing waiting has to be visible, positioned, and cancellable rather than
+ * living in a scheduler's memory.
+ *
+ * `contractHash` is **the preview as a contract**. It covers the assembled body
+ * and the configuration the preview showed; when it no longer matches at
+ * admission time the entry re-asks rather than running something else.
+ */
+export interface QueuedRun {
+  readonly id: string;
+  readonly batchId: string;
+  readonly commandId: CommandId;
+  readonly workstreamId: WorkstreamId | null;
+  /** 1-based among the entries still waiting; null once it is not waiting. */
+  readonly position: number | null;
+  readonly state: QueuedRunState;
+  readonly contractHash: string;
+  readonly spendCapMicros: number | null;
+  readonly runId: RunId | null;
+  readonly sessionId: SessionId | null;
+  /** What it is waiting on, or why it will not run. Never inferred from state. */
+  readonly detail: string | null;
+  readonly enqueuedAt: number;
+  readonly startedAt: number | null;
+  readonly settledAt: number | null;
+}
+
+/**
+ * Whether a queued run may still start. Stated as a predicate so the queue
+ * surface, the drain loop, and the cancel verb agree about it (principle 8).
+ */
+export function isQueuedRunStartable(state: QueuedRunState): boolean {
+  return state === "queued";
+}
+
+/** Whether cancelling is still meaningful: "cancellable before it starts" (§4.1). */
+export function isQueuedRunCancellable(state: QueuedRunState): boolean {
+  return state === "queued" || state === "needs_reask" || state === "paused";
 }

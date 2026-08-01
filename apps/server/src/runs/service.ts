@@ -24,6 +24,7 @@ import {
   type Workspace,
   type WorkspaceKindConfig,
   type WorkspaceKindRegistry,
+  type WorkstreamId,
 } from "@plotroom/core";
 import type { RunPreview, StoredSession } from "@plotroom/db";
 import type { ServerConfig } from "../config.js";
@@ -37,6 +38,13 @@ import { driveSession } from "../sessions/driver.js";
 import type { SessionHub } from "../sessions/hub.js";
 import type { ApiStores } from "../routes/api.js";
 import { toCommandNode, toEdge, toPlacedNode } from "../routes/mappers.js";
+import type { ClaimService } from "../claims/service.js";
+import type { SessionGate } from "../sessions/gate.js";
+import {
+  attributionChain,
+  checkDelegation,
+  recordDelegation,
+} from "./delegation.js";
 
 /**
  * Run one command (spec §4.1, §3.5) — the gesture the whole product exists for.
@@ -142,6 +150,10 @@ export interface RunServiceDeps {
   readonly workspaceKinds: WorkspaceKindRegistry;
   readonly conditions: ConditionCheckRegistry;
   readonly hub: SessionHub;
+  /** Path claims (§3.4): granted at provisioning, released when a session ends. */
+  readonly claims: ClaimService;
+  /** Where a session's writes meet its claims, per call (§3.4, C6). */
+  readonly gate: SessionGate;
 }
 
 export class RunService {
@@ -245,6 +257,12 @@ export class RunService {
     const command = stores.commands.command(input.commandId);
     const definition = stores.commands.definition(command.definitionId);
 
+    // §4.1's lineage rule, first, before anything is recorded: "a session cannot
+    // run, resume, or re-run itself or anything in its own initiation chain." A
+    // human actor passes through untouched — they are the authority the chain
+    // terminates at (principle 1).
+    checkDelegation(stores, { actor: input.actor, commandId: input.commandId });
+
     // Workspaces are provisioned at first run, and readiness is what blocks
     // (§3.4). Before this line nothing has been recorded, so a not-ready
     // workspace refuses the gesture instead of leaving half a run behind.
@@ -332,6 +350,47 @@ export class RunService {
       started.run.id,
       session.session.id,
     );
+
+    // A session actor makes this run a delegation (§3.6): the child is on the
+    // graph with its provenance, "never hidden inside a tool call", and its spend
+    // is attributed up the chain that initiated it (principle 2).
+    if (input.actor.kind === "session") {
+      const delegation = recordDelegation(stores, {
+        parent: input.actor.sessionId,
+        childSessionId: session.session.id,
+        workstreamId: command.workstreamId,
+        commandId: command.id,
+        reason: `delegated run of ${definition.name}`,
+      });
+      bus.publish({
+        entity: "edge",
+        verb: "created",
+        edge: toEdge(stores.graph.edge(delegation.edgeId)),
+        author: input.actor,
+      });
+      this.deps.logger.info("a session delegated a run", {
+        parentSessionId: input.actor.sessionId,
+        childSessionId: session.session.id,
+        attributionChain: delegation.plan.attributionChain,
+      });
+    }
+
+    // §3.4's single-writer default, at the moment a workspace first has work in
+    // it: "a workstream begins with one session holding the **root claim**, and
+    // every claim is a subdivision of a claim someone already holds". The grant
+    // is the operator's, which is what makes principle 1 hold — every claim
+    // downstream subdivides a human's reach and no chain acquires any. A second
+    // session in the same workstream gets nothing here: it asks.
+    const rootClaim = this.deps.claims.grantRootClaim(
+      command.workstreamId,
+      session.session.id,
+    );
+    if (rootClaim === null) {
+      this.deps.logger.info(
+        "the workstream already has a writer; this session claims per path",
+        { workstreamId: command.workstreamId, sessionId: session.session.id },
+      );
+    }
 
     this.publishRun(started.run, input.actor, "created");
     bus.publish({
@@ -680,6 +739,11 @@ export class RunService {
         bus: this.deps.bus,
         logger: this.deps.logger,
         nowMillis: systemMillisClock,
+        // §3.4's enforcement point and §3.6's claim-wait phase, both wired here
+        // rather than optionally: a session whose writes nothing checks is not a
+        // session this product knows how to run.
+        gate: this.deps.gate,
+        phaseContext: (id) => this.phaseContext(id),
         hooks: {
           onSubmission: async ({ sessionId: id, submission }) => {
             await this.submit({
@@ -700,6 +764,7 @@ export class RunService {
       {
         sessionId,
         handle,
+        adapterId,
         // The runtime reports no window occupancy, so the meter is estimated
         // against the command's declared model window and labelled as such.
         accounting: { contextWindowTokens: modelWindowTokens },
@@ -763,6 +828,14 @@ export class RunService {
    */
   private async endRunFor(session: StoredSession): Promise<void> {
     const { stores } = this.deps;
+
+    // "A session ending releases everything it held automatically; explicit yield
+    // is an optimization" (§3.4). Done for every end, before anything about the
+    // run is decided, because a wedged holder that kept its paths after ending
+    // would block the next session for a whole lease.
+    this.releaseClaims(session);
+    this.attributeSpend(session);
+
     if (session.runId === null) return;
 
     const run = stores.runs.run(session.runId);
@@ -1029,6 +1102,68 @@ export class RunService {
     };
   }
 
+  /**
+   * Attribute what a session spent to every budget that binds it (§3.6,
+   * principle 2): "its spend counts against every budget that binds the
+   * initiating work."
+   *
+   * The chain is the recorded lineage, so a delegated dollar lands on the
+   * delegator and on whoever started *them*, however many hops up. Idempotent per
+   * (charged session, spender), because the accounting total is folded from the
+   * observation log and re-attributing a grown total must replace the row rather
+   * than add a second one.
+   *
+   * A session whose runtime reported no cost contributes no evidence about money
+   * (§4.1's own rule about estimates, applied to the ledger): nothing is written.
+   */
+  private attributeSpend(session: StoredSession): void {
+    const { stores } = this.deps;
+    const { accounting } = stores.sessions.observationState(session.session.id);
+    if (accounting.costUsd <= 0) return;
+
+    const entries = stores.spend.attribute({
+      chain: attributionChain(stores, session.session.id),
+      workstreamId: session.session.workstreamId,
+      spend: {
+        sessionId: session.session.id,
+        amountUsd: accounting.costUsd,
+        // The basis is named, never assumed: a runtime-reported cost and one
+        // priced from tokens are different evidence (§8).
+        basis:
+          accounting.costBasis === "runtime-reported" ? "reported" : "priced",
+        at: stores.clock(),
+      },
+    });
+
+    for (const entry of entries) {
+      const total = stores.spend.sessionTotal(entry.sessionId);
+      const workstreamId =
+        stores.spend.workstreamOf(entry.sessionId) ??
+        session.session.workstreamId;
+      this.deps.bus.publish({
+        entity: "session_spend",
+        verb: "updated",
+        sessionId: entry.sessionId,
+        workstreamId: workstreamId as WorkstreamId,
+        attributedMicros: total.amountMicros,
+        sources: total.sources,
+        author: { kind: "human" },
+      });
+    }
+  }
+
+  /**
+   * Release what an ended session held (§3.4), idempotently: `endSession` on the
+   * manager is a no-op once nothing is held, so a doubled end costs nothing.
+   */
+  private releaseClaims(session: StoredSession): void {
+    if (session.session.end === null) return;
+    this.deps.claims.endSession(
+      session.session.workstreamId,
+      session.session.id,
+    );
+  }
+
   private costOf(sessionId: string): RunCost {
     const { accounting } =
       this.deps.stores.sessions.observationState(sessionId);
@@ -1042,7 +1177,22 @@ export class RunService {
   private statusOf(sessionId: string): SessionStatus {
     return this.deps.stores.sessions.status(sessionId, {
       now: systemMillisClock(),
+      ...this.phaseContext(sessionId),
     });
+  }
+
+  /**
+   * PlotRoom's own gates, folded into every phase derivation (§3.6).
+   *
+   * "Waiting on a claim" is a phase like thinking or responding, and it is the
+   * one phase no runtime can report: only PlotRoom knows a session asked for a
+   * path someone else holds. Derived by the claim manager from the wait rows, so
+   * the card, the queue, and blocked-on accounting cannot disagree (§7.2).
+   */
+  private phaseContext(sessionId: string): {
+    readonly waitingOnClaim: boolean;
+  } {
+    return { waitingOnClaim: this.deps.claims.isWaitingOnClaim(sessionId) };
   }
 
   private publishRun(

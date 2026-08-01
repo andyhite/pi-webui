@@ -819,4 +819,255 @@ export const migrations: readonly Migration[] = [
       ALTER TABLE session_injections ADD COLUMN failed_condition_ids_json TEXT;
     `,
   },
+  {
+    id: 11,
+    name: "claims_and_write_ledger",
+    sql: `
+      -- Path claims (§3.4), persisted. @plotroom/core owns every rule; these
+      -- tables are only \`ClaimState\` at rest, which is what its own docs call
+      -- "the whole of what Track A persists". Rows are append-and-retire rather
+      -- than delete-in-place: a released claim and an expired one are different
+      -- events, and the release reason is the record of which.
+      CREATE TABLE claims (
+        id                     TEXT PRIMARY KEY,
+        workstream_id          TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        -- Canonicalized by \`canonicalizePath\`: the key is what hierarchy is
+        -- compared over, the display is what a refusal shows. The workspace
+        -- root's key is the empty string, so it cannot be NOT NULL-checked away.
+        path_key               TEXT NOT NULL,
+        path_display           TEXT NOT NULL,
+        holder_kind            TEXT NOT NULL CHECK (holder_kind IN ('human', 'session')),
+        holder_session         TEXT REFERENCES sessions (id) ON DELETE CASCADE,
+        -- NULL only for the workstream's root claim, which the operator holds.
+        granted_from_claim_id  TEXT REFERENCES claims (id),
+        granted_by_kind        TEXT NOT NULL CHECK (granted_by_kind IN ('human', 'session')),
+        granted_by_session     TEXT,
+        granted_at             INTEGER NOT NULL,
+        last_activity_at       INTEGER NOT NULL,
+        -- "Claims are leases, not locks" (§3.4). NULL is forever and only the
+        -- root claim may have it; \`violatesLeasePolicy\` is the assertion, and
+        -- the CHECK below is the half the schema can state on its own.
+        lease_seconds          INTEGER,
+        released_at            INTEGER,
+        release_reason         TEXT CHECK (release_reason IN
+                                 ('yielded', 'expired', 'session-ended',
+                                  'force-released', 'revoked')),
+        CHECK (
+          (holder_kind = 'session' AND holder_session IS NOT NULL) OR
+          (holder_kind = 'human'   AND holder_session IS NULL)
+        ),
+        CHECK (
+          (granted_by_kind = 'session' AND granted_by_session IS NOT NULL) OR
+          (granted_by_kind = 'human'   AND granted_by_session IS NULL)
+        ),
+        CHECK (
+          (released_at IS NULL     AND release_reason IS NULL) OR
+          (released_at IS NOT NULL AND release_reason IS NOT NULL)
+        ),
+        -- Only the root claim is immortal (violatesLeasePolicy): an immortal
+        -- session claim is a lock nobody but the operator can break, and §3.4
+        -- has no concept for one. The schema cannot represent it.
+        CHECK (
+          (granted_from_claim_id IS NULL     AND lease_seconds IS NULL) OR
+          (granted_from_claim_id IS NOT NULL AND lease_seconds IS NOT NULL)
+        )
+      );
+
+      CREATE INDEX claims_live_idx ON claims (workstream_id, released_at);
+      CREATE INDEX claims_holder_idx ON claims (holder_session, released_at);
+
+      -- A waitlist nobody can see is a new invisible stall (§3.4), so a wait is
+      -- a row with an id, not a queue in memory. The two gates are two columns:
+      -- availability (blocked_by_json) and authorization (authorized_at).
+      CREATE TABLE claim_waits (
+        id                       TEXT PRIMARY KEY,
+        workstream_id            TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        session_id               TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        path_key                 TEXT NOT NULL,
+        path_display             TEXT NOT NULL,
+        since                    INTEGER NOT NULL,
+        blocked_by_json          TEXT NOT NULL DEFAULT '[]',
+        grantor_claim_id         TEXT REFERENCES claims (id),
+        authorized_at            INTEGER,
+        -- NULL means "unspecified", which the grant resolves to the default
+        -- lease. It has never meant "never expires" (Epic 4.4's review round).
+        requested_lease_seconds  INTEGER,
+        removed_at               INTEGER,
+        removed_reason           TEXT CHECK (removed_reason IN
+                                   ('granted', 'withdrawn', 'session-ended',
+                                    'refused', 'deadlock')),
+        CHECK (
+          (removed_at IS NULL     AND removed_reason IS NULL) OR
+          (removed_at IS NOT NULL AND removed_reason IS NOT NULL)
+        )
+      );
+
+      CREATE INDEX claim_waits_live_idx ON claim_waits (workstream_id, removed_at);
+      CREATE INDEX claim_waits_session_idx ON claim_waits (session_id, removed_at);
+
+      -- Pre-granted policies (§3.4): "interactive approval is the exception, not
+      -- the mechanism". A policy lives inside the claim that declared it, so it
+      -- retires when that claim is released — recorded as its own reason rather
+      -- than as a withdrawal nobody made.
+      CREATE TABLE claim_policies (
+        id               TEXT PRIMARY KEY,
+        claim_id         TEXT NOT NULL REFERENCES claims (id) ON DELETE CASCADE,
+        subtree_key      TEXT NOT NULL,
+        subtree_display  TEXT NOT NULL,
+        effect           TEXT NOT NULL CHECK (effect IN ('allow', 'deny')),
+        pattern          TEXT NOT NULL,
+        declared_at      INTEGER NOT NULL,
+        withdrawn_at     INTEGER,
+        withdraw_reason  TEXT CHECK (withdraw_reason IN ('withdrawn', 'claim-released')),
+        CHECK (
+          (withdrawn_at IS NULL     AND withdraw_reason IS NULL) OR
+          (withdrawn_at IS NOT NULL AND withdraw_reason IS NOT NULL)
+        )
+      );
+
+      CREATE INDEX claim_policies_claim_idx ON claim_policies (claim_id, withdrawn_at);
+
+      -- The write ledger (§3.4's claim-precise divergence). Until this exists,
+      -- \`checkClaimContinuation\` keeps Epic 4.3's conservative verdict, because
+      -- narrowing from an incomplete record is the inference principle 7
+      -- forbids. These two tables are what makes the record complete.
+      CREATE TABLE path_writes (
+        id             TEXT PRIMARY KEY,
+        workstream_id  TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        path_key       TEXT NOT NULL,
+        path_display   TEXT NOT NULL,
+        holder_kind    TEXT NOT NULL CHECK (holder_kind IN ('human', 'session')),
+        holder_session TEXT,
+        -- NULL for the operator's implicit holding of everything (§3.4).
+        claim_id       TEXT REFERENCES claims (id) ON DELETE SET NULL,
+        at             INTEGER NOT NULL,
+        CHECK (
+          (holder_kind = 'session' AND holder_session IS NOT NULL) OR
+          (holder_kind = 'human'   AND holder_session IS NULL)
+        )
+      );
+
+      CREATE INDEX path_writes_workstream_idx ON path_writes (workstream_id, at);
+
+      CREATE TABLE path_reads (
+        id             TEXT PRIMARY KEY,
+        workstream_id  TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        session_id     TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        path_key       TEXT NOT NULL,
+        path_display   TEXT NOT NULL,
+        at             INTEGER NOT NULL
+      );
+
+      CREATE INDEX path_reads_session_idx ON path_reads (session_id, at);
+    `,
+  },
+  {
+    id: 12,
+    name: "spend_attribution",
+    sql: `
+      -- "Its spend counts against every budget that binds the initiating work"
+      -- (§3.6, principle 2). Rows rather than running totals, so a budget at any
+      -- scope is a query and a chain's cost stays answerable after the fact —
+      -- the same reasoning as §15-1. Phase 6 enforces; this is the data.
+      CREATE TABLE spend_attributions (
+        id                TEXT PRIMARY KEY,
+        -- Whose budgets are charged. ON DELETE CASCADE would lose the record of
+        -- what a chain cost the moment a session was deleted, so the link is
+        -- kept and the row survives, like runs.
+        session_id        TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        -- Who actually spent it: the same session for an 'own' row, a descendant
+        -- for a 'descendant' one.
+        source_session_id TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        workstream_id     TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        basis             TEXT NOT NULL CHECK (basis IN ('own', 'descendant')),
+        -- Integer micros, like every other money column: a float is how spend
+        -- totals stop adding up.
+        amount_micros     INTEGER NOT NULL,
+        -- A number that cannot name its source is not evidence (§8).
+        cost_basis        TEXT NOT NULL CHECK (cost_basis IN ('reported', 'priced')),
+        at                INTEGER NOT NULL
+      );
+
+      CREATE INDEX spend_attributions_session_idx ON spend_attributions (session_id);
+      CREATE INDEX spend_attributions_source_idx ON spend_attributions (source_session_id);
+      CREATE INDEX spend_attributions_workstream_idx ON spend_attributions (workstream_id);
+
+      -- One accounting snapshot per (session, source): re-attributing a spender
+      -- whose total grew replaces its rows rather than double-counting them, so
+      -- a session observed twice is charged once (principle 9's shape, applied
+      -- to money).
+      CREATE UNIQUE INDEX spend_attributions_pair_idx
+        ON spend_attributions (session_id, source_session_id);
+    `,
+  },
+  {
+    id: 13,
+    name: "run_queue_and_batches",
+    sql: `
+      -- Scoped runs (§4.1). A batch is one gesture over many commands: "one
+      -- initiation may cover" run-one, run-subgraph, run-what's-missing, or
+      -- re-run-all-drifted, and the initiation key covers the whole scope so a
+      -- double-click cannot produce two batches (principle 9).
+      CREATE TABLE run_batches (
+        id                TEXT PRIMARY KEY,
+        initiation_key    TEXT NOT NULL UNIQUE,
+        scope_kind        TEXT NOT NULL CHECK (scope_kind IN
+                            ('one', 'subgraph', 'missing',
+                             'drifted-workstream', 'drifted-fleet')),
+        -- The command or workstream the scope was taken from; NULL fleet-wide.
+        scope_id          TEXT,
+        -- 'paused' is §4.1's own word: a failed or out-of-budget session pauses
+        -- the remainder and a human resumes it. 'aborted' is a user stop, which
+        -- "aborts the remainder rather than pausing it: stopped means stopped".
+        state             TEXT NOT NULL CHECK (state IN
+                            ('running', 'paused', 'aborted', 'completed')),
+        pause_reason      TEXT,
+        actor_kind        TEXT NOT NULL CHECK (actor_kind IN ('human', 'session')),
+        actor_session     TEXT,
+        spend_cap_micros  INTEGER,
+        created_at        INTEGER NOT NULL,
+        settled_at        INTEGER,
+        CHECK (
+          (actor_kind = 'session' AND actor_session IS NOT NULL) OR
+          (actor_kind = 'human'   AND actor_session IS NULL)
+        )
+      );
+
+      -- Admission, not scheduling (§4.1): the gesture already happened, and the
+      -- queue only decides *when*. Every entry therefore carries the contract it
+      -- was admitted under — "a queued run executes exactly what it previewed,
+      -- and if its inputs drifted while it waited, it says so and asks".
+      CREATE TABLE run_queue (
+        id                TEXT PRIMARY KEY,
+        batch_id          TEXT NOT NULL REFERENCES run_batches (id) ON DELETE CASCADE,
+        command_id        TEXT NOT NULL REFERENCES commands (id) ON DELETE CASCADE,
+        -- Per entry, derived from the batch key, so each command in a scope is
+        -- its own idempotent initiation into the existing run path.
+        initiation_key    TEXT NOT NULL UNIQUE,
+        -- Dependency order within the batch (§4.1's "in dependency order").
+        position          INTEGER NOT NULL,
+        state             TEXT NOT NULL CHECK (state IN
+                            ('queued', 'starting', 'running', 'needs_reask',
+                             'done', 'failed', 'cancelled', 'paused')),
+        -- THE PREVIEW IS THE CONTRACT. The hash covers the assembled body and
+        -- the configuration the preview showed; a mismatch at admission is a
+        -- re-ask, never a silent run of something else.
+        contract_hash     TEXT NOT NULL,
+        contract_json     TEXT NOT NULL,
+        spend_cap_micros  INTEGER,
+        run_id            TEXT REFERENCES runs (id) ON DELETE SET NULL,
+        session_id        TEXT REFERENCES sessions (id) ON DELETE SET NULL,
+        -- What the entry is waiting on, or why it will not run. Read by the
+        -- queue surface; never inferred from the state alone.
+        detail            TEXT,
+        enqueued_at       INTEGER NOT NULL,
+        started_at        INTEGER,
+        settled_at        INTEGER
+      );
+
+      CREATE INDEX run_queue_state_idx ON run_queue (state, position, enqueued_at);
+      CREATE INDEX run_queue_batch_idx ON run_queue (batch_id, position);
+      CREATE INDEX run_queue_command_idx ON run_queue (command_id);
+    `,
+  },
 ];

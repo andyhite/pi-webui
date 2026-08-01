@@ -7,7 +7,10 @@ import {
   sessionAuthor,
   type AccountingContext,
   type CompletionEvidence,
+  type PhaseContext,
   type RuntimeObservation,
+  type RuntimeRequest,
+  type RuntimeRequestId,
   type RuntimeSessionHandle,
   type SessionEnd,
   type SessionEndReason,
@@ -24,6 +27,7 @@ import {
   PLOTROOM_SUBMIT_TOOL,
   type ScriptedSubmission,
 } from "../runtime/scripted.js";
+import type { SessionGate } from "./gate.js";
 
 /**
  * The observation pump: one adapter's stream becomes PlotRoom's record.
@@ -67,11 +71,27 @@ export interface SessionDriverDeps {
   readonly hooks: SessionDriverHooks;
   /** Millisecond clock, matching the observation vocabulary. */
   readonly nowMillis: () => number;
+  /**
+   * Where claims gate the runtime (§3.4, decision 0001's C6). A `tool-permission`
+   * request is answered here, per call, before the tool runs. Optional only so a
+   * test can drive the pump without a claim store; a session running without one
+   * is a session whose writes nothing checked, which is why the app always wires
+   * it.
+   */
+  readonly gate?: SessionGate;
+  /**
+   * PlotRoom's own gates, which outrank whatever the runtime is doing (§3.6):
+   * waiting on a claim is a phase, and it is derived from claim rows rather than
+   * from anything the runtime said.
+   */
+  readonly phaseContext?: (sessionId: string) => Partial<PhaseContext>;
 }
 
 export interface DriveSessionInput {
   readonly sessionId: string;
   readonly handle: RuntimeSessionHandle;
+  /** Which adapter's tool surface the gate should consult (`WriteIntent`). */
+  readonly adapterId?: string;
   /**
    * What the accounting fold needs when the runtime reports none of it itself:
    * a model window to measure occupancy against, and a pricing table if there
@@ -105,7 +125,12 @@ export function driveSession(
         const record = sessions.appendObservation(sessionId, observation);
         state = reduceObservation(state, observation, accounting);
 
-        const status = deriveSessionStatus(state, { now: deps.nowMillis() });
+        const status = deriveSessionStatus(state, {
+          now: deps.nowMillis(),
+          // Claim waits and pending approvals are PlotRoom's own state, not the
+          // runtime's, so they are read here rather than folded from the log.
+          ...deps.phaseContext?.(sessionId),
+        });
         const stored = sessions.saveDerived(sessionId, state, status.phase);
 
         bus.publish({
@@ -135,6 +160,22 @@ export function driveSession(
                 submission: parseSubmission(observation.input),
               });
             }
+            break;
+
+          case "request-raised":
+            // §3.4's enforcement point: a write is answered from claims before
+            // the tool runs, and an unbounded one raises an approval instead of
+            // being allowed because nothing recognized it. A question is the
+            // human's to answer (§6.4) and the gate says so rather than
+            // silently allowing — which is why this is not conditional on the
+            // request's kind.
+            await answerRequest(deps, {
+              sessionId,
+              handle: input.handle,
+              adapterId: input.adapterId ?? "unknown",
+              requestId: observation.requestId,
+              request: observation.request,
+            });
             break;
 
           case "session-ended":
@@ -177,6 +218,52 @@ interface EndInput {
   readonly sessionId: string;
   readonly reason: SessionEndReason;
   readonly at: number;
+}
+
+/**
+ * Answer one runtime request (§3.4, §6.6).
+ *
+ * The decision is `@plotroom/core`'s `decideToolPermission`, reached through the
+ * gate; this only carries the answer back. With no gate wired the request is
+ * **denied**, not allowed: a write nothing could check is exactly the fail-open
+ * the C6 verification exists to rule out.
+ */
+async function answerRequest(
+  deps: SessionDriverDeps,
+  input: {
+    readonly sessionId: string;
+    readonly handle: RuntimeSessionHandle;
+    readonly adapterId: string;
+    readonly requestId: RuntimeRequestId;
+    readonly request: RuntimeRequest;
+  },
+): Promise<void> {
+  const outcome =
+    deps.gate === undefined
+      ? ({
+          kind: "deny",
+          reason:
+            "no claim gate is wired, so nothing could check this write (§3.4)",
+        } as const)
+      : deps.gate.decide({
+          sessionId: input.sessionId,
+          adapterId: input.adapterId,
+          requestId: input.requestId,
+          request: input.request,
+        }).outcome;
+
+  try {
+    await input.handle.respond(input.requestId, outcome);
+  } catch (error) {
+    // A runtime that will not take an answer is a runtime whose request nobody
+    // can settle; it is logged and the stream carries on, because the pump must
+    // never be what stops (principle 11).
+    deps.logger.error("a runtime would not accept a permission answer", {
+      sessionId: input.sessionId,
+      requestId: input.requestId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**

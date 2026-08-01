@@ -20,6 +20,15 @@
 
 import type { Author } from "./author.js";
 import type {
+  Claim,
+  ClaimId,
+  ClaimPolicy,
+  ClaimPolicyId,
+  ClaimReleaseReason,
+  ClaimWait,
+  ClaimWaitId,
+} from "./claims/index.js";
+import type {
   CommandDefinition,
   CommandNode,
   CommandOutput,
@@ -39,7 +48,7 @@ import type {
   WorkstreamId,
 } from "./ids.js";
 import type { PlotObject } from "./objects.js";
-import type { Run } from "./runs.js";
+import type { QueuedRun, Run, RunBatch } from "./runs.js";
 import type {
   RuntimeObservation,
   Session,
@@ -63,6 +72,20 @@ export const EVENT_ENTITIES = [
   "session",
   "session_observation",
   "session_transcript",
+  /**
+   * Claims, waits, and policies (§3.4). One vocabulary, not a claims-only
+   * channel: "waiting on a claim is an attention state", and an attention state
+   * a surface has to poll for is the invisible stall the product exists to
+   * prevent.
+   */
+  "claim",
+  "claim_wait",
+  "claim_policy",
+  /** Scoped runs and the queue of already-initiated work (§4.1). */
+  "run_batch",
+  "run_queue_entry",
+  /** Spend attributed up an initiating chain (§3.6, principle 2). */
+  "session_spend",
 ] as const;
 
 export type EventEntity = (typeof EVENT_ENTITIES)[number];
@@ -227,6 +250,93 @@ export type DomainEventBody =
       readonly publication: TranscriptPublication;
       readonly objectId: ObjectId;
       readonly versionId: VersionId;
+    }
+  /**
+   * A claim granted, renewed, or reattached (§3.4). Carried whole, like every
+   * other entity here, so the claims panel draws from the event.
+   */
+  | {
+      readonly entity: "claim";
+      readonly verb: "created" | "updated";
+      readonly claim: Claim;
+    }
+  /**
+   * A claim left the live state. The reason travels with it because §3.4 makes
+   * them different facts: a yield is an optimization, an expiry is the lease
+   * doing its job, a force-release is the operator breaking a wedged holder, and
+   * a surface that showed all three as "gone" would hide the one worth reading.
+   */
+  | {
+      readonly entity: "claim";
+      readonly verb: "deleted";
+      readonly claimId: ClaimId;
+      readonly workstreamId: WorkstreamId;
+      readonly reason: ClaimReleaseReason;
+    }
+  /**
+   * A waitlist place (§3.4): "waiting on a claim is an attention state — a
+   * session phase, a health alert past a threshold, and part of blocked-on
+   * accounting". `position` and `blockedOnHuman` are derived by the claim
+   * manager, never by a surface counting rows.
+   */
+  | {
+      readonly entity: "claim_wait";
+      readonly verb: "created" | "updated";
+      readonly wait: ClaimWait;
+      readonly position: number;
+      readonly blockedOnHuman: boolean;
+      /** Set when the manager refused this wait to avoid a deadlock (§3.4). */
+      readonly refusal: string | null;
+    }
+  | {
+      readonly entity: "claim_wait";
+      readonly verb: "deleted";
+      readonly waitId: ClaimWaitId;
+      readonly workstreamId: WorkstreamId;
+      readonly reason: string;
+    }
+  | {
+      readonly entity: "claim_policy";
+      readonly verb: "created";
+      readonly policy: ClaimPolicy;
+      readonly workstreamId: WorkstreamId;
+    }
+  | {
+      readonly entity: "claim_policy";
+      readonly verb: "deleted";
+      readonly policyId: ClaimPolicyId;
+      readonly workstreamId: WorkstreamId;
+      readonly reason: string;
+    }
+  /** A scoped gesture and its state: running, paused, aborted, completed (§4.1). */
+  | {
+      readonly entity: "run_batch";
+      readonly verb: "created" | "updated";
+      readonly batch: RunBatch;
+    }
+  /**
+   * One queued run. Published on every state change including the re-ask, which
+   * is what makes "a queued run is visible as queued, shows its position, and
+   * can be cancelled before it starts" true without polling (§4.1).
+   */
+  | {
+      readonly entity: "run_queue_entry";
+      readonly verb: "created" | "updated";
+      readonly queued: QueuedRun;
+    }
+  /**
+   * Spend attributed to a session's budgets, its delegates included (§3.6,
+   * principle 2). Micros, like every other money value; enforcement is Phase 6's,
+   * and this is the number it will enforce against.
+   */
+  | {
+      readonly entity: "session_spend";
+      readonly verb: "updated";
+      readonly sessionId: SessionId;
+      readonly workstreamId: WorkstreamId;
+      readonly attributedMicros: number;
+      /** How many sessions contributed, own work included. */
+      readonly sources: number;
     };
 
 /** One message on the state-change stream: envelope plus a typed body. */

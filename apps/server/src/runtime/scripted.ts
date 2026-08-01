@@ -15,6 +15,8 @@ import {
   type RuntimeStartConfig,
   type SessionRuntimeAdapter,
   type TranscriptPoint,
+  type WriteIntent,
+  type WriteIntentDeclaration,
 } from "@plotroom/core";
 
 /**
@@ -80,6 +82,45 @@ export const SCRIPTED_ADAPTER_ID = "scripted";
  * to a real runtime, so the driver watches for one thing, not two.
  */
 export const PLOTROOM_SUBMIT_TOOL = "plotroom_submit_outcome";
+
+/**
+ * The tool name a declared `write-file` effect is gated as (§3.4).
+ *
+ * A scripted write is not a shortcut past the claim gate: it raises the same
+ * `tool-permission` request a real runtime's write raises, waits for PlotRoom's
+ * answer, and does not touch the disk when the answer is no. That is what makes
+ * the scripted runtime provable evidence about claim enforcement rather than a
+ * path that happens not to be enforced.
+ */
+export const SCRIPTED_WRITE_TOOL = "scripted_write_file";
+
+/**
+ * What the scripted runtime's one tool writes, declared like every other
+ * adapter's (`WriteIntentDeclaration`). Exactly the path the step named — so a
+ * scripted write is claim-checked rather than approval-raising, which is the
+ * case Epic 5.5 needs to be able to test at all.
+ */
+export function scriptedWriteIntents(): WriteIntentDeclaration {
+  return {
+    adapterId: SCRIPTED_ADAPTER_ID,
+    intentOf(toolName: string, input: unknown): WriteIntent {
+      if (toolName !== SCRIPTED_WRITE_TOOL) {
+        return {
+          kind: "unbounded",
+          reason: `${toolName} has no declared write extent for the scripted runtime`,
+        };
+      }
+      const path = (input as { readonly path?: unknown } | null)?.path;
+      if (typeof path !== "string" || path.length === 0) {
+        return {
+          kind: "unbounded",
+          reason: "a write step named no path, so its extent is unknown",
+        };
+      }
+      return { kind: "paths", paths: [path] };
+    },
+  };
+}
 
 export const SCRIPTED_CAPABILITIES: RuntimeCapabilities = {
   // Nothing native: a fork is PlotRoom seeding a new scripted session.
@@ -357,6 +398,12 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
   #actIndex = 0;
   #stopped = false;
   /**
+   * Requests waiting for PlotRoom's answer. A stop settles them as denials
+   * rather than leaving the act hanging: a session that has ended writes nothing,
+   * and a promise nobody will resolve is a hung process, not a refusal.
+   */
+  readonly #pending = new Map<RuntimeRequestId, (o: RequestOutcome) => void>();
+  /**
    * Acts play one at a time, in order. A delayed act would otherwise interleave
    * with the act an injection triggers, and a script's meaning would depend on
    * how long its pauses were.
@@ -410,6 +457,11 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
       outcome,
       at: this.#now(),
     });
+
+    const settle = this.#pending.get(requestId);
+    if (settle === undefined) return;
+    this.#pending.delete(requestId);
+    settle(outcome);
   }
 
   async stop(_mode: "graceful" | "abort"): Promise<void> {
@@ -446,6 +498,13 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
         }
 
         if (step.effect !== undefined) {
+          // Gated, not assumed. The write raises a `tool-permission` request and
+          // waits for PlotRoom's answer; a denial leaves the disk untouched and
+          // the refusal in the observation log, which is what §3.4 enforcement
+          // looks like from the runtime's side.
+          const outcome = await this.#requestPermission(step.effect);
+          if (this.#stopped) return;
+          if (outcome.kind !== "allow") continue;
           this.#applyEffect(step.effect);
           continue;
         }
@@ -486,6 +545,33 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
     }
   }
 
+  /**
+   * Raise the permission request a declared write needs answered, and wait.
+   *
+   * The wait is unbounded on purpose: PlotRoom answers every request it observes,
+   * and a timeout here would be the runtime deciding it may write because nobody
+   * replied fast enough — exactly the fail-open the C6 gate exists to prevent.
+   * A stop settles it as a denial, so nothing hangs forever.
+   */
+  #requestPermission(declared: ScriptedEffect): Promise<RequestOutcome> {
+    const requestId =
+      `req-${this.#pending.size + 1}-${this.#actIndex}` as RuntimeRequestId;
+
+    return new Promise<RequestOutcome>((resolve) => {
+      this.#pending.set(requestId, resolve);
+      this.#queue.push({
+        kind: "request-raised",
+        requestId,
+        request: {
+          kind: "tool-permission",
+          toolName: SCRIPTED_WRITE_TOOL,
+          input: { path: declared.path },
+        },
+        at: this.#now(),
+      });
+    });
+  }
+
   #applyEffect(declared: ScriptedEffect): void {
     if (isAbsolute(declared.path)) {
       throw new Error(
@@ -507,6 +593,15 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
 
   #end(reason: ScriptedEndReason): void {
     this.#stopped = true;
+    // Nothing may write after the session ended, and nothing may hang waiting
+    // for an answer that will never come.
+    for (const [requestId, settle] of this.#pending) {
+      this.#pending.delete(requestId);
+      settle({
+        kind: "deny",
+        reason: "the session ended before it was answered",
+      });
+    }
     this.#queue.push({ kind: "session-ended", reason, at: this.#now() });
     this.#queue.end();
   }

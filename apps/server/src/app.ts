@@ -15,7 +15,9 @@ import {
 } from "./http/middleware.js";
 import type { Logger } from "./logging/logger.js";
 import type { CompactionSchedule } from "./maintenance/compaction.js";
+import { ClaimService } from "./claims/service.js";
 import { createStores } from "./routes/api.js";
+import { claimRoutes } from "./routes/claims.js";
 import { commandRoutes } from "./routes/commands.js";
 import { graphRoutes } from "./routes/graph.js";
 import { healthRoutes } from "./routes/health.js";
@@ -29,6 +31,7 @@ import { snapshotRoutes } from "./routes/snapshot.js";
 import { workstreamRoutes } from "./routes/workstreams.js";
 import { RunService } from "./runs/service.js";
 import { createRuntimeRegistry } from "./runtime/index.js";
+import { createSessionGate } from "./sessions/gate.js";
 import { SessionHub } from "./sessions/hub.js";
 import { serveRenderer } from "./static/serve.js";
 import { nodeCommandExec } from "./workspaces/exec.js";
@@ -103,6 +106,23 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   // one workspace-kind registry over the mechanism contract, one condition-check
   // registry over the world conditions a submission is proven against.
   const hub = new SessionHub();
+
+  // Path claims (§3.4). One service over `@plotroom/core`'s claim manager: the
+  // run path grants the root claim at provisioning, the gate answers every write
+  // from it, and the endpoints below are the same decisions as tools
+  // (principle 8).
+  const claims = new ClaimService({
+    claims: stores.claims,
+    bus,
+    logger,
+    clock: stores.clock,
+  });
+  const gate = createSessionGate({
+    claims,
+    sessions: stores.sessions,
+    logger,
+  });
+
   const runs = new RunService({
     config,
     stores,
@@ -112,6 +132,8 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     workspaceKinds,
     conditions: createConditionChecks(nodeCommandExec()),
     hub,
+    claims,
+    gate,
   });
 
   app.route("/api", healthRoutes(db));
@@ -121,7 +143,8 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", graphRoutes(stores));
   app.route("/api", commandRoutes(stores));
   app.route("/api", runRoutes(stores, runs));
-  app.route("/api", sessionRoutes(stores, runs));
+  app.route("/api", sessionRoutes(stores, runs, claims));
+  app.route("/api", claimRoutes(claims));
   app.route(
     "/api",
     maintenanceRoutes(stores, config, compaction, workspaceKinds, logger),

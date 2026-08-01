@@ -1,11 +1,14 @@
 import { systemClock, type Author, type Clock } from "@plotroom/core";
 import {
+  ClaimStore,
   CommandStore,
   GraphStore,
   Maintenance,
   ObjectStore,
+  RunQueueStore,
   RunStore,
   SessionStore,
+  SpendStore,
   WorkspaceStore,
   WorkstreamStore,
   type PlotroomDatabase,
@@ -33,7 +36,13 @@ export interface ApiStores {
   readonly workstreams: WorkstreamStore;
   readonly commands: CommandStore;
   readonly runs: RunStore;
+  /** Scoped runs and the concurrency queue (§4.1, Epic 5.5). */
+  readonly queue: RunQueueStore;
   readonly sessions: SessionStore;
+  /** Path claims at rest; every rule over them is `@plotroom/core`'s (§3.4). */
+  readonly claims: ClaimStore;
+  /** Spend attributed up the initiating chain (§3.6, principle 2). */
+  readonly spend: SpendStore;
   readonly workspaces: WorkspaceStore;
   /** Durability, cleanup, and the compaction sweep (§12, Epic 2.3). */
   readonly maintenance: Maintenance;
@@ -53,7 +62,10 @@ export function createStores(
     workstreams: new WorkstreamStore(db, clock),
     commands: new CommandStore(db, clock),
     runs: new RunStore(db, clock),
+    queue: new RunQueueStore(db, clock),
     sessions: new SessionStore(db, clock),
+    claims: new ClaimStore(db, clock),
+    spend: new SpendStore(db, clock),
     // The workspace record's own vocabulary is milliseconds (§3.4), so its
     // clock is the same instant at a different resolution, never a second
     // source of time.

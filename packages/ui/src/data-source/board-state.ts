@@ -193,9 +193,20 @@ export function applyEvent(state: BoardState, event: DomainEvent): BoardState {
         event.verb === "deleted" ? undefined : event.run,
       );
       return next;
+    // These advance `seq` and nothing else. A version, an observation, and a
+    // transcript publication have their own live seams; claims, the run queue,
+    // and spend attribution have their own surfaces (§3.4's claims panel,
+    // §4.1's queue, §8's fleet panel), and nothing about a node's label or
+    // running state is derived from any of them.
     case "version":
     case "session_observation":
     case "session_transcript":
+    case "claim":
+    case "claim_wait":
+    case "claim_policy":
+    case "run_batch":
+    case "run_queue_entry":
+    case "session_spend":
       return next;
   }
 }

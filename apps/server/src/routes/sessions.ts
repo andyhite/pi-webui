@@ -10,6 +10,7 @@ import {
   type SessionId,
   type VersionId,
 } from "@plotroom/core";
+import type { ClaimService } from "../claims/service.js";
 import { validateJsonBody } from "../http/validate.js";
 import type { RunService } from "../runs/service.js";
 import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
@@ -36,6 +37,7 @@ const stopBody = z.object({
 export function sessionRoutes(
   stores: ApiStores,
   service: RunService,
+  claims: ClaimService,
 ): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
 
@@ -70,7 +72,15 @@ export function sessionRoutes(
       transcriptObjectId: stored.transcriptObjectId,
       // Derived now, from the log — the stored phase is a snapshot, and a read
       // is a good moment to say what silence has done to the health signal.
-      status: stores.sessions.status(id, { now: systemMillisClock() }),
+      // PlotRoom's own gates outrank whatever the runtime was last seen doing
+      // (§3.6): a session waiting on a path someone else holds is
+      // `waiting-on-claim`, and only PlotRoom knows that — no runtime can report
+      // it. Derived by the claim manager from the wait rows, so the card and the
+      // queue's blocked-on accounting cannot disagree (§7.2).
+      status: stores.sessions.status(id, {
+        now: systemMillisClock(),
+        waitingOnClaim: claims.isWaitingOnClaim(id),
+      }),
       end:
         stored.session.end === null ? null : endStateFacts(stored.session.end),
       // Resolved through core, so "an omitted author means the operator" is

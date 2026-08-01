@@ -773,6 +773,243 @@ export const runInitiations = sqliteTable(
   (table) => [index("run_initiations_command_idx").on(table.commandId)],
 );
 
+/**
+ * Path claims at rest (§3.4, migration 11).
+ *
+ * `@plotroom/core`'s `ClaimState` plus its `ClaimEffect` list is the persistence
+ * contract; these tables are that state's rows and nothing more. No rule is
+ * restated here — the claim manager decides, `ClaimStore` applies the effects.
+ */
+export const claims = sqliteTable(
+  "claims",
+  {
+    id: text("id").primaryKey(),
+    workstreamId: text("workstream_id")
+      .notNull()
+      .references(() => workstreams.id, { onDelete: "cascade" }),
+    /** Canonical, NFC-normalized, case-folded. The workspace root is "". */
+    pathKey: text("path_key").notNull(),
+    pathDisplay: text("path_display").notNull(),
+    holderKind: text("holder_kind", { enum: ["human", "session"] }).notNull(),
+    holderSession: text("holder_session").references(() => sessions.id, {
+      onDelete: "cascade",
+    }),
+    /** Null only for the workstream's root claim, held by the operator. */
+    grantedFromClaimId: text("granted_from_claim_id"),
+    grantedByKind: text("granted_by_kind", {
+      enum: ["human", "session"],
+    }).notNull(),
+    grantedBySession: text("granted_by_session"),
+    grantedAt: integer("granted_at").notNull(),
+    lastActivityAt: integer("last_activity_at").notNull(),
+    /** Null is forever, and only the root claim may be (`violatesLeasePolicy`). */
+    leaseSeconds: integer("lease_seconds"),
+    releasedAt: integer("released_at"),
+    releaseReason: text("release_reason"),
+  },
+  (table) => [
+    index("claims_live_idx").on(table.workstreamId, table.releasedAt),
+    index("claims_holder_idx").on(table.holderSession, table.releasedAt),
+  ],
+);
+
+export const claimWaits = sqliteTable(
+  "claim_waits",
+  {
+    id: text("id").primaryKey(),
+    workstreamId: text("workstream_id")
+      .notNull()
+      .references(() => workstreams.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    pathKey: text("path_key").notNull(),
+    pathDisplay: text("path_display").notNull(),
+    since: integer("since").notNull(),
+    /** Availability, the first of a wait's two independent gates. */
+    blockedByJson: text("blocked_by_json").notNull().default("[]"),
+    grantorClaimId: text("grantor_claim_id"),
+    /** Authorization, the second gate: settled by policy or by an answer. */
+    authorizedAt: integer("authorized_at"),
+    requestedLeaseSeconds: integer("requested_lease_seconds"),
+    removedAt: integer("removed_at"),
+    removedReason: text("removed_reason"),
+  },
+  (table) => [
+    index("claim_waits_live_idx").on(table.workstreamId, table.removedAt),
+    index("claim_waits_session_idx").on(table.sessionId, table.removedAt),
+  ],
+);
+
+export const claimPolicies = sqliteTable(
+  "claim_policies",
+  {
+    id: text("id").primaryKey(),
+    claimId: text("claim_id")
+      .notNull()
+      .references(() => claims.id, { onDelete: "cascade" }),
+    subtreeKey: text("subtree_key").notNull(),
+    subtreeDisplay: text("subtree_display").notNull(),
+    effect: text("effect", { enum: ["allow", "deny"] }).notNull(),
+    pattern: text("pattern").notNull(),
+    declaredAt: integer("declared_at").notNull(),
+    withdrawnAt: integer("withdrawn_at"),
+    withdrawReason: text("withdraw_reason"),
+  },
+  (table) => [
+    index("claim_policies_claim_idx").on(table.claimId, table.withdrawnAt),
+  ],
+);
+
+/**
+ * The write ledger §3.4's claim-precise divergence needs. Without these rows
+ * `checkClaimContinuation` keeps Epic 4.3's conservative verdict, because
+ * narrowing from an incomplete record would be inference (principle 7).
+ */
+export const pathWrites = sqliteTable(
+  "path_writes",
+  {
+    id: text("id").primaryKey(),
+    workstreamId: text("workstream_id")
+      .notNull()
+      .references(() => workstreams.id, { onDelete: "cascade" }),
+    pathKey: text("path_key").notNull(),
+    pathDisplay: text("path_display").notNull(),
+    holderKind: text("holder_kind", { enum: ["human", "session"] }).notNull(),
+    holderSession: text("holder_session"),
+    /** Null for the operator's implicit holding of everything. */
+    claimId: text("claim_id").references(() => claims.id, {
+      onDelete: "set null",
+    }),
+    at: integer("at").notNull(),
+  },
+  (table) => [
+    index("path_writes_workstream_idx").on(table.workstreamId, table.at),
+  ],
+);
+
+export const pathReads = sqliteTable(
+  "path_reads",
+  {
+    id: text("id").primaryKey(),
+    workstreamId: text("workstream_id")
+      .notNull()
+      .references(() => workstreams.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    pathKey: text("path_key").notNull(),
+    pathDisplay: text("path_display").notNull(),
+    at: integer("at").notNull(),
+  },
+  (table) => [index("path_reads_session_idx").on(table.sessionId, table.at)],
+);
+
+/**
+ * Spend attributed up the initiating chain (§3.6, principle 2, migration 12).
+ * One row per (charged session, spender): re-attributing a grown total replaces
+ * the row rather than adding a second one.
+ */
+export const spendAttributions = sqliteTable(
+  "spend_attributions",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    sourceSessionId: text("source_session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    workstreamId: text("workstream_id")
+      .notNull()
+      .references(() => workstreams.id, { onDelete: "cascade" }),
+    basis: text("basis", { enum: ["own", "descendant"] }).notNull(),
+    amountMicros: integer("amount_micros").notNull(),
+    costBasis: text("cost_basis", { enum: ["reported", "priced"] }).notNull(),
+    at: integer("at").notNull(),
+  },
+  (table) => [
+    index("spend_attributions_session_idx").on(table.sessionId),
+    index("spend_attributions_source_idx").on(table.sourceSessionId),
+    index("spend_attributions_workstream_idx").on(table.workstreamId),
+    uniqueIndex("spend_attributions_pair_idx").on(
+      table.sessionId,
+      table.sourceSessionId,
+    ),
+  ],
+);
+
+/** One scoped gesture over many commands (§4.1, migration 13). */
+export const runBatches = sqliteTable("run_batches", {
+  id: text("id").primaryKey(),
+  initiationKey: text("initiation_key").notNull().unique(),
+  scopeKind: text("scope_kind", {
+    enum: ["one", "subgraph", "missing", "drifted-workstream", "drifted-fleet"],
+  }).notNull(),
+  scopeId: text("scope_id"),
+  state: text("state", {
+    enum: ["running", "paused", "aborted", "completed"],
+  }).notNull(),
+  pauseReason: text("pause_reason"),
+  actorKind: text("actor_kind", { enum: ["human", "session"] }).notNull(),
+  actorSession: text("actor_session"),
+  spendCapMicros: integer("spend_cap_micros"),
+  createdAt: integer("created_at").notNull(),
+  settledAt: integer("settled_at"),
+});
+
+/**
+ * The concurrency queue (§4.1): admission of already-initiated work. Every
+ * entry carries the contract it was admitted under, because "a queued run
+ * executes exactly what it previewed".
+ */
+export const runQueue = sqliteTable(
+  "run_queue",
+  {
+    id: text("id").primaryKey(),
+    batchId: text("batch_id")
+      .notNull()
+      .references(() => runBatches.id, { onDelete: "cascade" }),
+    commandId: text("command_id")
+      .notNull()
+      .references(() => commands.id, { onDelete: "cascade" }),
+    initiationKey: text("initiation_key").notNull().unique(),
+    position: integer("position").notNull(),
+    state: text("state", {
+      enum: [
+        "queued",
+        "starting",
+        "running",
+        "needs_reask",
+        "done",
+        "failed",
+        "cancelled",
+        "paused",
+      ],
+    }).notNull(),
+    contractHash: text("contract_hash").notNull(),
+    contractJson: text("contract_json").notNull(),
+    spendCapMicros: integer("spend_cap_micros"),
+    runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+    sessionId: text("session_id").references(() => sessions.id, {
+      onDelete: "set null",
+    }),
+    detail: text("detail"),
+    enqueuedAt: integer("enqueued_at").notNull(),
+    startedAt: integer("started_at"),
+    settledAt: integer("settled_at"),
+  },
+  (table) => [
+    index("run_queue_state_idx").on(
+      table.state,
+      table.position,
+      table.enqueuedAt,
+    ),
+    index("run_queue_batch_idx").on(table.batchId, table.position),
+    index("run_queue_command_idx").on(table.commandId),
+  ],
+);
+
 export type NodeRow = typeof nodes.$inferSelect;
 export type WorkstreamRow = typeof workstreams.$inferSelect;
 export type WorkstreamEventRow = typeof workstreamEvents.$inferSelect;
@@ -798,3 +1035,11 @@ export type SessionTranscriptPublicationRow =
 export type SessionInjectionRow = typeof sessionInjections.$inferSelect;
 export type RunSubmissionRow = typeof runSubmissions.$inferSelect;
 export type RunInitiationRow = typeof runInitiations.$inferSelect;
+export type ClaimRow = typeof claims.$inferSelect;
+export type ClaimWaitRow = typeof claimWaits.$inferSelect;
+export type ClaimPolicyRow = typeof claimPolicies.$inferSelect;
+export type PathWriteRow = typeof pathWrites.$inferSelect;
+export type PathReadRow = typeof pathReads.$inferSelect;
+export type SpendAttributionRow = typeof spendAttributions.$inferSelect;
+export type RunBatchRow = typeof runBatches.$inferSelect;
+export type RunQueueRow = typeof runQueue.$inferSelect;
