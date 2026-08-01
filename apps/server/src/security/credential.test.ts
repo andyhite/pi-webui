@@ -48,6 +48,19 @@ describe("checkCredential (spec §12)", () => {
     expect(result.allowed).toBe(false);
   });
 
+  it("refuses a credential of a different length without short-circuiting", () => {
+    // Length is the one thing an early return would leak; both of these take
+    // the same path as a same-length mismatch.
+    for (const presented of ["s", "s3cret-but-much-longer", ""]) {
+      expect(
+        checkCredential(
+          { authorizationHeader: undefined, credentialQueryParam: presented },
+          "s3cret",
+        ).allowed,
+      ).toBe(false);
+    }
+  });
+
   it("refuses a malformed Authorization header", () => {
     const result = checkCredential(
       { authorizationHeader: "s3cret", credentialQueryParam: undefined },

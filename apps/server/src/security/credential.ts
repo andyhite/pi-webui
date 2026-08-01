@@ -1,3 +1,5 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+
 /**
  * Operator credential check (spec §12): a single shared secret, not a user
  * system. Optional while bound to loopback; {@link checkBindPolicy} refuses
@@ -28,14 +30,20 @@ function bearerToken(
   return match?.[1];
 }
 
-/** Constant-time-ish comparison so credential checks don't leak length/timing. */
+/**
+ * Constant-time comparison, over digests rather than the strings themselves.
+ *
+ * `timingSafeEqual` needs equal-length buffers, and comparing the raw strings
+ * would mean returning early on a length mismatch — which leaks the
+ * credential's length to anyone willing to time the refusals. Hashing first
+ * makes both sides a fixed 32 bytes, so every wrong credential costs the same
+ * regardless of what was presented.
+ */
 function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i++) {
-    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return mismatch === 0;
+  const digest = (value: string): Buffer =>
+    createHash("sha256").update(value, "utf8").digest();
+
+  return timingSafeEqual(digest(a), digest(b));
 }
 
 /** `null` configured credential means no credential is required at all. */
