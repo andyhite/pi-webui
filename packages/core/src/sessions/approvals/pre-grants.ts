@@ -123,7 +123,13 @@ export type PreGrantVerdict =
 
 export interface PreGrantSubject {
   readonly sessionId: SessionId;
-  readonly workstreamId: WorkstreamId;
+  /**
+   * Null for a caller that does not know which workstream binds — under which a
+   * workstream-scoped grant matches **nothing**. That is the safe reading: an
+   * unknown scope must not silently satisfy a scope check, and the alternative
+   * (a sentinel id) would have been an id that could collide.
+   */
+  readonly workstreamId: WorkstreamId | null;
 }
 
 /**
@@ -175,9 +181,10 @@ export function preGrantMatches(
 }
 
 function inScope(scope: PreGrantScope, subject: PreGrantSubject): boolean {
-  return scope.kind === "session"
-    ? scope.sessionId === subject.sessionId
-    : scope.workstreamId === subject.workstreamId;
+  if (scope.kind === "session") return scope.sessionId === subject.sessionId;
+  return (
+    subject.workstreamId !== null && scope.workstreamId === subject.workstreamId
+  );
 }
 
 function isMoreSpecific(candidate: PreGrant, incumbent: PreGrant): boolean {

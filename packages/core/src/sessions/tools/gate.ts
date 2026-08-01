@@ -150,9 +150,8 @@ export function decideToolPermission(
   const verdict = decideApproval(ask, {
     actor,
     sessionId: context.sessionId,
-    // A pre-grant with no workstream to bind is a pre-grant that matches nothing,
-    // which is the safe reading of a caller that did not say.
-    workstreamId: (context.workstreamId ?? "") as WorkstreamId,
+    // Absent: a workstream-scoped grant matches nothing rather than everything.
+    workstreamId: context.workstreamId ?? null,
     preGrants: context.preGrants ?? [],
   });
 

@@ -198,6 +198,15 @@ describe("coverage", () => {
     expect(verdict.kind).toBe("allow");
   });
 
+  it("covers nothing by workstream when the caller does not know which one binds", () => {
+    const verdict = evaluatePreGrants(
+      [preGrant({ scope: { kind: "workstream", workstreamId: W } })],
+      grantable(shellAsk),
+      { sessionId: A, workstreamId: null },
+    );
+    expect(verdict.kind).toBe("unstated");
+  });
+
   it("stops covering once withdrawn", () => {
     const verdict = evaluatePreGrants(
       [preGrant({ withdrawnAt: 2_000 })],
