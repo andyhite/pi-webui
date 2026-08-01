@@ -38,6 +38,9 @@ import {
  *       "on": "start",                                   // "start" | "injection"
  *       "steps": [
  *         { "observation": { "kind": "turn-started", "turn": 1 } },
+ *         // Pacing: the stream really pauses here, so a client that opens the
+ *         // panel mid-turn sees a live turn rather than a finished one.
+ *         { "delay": { "ms": 250 } },
  *         { "observation": { "kind": "output-delta", "text": "working on it" } },
  *         // A declared side effect: what a real agent's tool call would leave
  *         // behind, so a world condition has something true to observe.
@@ -63,6 +66,11 @@ import {
  *   arrives, exactly as a real session continues within its budget (§3.5).
  * - `session-ended` closes the stream. A script that omits it leaves the session
  *   in flight, which is how interruption-on-restart is exercised (principle 11).
+ * - `delay` pauses the act for real wall-clock milliseconds, capped at
+ *   {@link SCRIPTED_MAX_DELAY_MS} and refused above it. Only this runtime has
+ *   one: pacing is a property of the double, not of PlotRoom, and nothing
+ *   downstream of the seam knows a delay happened — it observes the same stream,
+ *   more slowly.
  */
 export const SCRIPTED_ADAPTER_ID = "scripted";
 
@@ -190,18 +198,44 @@ const submission = z.object({
   note: z.string().optional(),
 });
 
+/**
+ * Pacing. A real model takes seconds between turns, and a script that replays a
+ * whole session inside one tick makes a streaming assertion pass for the wrong
+ * reason: the client refetched and found it already finished. A delay is
+ * therefore a declared step rather than something the adapter invents, so a test
+ * asks for exactly the pause it needs.
+ *
+ * Bounded, and refused rather than clamped past the bound: a script that asked
+ * for a minute would be a hung test with a plausible explanation, which is worse
+ * than a script that fails to parse.
+ */
+export const SCRIPTED_MAX_DELAY_MS = 5_000;
+
+const delay = z.object({
+  ms: z
+    .number()
+    .int()
+    .positive()
+    .max(SCRIPTED_MAX_DELAY_MS, {
+      message: `a scripted delay is capped at ${SCRIPTED_MAX_DELAY_MS}ms; a longer pause is a hung test, not a slow model`,
+    }),
+});
+
 const step = z
   .object({
     observation: scriptedObservation.optional(),
     effect: effect.optional(),
     submit: submission.optional(),
+    delay: delay.optional(),
   })
   .refine(
     (value) =>
-      [value.observation, value.effect, value.submit].filter(
+      [value.observation, value.effect, value.submit, value.delay].filter(
         (one) => one !== undefined,
       ).length === 1,
-    { message: "a step is exactly one of observation, effect, or submit" },
+    {
+      message: "a step is exactly one of observation, effect, submit, or delay",
+    },
   );
 
 const act = z.object({
@@ -322,6 +356,12 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
 
   #actIndex = 0;
   #stopped = false;
+  /**
+   * Acts play one at a time, in order. A delayed act would otherwise interleave
+   * with the act an injection triggers, and a script's meaning would depend on
+   * how long its pauses were.
+   */
+  #playing: Promise<void> = Promise.resolve();
 
   constructor(
     ref: RuntimeSessionRef,
@@ -333,7 +373,7 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
     this.#script = script;
     this.#config = config;
     this.#now = now;
-    this.#play("start");
+    this.#playing = this.#play("start");
   }
 
   observations(): AsyncIterable<RuntimeObservation> {
@@ -355,7 +395,7 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
       injectionId: input.id,
       at: this.#now(),
     });
-    this.#play("injection");
+    this.#playing = this.#playing.then(() => this.#play("injection"));
 
     return { id: input.id, queuedAt };
   }
@@ -381,8 +421,12 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
    * Play the next act declared for this trigger. A `submit` step ends the act:
    * the session is waiting for PlotRoom's answer, which is the only way a
    * producing session's outcome can be proven rather than claimed (§3.5).
+   *
+   * Async because a `delay` step really waits. Everything downstream of the seam
+   * is unaffected: it reads the same observations off the same queue, just spread
+   * over real time — which is the point of asking for a pause at all.
    */
-  #play(trigger: "start" | "injection"): void {
+  async #play(trigger: "start" | "injection"): Promise<void> {
     if (this.#stopped) return;
 
     while (this.#actIndex < this.#script.acts.length) {
@@ -392,6 +436,15 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
       this.#actIndex += 1;
 
       for (const step of act.steps) {
+        if (step.delay !== undefined) {
+          await sleep(step.delay.ms);
+          // Stopping during a pause abandons the rest of the act: the session is
+          // over, and replaying what it was going to say next would be a record
+          // of something that never happened.
+          if (this.#stopped) return;
+          continue;
+        }
+
         if (step.effect !== undefined) {
           this.#applyEffect(step.effect);
           continue;
@@ -460,6 +513,16 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
 }
 
 type ScriptedEndReason = z.infer<typeof endReason>;
+
+/**
+ * A real pause, and the only clock this file keeps. Unref'd so a script's pacing
+ * can never be the reason a process refuses to exit.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms).unref();
+  });
+}
 
 /** A minimal push queue, so observations stream without a dependency. */
 class ObservationQueue implements AsyncIterable<RuntimeObservation> {
