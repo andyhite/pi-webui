@@ -22,6 +22,10 @@ import type { StopCandidate } from "./stop.js";
  * already ended is the normal case, not an error, and refusing the whole gesture
  * would teach the operator to select more carefully instead of telling them what
  * happened.
+ *
+ * The lineage rule applies to **one** of the four kinds, deliberately: principle 1
+ * is about authoring intent, and only one prompt to many authors any. The reasoning
+ * is in `authorsIntent`, beside the branch that implements it.
  */
 
 export const BATCH_GESTURE_KINDS = [
@@ -98,7 +102,11 @@ export interface BatchRequest {
 export interface BatchContext {
   /** Every session the batch could touch, with whether it is running. */
   readonly candidates: readonly StopCandidate[];
-  /** Only consulted when the requester is a session (principle 1). */
+  /**
+   * Only consulted for an **injecting** batch by a **session** — see
+   * `authorsIntent`: stopping, closing, and archiving take capability away rather
+   * than authoring intent, so a parent may batch-stop its own runaway child.
+   */
   readonly lineage: LineageIndex;
 }
 
@@ -124,6 +132,30 @@ export type BatchResult =
 
 function needsRunning(kind: BatchGestureKind): boolean {
   return kind !== "archive";
+}
+
+/**
+ * Which batch kinds the lineage rule applies to — **only the injecting one**, and
+ * that is a decision rather than an omission.
+ *
+ * Principle 1 is about *authoring intent*: "a session may not author context into
+ * itself, its ancestors, or its descendants — it cannot wire its own inputs, grant
+ * itself capabilities, raise its own budget". One prompt to many is authoring, so
+ * it is checked. Stop, close, and archive **take capability away**, and the
+ * asymmetry principle 1 protects is about a session *expanding* what it knows or
+ * may do. Checking them was actively wrong: a parent could not batch-stop a
+ * runaway child, which is the single most useful batch stop there is, and the
+ * single gesture (`session_stop`) it would have to fall back to is one call per
+ * child at a moment when the operator wants one.
+ *
+ * The rule this preserves is §4.1's, and it is a different rule: a session may not
+ * **run, resume, or re-run** work in its own chain — none of which is a batch kind
+ * here. `session_stop`'s own catalog entry keeps its lineage class for the same
+ * reason it always had one (stopping a peer to escape a gate), and this narrowing
+ * is scoped to the batch envelope, where the target is the operator's selection.
+ */
+function authorsIntent(kind: BatchGestureKind): boolean {
+  return kind === "inject";
 }
 
 export function planBatch(
@@ -186,22 +218,25 @@ export function planBatch(
       continue;
     }
 
-    // The lineage rule applies member by member, exactly as it does to the
-    // single gesture: a session batching a prompt to twelve peers may not slip
-    // its own chain in among them (principle 1). A human is unconstrained, and
-    // `checkAuthoring` already answers that way.
-    const authoring = checkAuthoring(
-      context.lineage,
-      request.requestedBy,
-      sessionId,
-    );
-    if (!authoring.allowed) {
-      skipped.push({
+    if (authorsIntent(request.kind)) {
+      // Only the injecting batch is checked, member by member, exactly as the
+      // single gesture is: a session prompting twelve peers may not slip its own
+      // chain in among them (principle 1). A human is unconstrained, and
+      // `checkAuthoring` already answers that way. See `authorsIntent` for why
+      // stop, close, and archive are deliberately not checked.
+      const authoring = checkAuthoring(
+        context.lineage,
+        request.requestedBy,
         sessionId,
-        reason: "own_chain",
-        message: authoring.refusal.message,
-      });
-      continue;
+      );
+      if (!authoring.allowed) {
+        skipped.push({
+          sessionId,
+          reason: "own_chain",
+          message: authoring.refusal.message,
+        });
+        continue;
+      }
     }
 
     members.push({

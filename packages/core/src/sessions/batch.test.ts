@@ -158,8 +158,8 @@ describe("a batch is partial by design, and says why", () => {
   });
 });
 
-describe("the lineage rule applies member by member (principle 1)", () => {
-  it("skips the caller's own chain and keeps the peers", () => {
+describe("the lineage rule applies to the authoring batch only (principle 1)", () => {
+  it("skips the caller's own chain and keeps the peers, when prompting", () => {
     const planned = planBatch(context, {
       batchKey: "batch-13",
       kind: "inject",
@@ -195,7 +195,7 @@ describe("the lineage rule applies member by member (principle 1)", () => {
     expect(planned.plan.members).toHaveLength(3);
   });
 
-  it("refuses the batch when every member was in the caller's chain", () => {
+  it("refuses an injecting batch whose every member was in the caller's chain", () => {
     const lineage: LineageIndex = {
       parentOf: (session) => (session === child ? caller : null),
     };
@@ -203,9 +203,10 @@ describe("the lineage rule applies member by member (principle 1)", () => {
       { candidates: context.candidates, lineage },
       {
         batchKey: "batch-15",
-        kind: "stop",
+        kind: "inject",
         requestedBy: sessionAuthor(caller),
         sessionIds: [child],
+        prompt: "try the other branch",
         at: 1_000,
       },
     );
@@ -213,6 +214,80 @@ describe("the lineage rule applies member by member (principle 1)", () => {
     expect(planned.ok).toBe(false);
     if (planned.ok) return;
     expect(planned.refusal.reason).toBe("nothing_to_do");
+    expect(planned.refusal.skipped[0]?.reason).toBe("own_chain");
+  });
+
+  it("lets a parent batch-stop or batch-close its own runaway child", () => {
+    // Principle 1 is about authoring intent; stopping takes capability away. A
+    // parent that cannot stop the children it started is a batch stop nobody can
+    // use — and §4.1's rule (no running, resuming, or re-running inside your own
+    // chain) is a different rule, which none of these kinds is.
+    for (const kind of ["stop", "close"] as const) {
+      const planned = planBatch(context, {
+        batchKey: `batch-16-${kind}`,
+        kind,
+        requestedBy: sessionAuthor(caller),
+        sessionIds: [child, peerA],
+        at: 1_000,
+      });
+
+      expect(planned.ok).toBe(true);
+      if (!planned.ok) return;
+      expect(planned.plan.members.map((member) => member.sessionId)).toEqual([
+        child,
+        peerA,
+      ]);
+      expect(planned.plan.skipped).toEqual([]);
+    }
+  });
+
+  it("lets a session archive an ended member of its own chain", () => {
+    const endedChild = newSessionId();
+    const planned = planBatch(
+      {
+        candidates: [
+          ...context.candidates,
+          { sessionId: endedChild, workstreamId: workstream, running: false },
+        ],
+        lineage: {
+          parentOf: (session) => (session === endedChild ? caller : null),
+        },
+      },
+      {
+        batchKey: "batch-17",
+        kind: "archive",
+        requestedBy: sessionAuthor(caller),
+        sessionIds: [endedChild],
+        at: 1_000,
+      },
+    );
+
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    expect(planned.plan.members).toHaveLength(1);
+  });
+
+  it("still refuses a session prompting into its own chain, one kind apart", () => {
+    // The two answers side by side, same caller and same member: the narrowing is
+    // scoped to what the gesture does, not to who asked for it.
+    const stopped = planBatch(context, {
+      batchKey: "batch-18a",
+      kind: "stop",
+      requestedBy: sessionAuthor(caller),
+      sessionIds: [child],
+      at: 1_000,
+    });
+    const prompted = planBatch(context, {
+      batchKey: "batch-18b",
+      kind: "inject",
+      requestedBy: sessionAuthor(caller),
+      sessionIds: [child],
+      prompt: "stop what you are doing",
+      at: 1_000,
+    });
+
+    expect(stopped.ok).toBe(true);
+    expect(prompted.ok).toBe(false);
   });
 });
 
