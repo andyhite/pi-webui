@@ -858,6 +858,99 @@ describe("leases, not locks", () => {
     expect(check.refusal.message).toContain(B);
   });
 
+  it("refuses a write on a lapsed claim before anything has swept it", () => {
+    // Safety-adjacent: nothing had swept, so the row was still there and
+    // authorized writes — a lease that only bites once a background job runs is
+    // not a lease, and the window is exactly when two sessions both believe they
+    // hold the path.
+    const { manager, state, clock } = setup(600);
+    const held = granted(manager, state, A, "src");
+    const after = clock.tick(601);
+
+    // No `expire` call anywhere: the state still contains A's claim.
+    expect(held.state.claims.some((claim) => claim.id === held.claim.id)).toBe(
+      true,
+    );
+
+    const check = manager.checkWrite(
+      held.state,
+      sessionAuthor(A),
+      "src/auth.ts",
+      after,
+    );
+    expect(check.allowed).toBe(false);
+    if (check.allowed) return;
+    expect(check.refusal.message).toContain("lapsed");
+    expect(check.refusal.details?.lapsedClaimId).toBe(held.claim.id);
+
+    // And the path is genuinely free: another session may take it.
+    const taken = ok(
+      manager.request(held.state, { sessionId: B, path: "src", at: after }),
+    );
+    expect(taken.result.kind).toBe("approval-required");
+    // The stale row was swept as part of granting, not left beside the new claim.
+    expect(
+      taken.effects.some(
+        (effect) =>
+          effect.kind === "claim-released" && effect.reason === "expired",
+      ),
+    ).toBe(true);
+    expect(violatesSingleWriter(taken.state)).toEqual([]);
+  });
+
+  it("sweeps lapsed claims before the operator grants over them", () => {
+    const { manager, state, clock } = setup(600);
+    const held = granted(manager, state, A, "src");
+    const after = clock.tick(601);
+
+    const regranted = ok(
+      manager.grant(held.state, {
+        path: "src",
+        to: B,
+        by: humanAuthor,
+        at: after,
+      }),
+    );
+    expect(regranted.result.kind).toBe("granted");
+    expect(
+      regranted.effects.some(
+        (effect) =>
+          effect.kind === "claim-released" && effect.reason === "expired",
+      ),
+    ).toBe(true);
+    expect(violatesSingleWriter(regranted.state)).toEqual([]);
+    expect(violatesLeasePolicy(regranted.state)).toEqual([]);
+    expect(
+      manager.checkWrite(regranted.state, sessionAuthor(A), "src/auth.ts")
+        .allowed,
+    ).toBe(false);
+  });
+
+  it("gives a waiter the path a lapse freed rather than the next requester", () => {
+    const { manager, state, clock } = setup(600);
+    const held = granted(manager, openWithRootPolicy(manager, state), A, "src");
+    const waiting = ok(
+      manager.request(held.state, {
+        sessionId: B,
+        path: "src",
+        at: clock.tick(1),
+      }),
+    );
+    expect(waiting.result.kind).toBe("waiting");
+
+    // C asks after A's lease has lapsed. Sweeping first promotes B, who asked
+    // first, so C queues behind B instead of jumping in.
+    const cAsks = ok(
+      manager.request(waiting.state, {
+        sessionId: C,
+        path: "src",
+        at: clock.tick(601),
+      }),
+    );
+    expect(claimsHeldBy(cAsks.state, sessionAuthor(B))).toHaveLength(1);
+    expect(cAsks.result.kind).toBe("waiting");
+  });
+
   it("refuses to record a write nobody holds the path for", () => {
     const { manager, state } = setup();
     expect(

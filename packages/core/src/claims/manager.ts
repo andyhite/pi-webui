@@ -316,10 +316,15 @@ export interface ClaimManager {
     state: ClaimState,
     write: ClaimWriteRecord,
   ): ClaimOutcome<{ readonly write: PathWrite }>;
+  /**
+   * Lapse-aware: a claim whose lease ran out authorizes nothing, swept or not.
+   * `asOf` overrides the clock for replay; omitted, it asks the injected clock.
+   */
   checkWrite(
     state: ClaimState,
     actor: Author,
     path: string | ClaimPath,
+    asOf?: number,
   ): ClaimWriteCheck;
   expire(
     state: ClaimState,
@@ -462,11 +467,9 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
     if (own) return { kind: "already-held", claim: own };
 
     const blockers = blockingClaims(state, path, holder);
-    const authority = authorityFor(
-      state,
-      path,
-      new Set(blockers.map((claim) => claim.id)),
-    );
+    const authority = authorityFor(state, path, {
+      excluding: new Set(blockers.map((claim) => claim.id)),
+    });
     if (authority === undefined) return { kind: "no-root" };
 
     const verdict = evaluatePolicies(policiesInForce(state, authority), path);
@@ -888,7 +891,50 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
     };
   }
 
+  /**
+   * Lapsed leases are swept before anything is granted.
+   *
+   * `checkWrite` refusing a lapsed holder is not enough on its own: a grant
+   * decided against an unswept lapsed claim would leave that row beside the new
+   * claim, and two rows on one path is the ambiguity the single-writer invariant
+   * exists to forbid. Sweeping first keeps one meaning of "live" — and it also
+   * promotes whoever was already waiting, so a newcomer never jumps the queue a
+   * lapse just opened.
+   *
+   * A refusal returns no state, so its sweep is simply not persisted; the next
+   * successful operation (or Track A's `expire` tick) does it again.
+   */
+  function sweepExpired(
+    state: ClaimState,
+    at: number,
+  ): { readonly state: ClaimState; readonly effects: readonly ClaimEffect[] } {
+    const outcome = expire(state, at);
+    return outcome.ok
+      ? { state: outcome.state, effects: outcome.effects }
+      : { state, effects: [] };
+  }
+
+  function withPriorEffects<T>(
+    prior: readonly ClaimEffect[],
+    outcome: ClaimOutcome<T>,
+  ): ClaimOutcome<T> {
+    if (!outcome.ok || prior.length === 0) return outcome;
+    return { ...outcome, effects: [...prior, ...outcome.effects] };
+  }
+
   function request(
+    state: ClaimState,
+    input: ClaimRequest,
+  ): ClaimOutcome<ClaimRequestResult> {
+    const at = now(input.at);
+    const swept = sweepExpired(state, at);
+    return withPriorEffects(
+      swept.effects,
+      requestAgainst(swept.state, { ...input, at }),
+    );
+  }
+
+  function requestAgainst(
     state: ClaimState,
     input: ClaimRequest,
   ): ClaimOutcome<ClaimRequestResult> {
@@ -1214,6 +1260,24 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
       );
     }
     const at = now(input.at);
+    const swept = sweepExpired(state, at);
+    return withPriorEffects(
+      swept.effects,
+      grantAgainst(swept.state, { ...input, at }),
+    );
+  }
+
+  function grantAgainst(
+    state: ClaimState,
+    input: ClaimGrantRequest,
+  ): ClaimOutcome<ClaimRequestResult> {
+    if (input.by.kind !== "human") {
+      return refuse(
+        "human_only",
+        "only the operator grants a claim directly; a session's own grants follow the path hierarchy",
+      );
+    }
+    const at = now(input.at);
     const path = resolve(input.path);
     if (isRefusal(path)) return { ok: false, refusal: path };
 
@@ -1492,15 +1556,25 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
     };
   }
 
+  /**
+   * May this actor write this path, right now?
+   *
+   * **Lapse-aware**, deliberately: a claim whose lease ran out authorizes nothing
+   * even when no sweep has run yet. A lease that only takes effect once a
+   * background job gets around to it is not a lease, and the window would be
+   * exactly when two sessions both believe they hold a path.
+   */
   function checkWrite(
     state: ClaimState,
     actor: Author,
     rawPath: string | ClaimPath,
+    asOf?: number,
   ): ClaimWriteCheck {
+    const at = now(asOf);
     const path = resolve(rawPath);
     if (isRefusal(path)) return { allowed: false, refusal: path };
 
-    const authority = authorityFor(state, path);
+    const authority = authorityFor(state, path, { asOf: at });
     // The operator is an implicit claim holder of everything (§3.4): a human
     // editing files alongside sessions is the normal case, not an anomaly.
     if (actor.kind === "human")
@@ -1517,6 +1591,30 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
       };
     }
     if (isHeldBy(authority, actor)) return { allowed: true, claim: authority };
+
+    // A lapsed claim of the caller's own is the confusing case, so it gets its
+    // own message: the session thinks it holds this path, and the reason it does
+    // not is a lease it let run out.
+    const lapsed = state.claims.find(
+      (claim) =>
+        isHeldBy(claim, actor) &&
+        isWithin(path, claim.path) &&
+        isExpired(claim, at),
+    );
+    if (lapsed) {
+      return {
+        allowed: false,
+        refusal: {
+          reason: "not_holder",
+          message: `your claim on ${describePath(lapsed.path)} lapsed after ${lapsed.leaseSeconds ?? 0}s without activity; request it again`,
+          details: {
+            path: path.display,
+            lapsedClaimId: lapsed.id,
+            lapsedAt: leaseExpiresAt(lapsed),
+          },
+        },
+      };
+    }
 
     return {
       allowed: false,

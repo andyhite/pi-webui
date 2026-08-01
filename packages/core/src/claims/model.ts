@@ -283,16 +283,29 @@ export function claimsHeldBy(
  * exactly that, a session's claim on the root path subdividing the operator's
  * root claim. The deeper one in the *grant* tree wins: a subdivision supersedes
  * what it subdivided, whatever the paths happen to spell.
+ *
+ * `asOf` makes the lookup **lapse-aware**: a claim whose lease ran out is not an
+ * authority even if nothing has swept it yet, because a lease that only takes
+ * effect once a background sweep runs is not a lease. Omit it for the purely
+ * structural view (the invariant predicates want that one).
  */
+export interface AuthorityLookup {
+  readonly excluding?: ReadonlySet<ClaimId>;
+  /** Now, in Unix seconds. Claims whose lease lapsed by then are skipped. */
+  readonly asOf?: number;
+}
+
 export function authorityFor(
   state: ClaimState,
   path: ClaimPath,
-  excluding: ReadonlySet<ClaimId> = new Set(),
+  lookup: AuthorityLookup = {},
 ): Claim | undefined {
+  const excluding = lookup.excluding ?? new Set<ClaimId>();
   let best: Claim | undefined;
   let bestRank: readonly [number, number] = [-1, -1];
   for (const claim of state.claims) {
     if (excluding.has(claim.id)) continue;
+    if (lookup.asOf !== undefined && isExpired(claim, lookup.asOf)) continue;
     if (!isWithin(path, claim.path)) continue;
     const rank: readonly [number, number] = [
       pathDepth(claim.path),
@@ -317,17 +330,23 @@ export function authorityFor(
  * they hold everything implicitly (§3.4), which is what every session claim
  * subdivides; a human taking a path back is force-release or a hand edit, not a
  * queue.
+ *
+ * `asOf` skips lapsed claims for the same reason `authorityFor` does. Callers
+ * that *grant* should sweep first rather than rely on it, so a lapsed row cannot
+ * linger beside the new claim.
  */
 export function blockingClaims(
   state: ClaimState,
   path: ClaimPath,
   requester: Author,
+  asOf?: number,
 ): readonly Claim[] {
   return state.claims.filter(
     (claim) =>
       claim.holder.kind === "session" &&
       !isHeldBy(claim, requester) &&
-      isWithin(claim.path, path),
+      isWithin(claim.path, path) &&
+      !(asOf !== undefined && isExpired(claim, asOf)),
   );
 }
 
