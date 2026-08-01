@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createPollingWaiter, spawnOrAttach } from "./spawn-or-attach.js";
+import type { SpawnOrAttachHandle } from "./spawn-or-attach.js";
 import { healthProbe, spawnServer } from "./main.js";
 
 let nextPort = 46_900;
@@ -44,11 +45,15 @@ describe("spawnServer + healthProbe against the real built server", () => {
     const port = ephemeralPort();
     const stateDir = tempStateDir();
     let unexpectedExitCode: number | null | undefined;
+    // Declared outside the try so `finally` can always stop it — an
+    // assertion failing partway through must never leak the spawned
+    // server process.
+    let handle: SpawnOrAttachHandle | undefined;
 
     const originalEnv = process.env.PLOTROOM_STATE_DIR;
     process.env.PLOTROOM_STATE_DIR = stateDir;
     try {
-      const handle = await spawnOrAttach(
+      handle = await spawnOrAttach(
         {
           probe: healthProbe(port),
           spawn: () =>
@@ -75,6 +80,7 @@ describe("spawnServer + healthProbe against the real built server", () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
       expect(unexpectedExitCode).toBeUndefined();
     } finally {
+      handle?.stop();
       if (originalEnv === undefined) {
         delete process.env.PLOTROOM_STATE_DIR;
       } else {
@@ -86,11 +92,15 @@ describe("spawnServer + healthProbe against the real built server", () => {
   it("attaches without spawning a second process once one is already healthy", async () => {
     const port = ephemeralPort();
     const stateDir = tempStateDir();
+    // Declared outside the try so `finally` can always stop whichever of
+    // these got assigned before an assertion failed.
+    let first: SpawnOrAttachHandle | undefined;
+    let second: SpawnOrAttachHandle | undefined;
 
     const originalEnv = process.env.PLOTROOM_STATE_DIR;
     process.env.PLOTROOM_STATE_DIR = stateDir;
     try {
-      const first = await spawnOrAttach(
+      first = await spawnOrAttach(
         {
           probe: healthProbe(port),
           spawn: () => spawnServer(port, () => {}),
@@ -101,7 +111,7 @@ describe("spawnServer + healthProbe against the real built server", () => {
       expect(first.result.mode).toBe("spawned");
 
       let spawnCalledAgain = false;
-      const second = await spawnOrAttach({
+      second = await spawnOrAttach({
         probe: healthProbe(port),
         spawn: () => {
           spawnCalledAgain = true;
@@ -112,10 +122,9 @@ describe("spawnServer + healthProbe against the real built server", () => {
 
       expect(second.result).toEqual({ mode: "attached" });
       expect(spawnCalledAgain).toBe(false);
-
-      first.stop();
-      second.stop();
     } finally {
+      first?.stop();
+      second?.stop();
       if (originalEnv === undefined) {
         delete process.env.PLOTROOM_STATE_DIR;
       } else {

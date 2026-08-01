@@ -92,8 +92,20 @@ async function startServer(): Promise<RunningServer> {
     stateDir,
     stop: () =>
       new Promise((resolve) => {
-        child.once("exit", () => resolve());
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(killTimer);
+          resolve();
+        };
+        child.once("exit", finish);
         child.kill();
+        // A hung server process must never hang the test suite's teardown:
+        // if the polite signal hasn't taken within a bounded wait, force it.
+        const killTimer = setTimeout(() => {
+          child.kill("SIGKILL");
+        }, 3_000);
       }),
   };
 }
