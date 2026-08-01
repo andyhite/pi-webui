@@ -140,11 +140,23 @@ export interface PlotCanvasProps {
    * drag source) and what to do with the result.
    */
   readonly onDropDefinitionOnTicket?: (ticketNodeId: string) => void;
+  /**
+   * A palette entry (§5) was dropped onto empty canvas — the palette rail's
+   * drag sources place a not-yet-placed object. The host resolves the
+   * entry id to whatever node it should become; this only reports where it
+   * landed, in flow coordinates.
+   */
+  readonly onDropPaletteEntry?: (entryId: string, position: Point) => void;
+  /** Per-node warning messages (spec §5), flagged on the card regardless of zoom. */
+  readonly warningsByNodeId?: ReadonlyMap<string, readonly string[]>;
 }
 
 /** The drag payload a command-definition drag source sets (host's palette). */
 export const COMMAND_DEFINITION_DRAG_TYPE =
   "application/x-plotroom-command-definition";
+
+/** The drag payload a palette row sets (`PaletteRail`'s drag sources, §5). */
+export const PALETTE_ENTRY_DRAG_TYPE = "application/x-plotroom-palette-entry";
 
 type BoxNodeData = {
   label: string;
@@ -156,6 +168,8 @@ type BoxNodeData = {
   /** Set when this is a bare ticket that accepts a dropped definition. */
   acceptsDefinitionDrop: boolean;
   onDropDefinition?: () => void;
+  /** Graph warnings for this node (§5): flagged on the card, regardless of zoom. */
+  warnings: readonly string[];
 };
 
 type BoxNode = Node<BoxNodeData, "box">;
@@ -220,6 +234,12 @@ function BoxNodeView({ data, id, selected }: NodeProps<BoxNode>) {
     >
       <Handle type="target" position={Position.Left} />
       <div>{data.label}</div>
+      {data.warnings.length > 0 ? (
+        <div>
+          ⚠ {data.warnings.length} warning
+          {data.warnings.length === 1 ? "" : "s"}
+        </div>
+      ) : null}
       {data.acceptsDefinitionDrop ? (
         <div>(drop a command definition here)</div>
       ) : null}
@@ -421,6 +441,7 @@ function toBoxNode(
     readonly placements: Placements;
     readonly collapsedContainerIds: ReadonlySet<string>;
     readonly onDropDefinitionOnTicket?: (ticketNodeId: string) => void;
+    readonly warningsByNodeId?: ReadonlyMap<string, readonly string[]>;
   },
 ): BoxNode {
   return {
@@ -440,6 +461,7 @@ function toBoxNode(
       zoomLevel: ctx.zoomLevel,
       routeSelected: input.id === ctx.selectedNodeId,
       acceptsDefinitionDrop: input.acceptsDefinitionDrop ?? false,
+      warnings: ctx.warningsByNodeId?.get(input.id) ?? [],
       ...(ctx.onDropDefinitionOnTicket
         ? { onDropDefinition: () => ctx.onDropDefinitionOnTicket?.(input.id) }
         : {}),
@@ -463,6 +485,8 @@ function CanvasInner({
   onCreateFromDrag,
   createMenuOptions = CREATE_MENU_OPTIONS,
   onDropDefinitionOnTicket,
+  onDropPaletteEntry,
+  warningsByNodeId,
 }: PlotCanvasProps) {
   const { zoom } = useViewport();
   const zoomLevel = zoomLevelForScale(zoom, zoomThresholds);
@@ -510,6 +534,7 @@ function CanvasInner({
         placements,
         collapsedContainerIds: effectiveCollapsedContainerIds,
         ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
+        ...(warningsByNodeId ? { warningsByNodeId } : {}),
       }),
     );
 
@@ -522,6 +547,7 @@ function CanvasInner({
     effectiveCollapsedContainerIds,
     onToggleContainer,
     onDropDefinitionOnTicket,
+    warningsByNodeId,
     zoomLevel,
     selectedNodeId,
   ]);
@@ -541,7 +567,7 @@ function CanvasInner({
   const [nodes, setNodes, onNodesChange] =
     useNodesState<CanvasNode>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
-  const { getNodes } = useReactFlow<CanvasNode>();
+  const { getNodes, screenToFlowPosition } = useReactFlow<CanvasNode>();
 
   // Tombstones (principle 10, B1 fix): a Backspace/Delete gesture only
   // mutates this internal xyflow state — the host is never told, so the
@@ -591,6 +617,7 @@ function CanvasInner({
           placements,
           collapsedContainerIds: effectiveCollapsedContainerIds,
           ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
+          ...(warningsByNodeId ? { warningsByNodeId } : {}),
         }),
       );
       if (newContainers.length === 0 && newBoxNodes.length === 0)
@@ -605,10 +632,30 @@ function CanvasInner({
     effectiveCollapsedContainerIds,
     onToggleContainer,
     onDropDefinitionOnTicket,
+    warningsByNodeId,
     zoomLevel,
     selectedNodeId,
     setNodes,
   ]);
+
+  // Warnings (§5) can change for an *already-placed* node (a new edge made
+  // a command's context legal, a run bound a placeholder) — unlike the
+  // additive effect above, this updates every existing node in place.
+  useEffect(() => {
+    setNodes((current) =>
+      current.map((node) => {
+        if (node.type !== "box") return node;
+        const warnings = warningsByNodeId?.get(node.id) ?? [];
+        if (
+          node.data.warnings.length === warnings.length &&
+          node.data.warnings.every((w, i) => w === warnings[i])
+        ) {
+          return node;
+        }
+        return { ...node, data: { ...node.data, warnings } };
+      }),
+    );
+  }, [warningsByNodeId, setNodes]);
 
   useEffect(() => {
     setEdges((current) => {
@@ -901,10 +948,36 @@ function CanvasInner({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  // Palette drop onto empty canvas (§5): a palette row is a plain HTML5
+  // drag source (`PaletteRail`), so the drop target only needs the standard
+  // DOM handlers — no xyflow-specific wiring beyond translating the drop
+  // point into flow coordinates.
+  const onCanvasDragOver = useCallback((event: React.DragEvent) => {
+    if (event.dataTransfer.types.includes(PALETTE_ENTRY_DRAG_TYPE)) {
+      event.preventDefault();
+    }
+  }, []);
+
+  const onCanvasDrop = useCallback(
+    (event: React.DragEvent) => {
+      const entryId = event.dataTransfer.getData(PALETTE_ENTRY_DRAG_TYPE);
+      if (!entryId) return;
+      event.preventDefault();
+      const position = screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      });
+      onDropPaletteEntry?.(entryId, position);
+    },
+    [onDropPaletteEntry, screenToFlowPosition],
+  );
+
   return (
     <div
       ref={containerRef}
       style={{ width: "100%", height: "100%", position: "relative" }}
+      onDragOver={onCanvasDragOver}
+      onDrop={onCanvasDrop}
     >
       <ReactFlow
         nodes={nodes}
