@@ -14,6 +14,7 @@ import {
 } from "@plotroom/core";
 import { makeRun } from "@plotroom/core/testing";
 
+import type { CanvasCardView } from "../canvas/PlotCanvas.js";
 import { emptyBoardState, stateFromSnapshot } from "./board-state.js";
 import type { RawSnapshot } from "./board-state.js";
 import { buildGraphSnapshot } from "./build-snapshot.js";
@@ -550,5 +551,62 @@ describe("buildGraphSnapshot", () => {
     };
     const state = stateFromSnapshot(rawSnapshot({ objects: [note] }));
     expect(buildGraphSnapshot(state, new Map()).paletteEntries).toEqual([]);
+  });
+
+  it("carries a content node's concept kind, for card-renderer resolution (§10.1, §3.1)", () => {
+    const node: PlacedNode = {
+      id: "n1" as PlacedNode["id"],
+      role: "content",
+      refId: ticket.id,
+      workstreamId: null,
+      createdAt: 0,
+      deletedAt: null,
+    };
+    const state = stateFromSnapshot(
+      rawSnapshot({ objects: [ticket], nodes: [node] }),
+    );
+    const snapshot = buildGraphSnapshot(state, new Map());
+    expect(snapshot.nodes[0]?.kind).toBe("ticket");
+  });
+
+  it("attaches a caller-resolved plugin card view onto its content node, keyed by node id (§10.1)", () => {
+    const node: PlacedNode = {
+      id: "n1" as PlacedNode["id"],
+      role: "content",
+      refId: ticket.id,
+      workstreamId: null,
+      createdAt: 0,
+      deletedAt: null,
+    };
+    const state = stateFromSnapshot(
+      rawSnapshot({ objects: [ticket], nodes: [node] }),
+    );
+    const cardView: CanvasCardView = {
+      title: "plugin title",
+      lines: ["a line"],
+      actions: [],
+    };
+    const snapshot = buildGraphSnapshot(
+      state,
+      new Map(),
+      new Map([["n1", cardView]]),
+    );
+    expect(snapshot.nodes[0]?.cardView).toEqual(cardView);
+  });
+
+  it("leaves cardView unset when the caller resolved nothing for this node — the host's own generic rendering applies", () => {
+    const node: PlacedNode = {
+      id: "n1" as PlacedNode["id"],
+      role: "content",
+      refId: ticket.id,
+      workstreamId: null,
+      createdAt: 0,
+      deletedAt: null,
+    };
+    const state = stateFromSnapshot(
+      rawSnapshot({ objects: [ticket], nodes: [node] }),
+    );
+    const snapshot = buildGraphSnapshot(state, new Map());
+    expect(snapshot.nodes[0]?.cardView).toBeUndefined();
   });
 });

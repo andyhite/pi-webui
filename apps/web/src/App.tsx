@@ -46,13 +46,17 @@ import {
   createFixtureDiffDataSource,
   createFixtureFleetDataSource,
   createFixtureGraphDataSource,
+  createFixturePluginHealthDataSource,
   createFixtureQuestionDataSource,
   createFixtureSessionDataSource,
   createHttpClient,
+  createInBoxContributionRegistry,
   createNote,
   createPanelRegistry,
+  createUnavailableLifecycleActions,
   createWebStoragePlacementStore,
   createWebStorageSessionDraftsStore,
+  commandPaletteItemsFromRegistry,
   decideNotification,
   definePanel,
   deriveBadgeCount,
@@ -66,7 +70,10 @@ import {
   EMPTY_NOTIFICATION_STATE,
   endRun,
   expandCollection,
+  invokePluginPaletteEntry,
   nextNotificationEdgeState,
+  panelDefinitionsFromRegistry,
+  PluginHealthPanel,
   pruneMember,
   useSelectionRoute,
 } from "@plotroom/ui";
@@ -78,6 +85,7 @@ import {
   FIXTURE_FLEET_SUMMARY,
   FIXTURE_INJECTIONS,
   FIXTURE_OPEN_QUESTIONS,
+  FIXTURE_PLUGIN_HEALTH,
   FIXTURE_RELEASED_CONTENT,
   FIXTURE_SESSIONS,
   FIXTURE_WHAT_CHANGED,
@@ -113,11 +121,41 @@ const LIVE = import.meta.env.VITE_USE_FIXTURES !== "1";
 const httpClient = createHttpClient((path, init) => fetch(path, init));
 const wsFactory = browserWebSocketFactory();
 
+/**
+ * The renderer contribution registry (§10.1, Epic 7.1's renderer half): the
+ * one client-side seam every in-box plugin registers a manifest through,
+ * the same path a third-party plugin would use once dynamic loading exists
+ * (`plugins/in-box-modules.ts` documents that gap). Empty today —
+ * `IN_BOX_PLUGIN_MODULES` has nothing in it until Filesystem (Track B's own
+ * Stage 2) lands — so wiring it in changes nothing about what renders yet;
+ * it is the seam, exercised by `contribution-registry.test.ts`'s fixture
+ * manifests, ready for that manifest to register through.
+ */
+const contributionRegistry = createInBoxContributionRegistry();
+
 const graphDataSource = LIVE
-  ? createApiGraphDataSource({ http: httpClient, createSocket: wsFactory })
+  ? createApiGraphDataSource({
+      http: httpClient,
+      createSocket: wsFactory,
+      registry: contributionRegistry,
+    })
   : createFixtureGraphDataSource(FIXTURE_SNAPSHOT);
 
 const actions = createApiActions(httpClient);
+
+/**
+ * Plugin health (§10.2, §11): fixture-fed always, on purpose — Epic 7.1's
+ * host has a load/ping/dispose skeleton (`packages/plugin-sdk/src/host.ts`)
+ * but no enable/disable/remove verbs and no health event stream yet (see
+ * `docs/plugin-contract-draft.md`'s "known gaps"), so there is nothing live
+ * to subscribe to regardless of `LIVE`. `createUnavailableLifecycleActions`
+ * is the honest stand-in for the verbs: every call refuses with a stated
+ * reason rather than silently succeeding.
+ */
+const pluginHealthDataSource = createFixturePluginHealthDataSource(
+  FIXTURE_PLUGIN_HEALTH,
+);
+const pluginLifecycleActions = createUnavailableLifecycleActions();
 
 /**
  * The session data seam (Epic 5.1, Stage 2): live over Track A's run spine
@@ -670,6 +708,11 @@ export function App() {
         label: "reset arrangement",
         kind: "verb",
       },
+      // Plugin-contributed verbs (§10.1, §11): empty today —
+      // `contributionRegistry` has nothing registered until an in-box
+      // plugin's manifest lands — but resolved through the same call a
+      // registered one would go through.
+      ...commandPaletteItemsFromRegistry(contributionRegistry),
     ],
     [graph],
   );
@@ -958,6 +1001,26 @@ export function App() {
           ),
       }),
     );
+    registry.register(
+      definePanel<null>({
+        id: "plugins",
+        title: "Plugins",
+        initialState: null,
+        render: () => (
+          <PluginHealthPanel
+            dataSource={pluginHealthDataSource}
+            actions={pluginLifecycleActions}
+          />
+        ),
+      }),
+    );
+    // Plugin-contributed panels (§10.1, §11): registered through the exact
+    // same `register` call above — empty today (`contributionRegistry` has
+    // no manifests yet), so this changes nothing about what the dock rail
+    // shows until an in-box plugin's manifest contributes one.
+    for (const panel of panelDefinitionsFromRegistry(contributionRegistry)) {
+      registry.register(panel);
+    }
     return registry;
   }, [
     initialNote,
@@ -1001,6 +1064,14 @@ export function App() {
             items={commandPaletteItems}
             onSelectNode={select}
             onRunVerb={(itemId) => {
+              // Plugin-contributed verbs (§10.1) dispatch through the
+              // registry first; `false` means `itemId` wasn't one, so the
+              // in-box verbs below still apply.
+              void invokePluginPaletteEntry(contributionRegistry, itemId).then(
+                (handled) => {
+                  if (handled) log(`ran plugin verb: ${itemId}`);
+                },
+              );
               if (itemId === "verb-clear-log") setGestureLog([]);
               if (itemId === "verb-reset-arrangement") {
                 // §5's only automatic-layout verb: re-derive every position from
@@ -1061,6 +1132,14 @@ export function App() {
             attentionNodeIds={attentionNodeIds}
             attentionByNodeId={attentionByNodeId}
             warningsByNodeId={warningsByNodeId}
+            onCardAction={(nodeId, actionId) => {
+              // Plugin card actions (§10.1): a write action routes through
+              // §6.6's approvals same as any other write once a plugin
+              // contributes one — nothing does yet, so this only logs.
+              log(
+                `card action ${actionId} on ${nodeId} (not yet wired to /api)`,
+              );
+            }}
             onBatchAction={(action, ids) => {
               log(`batch ${action}: ${ids.join(", ")}`);
             }}

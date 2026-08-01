@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { humanAuthor } from "@plotroom/core";
-import type { DomainEvent, Workstream } from "@plotroom/core";
+import type {
+  DomainEvent,
+  PlacedNode,
+  PlotObject,
+  Workstream,
+} from "@plotroom/core";
 
+import { createContributionRegistry } from "../plugins/contribution-registry.js";
 import type { HttpClient } from "../transport/http.js";
 import type { MinimalWebSocket, WebSocketFactory } from "../transport/ws.js";
 import { createApiGraphDataSource } from "./api.js";
@@ -101,6 +107,103 @@ describe("createApiGraphDataSource.load", () => {
     expect(snapshot.nodes).toEqual([]);
     expect(get).toHaveBeenCalledTimes(1);
     expect(createSocket).not.toHaveBeenCalled();
+  });
+
+  it("uses a fixture manifest's card renderer for a concept arriving from the server with a matching kind (§10.1)", async () => {
+    const object: PlotObject = {
+      id: "obj_doc" as PlotObject["id"],
+      kind: "document",
+      scope: "world",
+      workstreamId: null,
+      external: { system: "filesystem", id: "/tmp/readme.md" },
+      title: "readme.md",
+      latestVersionId: "v1" as PlotObject["latestVersionId"],
+      createdAt: 0,
+      promotedAt: null,
+    };
+    const node: PlacedNode = {
+      id: "n_doc" as PlacedNode["id"],
+      role: "content",
+      refId: object.id,
+      workstreamId: null,
+      createdAt: 0,
+      deletedAt: null,
+    };
+    const get = vi.fn(async () => ({
+      ...emptyRawSnapshot(1),
+      objects: [object],
+      nodes: [node],
+    }));
+    const http = { get } as unknown as HttpClient;
+    const createSocket = vi.fn() as unknown as WebSocketFactory;
+
+    const registry = createContributionRegistry();
+    registry.registerManifest("filesystem", {
+      name: "filesystem",
+      version: "0.0.0",
+      contractVersion: 0,
+      permissions: [],
+      cardRenderers: [
+        {
+          kinds: ["document"],
+          renderCard: async (produced) => ({
+            title: `file: ${produced.title}`,
+            lines: [`kind: ${produced.kind}`],
+            actions: [],
+          }),
+        },
+      ],
+    });
+
+    const source = createApiGraphDataSource({ http, createSocket, registry });
+    const snapshot = await source.load();
+
+    expect(snapshot.nodes).toEqual([
+      expect.objectContaining({
+        id: "n_doc",
+        kind: "document",
+        cardView: {
+          title: "file: readme.md",
+          lines: ["kind: document"],
+          actions: [],
+        },
+      }),
+    ]);
+  });
+
+  it("leaves cardView unset with an empty registry — today's production default is unaffected", async () => {
+    const object: PlotObject = {
+      id: "obj_ticket" as PlotObject["id"],
+      kind: "ticket",
+      scope: "world",
+      workstreamId: null,
+      external: null,
+      title: "a ticket",
+      latestVersionId: "v1" as PlotObject["latestVersionId"],
+      createdAt: 0,
+      promotedAt: null,
+    };
+    const node: PlacedNode = {
+      id: "n_ticket" as PlacedNode["id"],
+      role: "content",
+      refId: object.id,
+      workstreamId: null,
+      createdAt: 0,
+      deletedAt: null,
+    };
+    const get = vi.fn(async () => ({
+      ...emptyRawSnapshot(1),
+      objects: [object],
+      nodes: [node],
+    }));
+    const http = { get } as unknown as HttpClient;
+    const createSocket = vi.fn() as unknown as WebSocketFactory;
+
+    const source = createApiGraphDataSource({ http, createSocket });
+    const snapshot = await source.load();
+
+    expect(snapshot.nodes[0]?.cardView).toBeUndefined();
+    expect(snapshot.nodes[0]?.kind).toBe("ticket");
   });
 });
 

@@ -37,6 +37,7 @@ import {
   type PaletteTicketEntry,
   type ScriptedTurnDelivery,
   type WarningFacts,
+  type PluginHealthEntry,
   type WarningGraphNode,
   type WorkspaceDiff,
   type WorkstreamActivityEntry,
@@ -704,3 +705,40 @@ export const FIXTURE_FLEET_SUMMARY: FleetSummary = {
   concurrencyLimit: 4,
   queuedCount: 0,
 };
+
+/**
+ * The plugin health panel's fixture (§10.2, §11): fixture-fed regardless of
+ * `LIVE` — Epic 7.1's host has no lifecycle event stream yet (`docs/
+ * plugin-contract-draft.md`'s "known gaps"), so there is nothing real to
+ * load either way. Four rows, one per in-box plugin (§9.4), each a
+ * different lifecycle/integration combination so every §10.2 state this
+ * panel renders is exercised: `ready`+`connected`, `unavailable`+`failing`,
+ * `disabled`, and `ready` with no integration substrate yet (Filesystem —
+ * honest, since Epic 7.2 hasn't landed).
+ */
+export const FIXTURE_PLUGIN_HEALTH: readonly PluginHealthEntry[] = [
+  {
+    pluginId: "github",
+    name: "GitHub",
+    lifecycle: { status: "ready", reason: null },
+    integration: { state: "connected", detail: "authenticated as octocat" },
+  },
+  {
+    pluginId: "jira",
+    name: "Jira",
+    lifecycle: { status: "unavailable", reason: "plugin threw on load" },
+    integration: { state: "failing", detail: "401 from the last sync attempt" },
+  },
+  {
+    pluginId: "git",
+    name: "Coding/git",
+    lifecycle: { status: "disabled", reason: "disabled by the operator" },
+    integration: null,
+  },
+  {
+    pluginId: "filesystem",
+    name: "Filesystem",
+    lifecycle: { status: "ready", reason: null },
+    integration: null,
+  },
+];

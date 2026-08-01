@@ -17,7 +17,14 @@
  */
 
 import type { DomainEvent } from "@plotroom/core";
+import type { draft } from "@plotroom/plugin-sdk";
 
+import type { CanvasCardView } from "../canvas/PlotCanvas.js";
+import {
+  createContributionRegistry,
+  resolveCardView,
+  type ContributionRegistry,
+} from "../plugins/contribution-registry.js";
 import type { HttpClient } from "../transport/http.js";
 import type { WebSocketFactory } from "../transport/ws.js";
 import { createReconnectingSocket } from "../transport/ws.js";
@@ -98,6 +105,89 @@ async function fetchObjectContent(
   return new Map(entries);
 }
 
+/**
+ * Core's `ObjectKind` -> the draft contract's `DraftConceptKind` (§3.1,
+ * §10.1). Every kind matches by name except one: core spells the pull
+ * request kind `"pull_request"` (`packages/core/src/objects.ts`) and the
+ * draft spells it `"pull-request"` (`packages/plugin-sdk/src/draft/
+ * contributions.ts`'s `DRAFT_CONCEPT_KINDS`), even though the draft's own
+ * doc comment says it "mirrors @plotroom/core's object kinds". Recorded
+ * here as the one translation this boundary needs, rather than assuming
+ * either side to fix silently — Track C should reconcile the naming when
+ * Epic 7.1 freezes the contract.
+ */
+function toDraftConceptKind(
+  kind: draft.DraftConceptKind | "pull_request",
+): draft.DraftConceptKind {
+  return kind === "pull_request" ? "pull-request" : kind;
+}
+
+/**
+ * A live object, as the plugin contract sees it (§10.1) — the client's own
+ * `PlotObject` mapped onto `DraftProducedObject`. An object without an
+ * external identity (a native note, say) stands in for its own: nothing
+ * downstream of a card renderer needs the two distinguished once the object
+ * is already inside the client, and the alternative (refusing to resolve a
+ * card for it) would make every locally-created object permanently
+ * ineligible for a plugin's card renderer.
+ */
+function toDraftProducedObject(
+  object: BoardState["objects"] extends ReadonlyMap<string, infer O>
+    ? O
+    : never,
+  agentContent: string,
+): draft.DraftProducedObject {
+  return {
+    kind: toDraftConceptKind(object.kind),
+    externalId: object.external?.id ?? object.id,
+    title: object.title,
+    renderings: {
+      card: object.title,
+      summary: object.title,
+      agentContent,
+    },
+  };
+}
+
+/**
+ * Plugin card views for every live content node standing for a real object
+ * (§10.1) — the async resolution `buildGraphSnapshot` itself never does
+ * (its own doc comment: "every fact that needs IO ... resolved by the
+ * caller first"). Empty immediately when nothing is registered (Batch 5
+ * Stage 1's actual production state: `IN_BOX_PLUGIN_MODULES` is empty until
+ * Filesystem lands), so this costs nothing until a plugin is.
+ */
+async function resolvePluginCardViews(
+  state: BoardState,
+  objectContent: ReadonlyMap<string, string>,
+  registry: ContributionRegistry,
+): Promise<ReadonlyMap<string, CanvasCardView>> {
+  if (registry.listManifests().length === 0) return new Map();
+
+  const contentNodes = [...state.nodes.values()].filter(
+    (node) => node.role === "content",
+  );
+  const entries = await Promise.all(
+    contentNodes.map(
+      async (node): Promise<readonly [string, CanvasCardView] | null> => {
+        const object = state.objects.get(node.refId);
+        if (!object) return null;
+        const produced = toDraftProducedObject(
+          object,
+          objectContent.get(object.id) ?? "",
+        );
+        const view = await resolveCardView(registry, produced, "compact");
+        return view ? [node.id, view] : null;
+      },
+    ),
+  );
+  return new Map(
+    entries.filter(
+      (entry): entry is readonly [string, CanvasCardView] => entry !== null,
+    ),
+  );
+}
+
 interface BufferState {
   buffering: boolean;
   events: DomainEvent[];
@@ -106,12 +196,20 @@ interface BufferState {
 export interface ApiGraphDataSourceOptions {
   readonly http: HttpClient;
   readonly createSocket: WebSocketFactory;
+  /**
+   * The renderer contribution registry (§10.1) — defaults to an empty one,
+   * so a caller that never passes one gets exactly today's behavior. Pass
+   * `createInBoxContributionRegistry()` (`plugins/in-box-modules.ts`) once
+   * an in-box plugin has a manifest to register.
+   */
+  readonly registry?: ContributionRegistry;
 }
 
 export function createApiGraphDataSource(
   options: ApiGraphDataSourceOptions,
 ): GraphDataSource {
   const { http, createSocket } = options;
+  const registry = options.registry ?? createContributionRegistry();
 
   let state: BoardState = emptyBoardState();
   let started = false;
@@ -124,7 +222,8 @@ export function createApiGraphDataSource(
 
   async function notifyAll(): Promise<void> {
     const content = await fetchObjectContent(http, state);
-    const snapshot = buildGraphSnapshot(state, content);
+    const cardViews = await resolvePluginCardViews(state, content, registry);
+    const snapshot = buildGraphSnapshot(state, content, cardViews);
     syncedOnce = true;
     for (const listener of listeners) listener(snapshot);
   }
@@ -184,7 +283,12 @@ export function createApiGraphDataSource(
       const raw = await http.get<RawSnapshot>("/api/snapshot");
       const freshState = stateFromSnapshot(raw);
       const content = await fetchObjectContent(http, freshState);
-      return buildGraphSnapshot(freshState, content);
+      const cardViews = await resolvePluginCardViews(
+        freshState,
+        content,
+        registry,
+      );
+      return buildGraphSnapshot(freshState, content, cardViews);
     },
 
     subscribe(onSnapshot: (snapshot: GraphSnapshot) => void): Unsubscribe {
@@ -193,8 +297,13 @@ export function createApiGraphDataSource(
         // A later subscriber joining an already-synced source gets the
         // current picture immediately rather than waiting for the next
         // change.
-        void fetchObjectContent(http, state).then((content) => {
-          onSnapshot(buildGraphSnapshot(state, content));
+        void fetchObjectContent(http, state).then(async (content) => {
+          const cardViews = await resolvePluginCardViews(
+            state,
+            content,
+            registry,
+          );
+          onSnapshot(buildGraphSnapshot(state, content, cardViews));
         });
       }
       ensureStarted();

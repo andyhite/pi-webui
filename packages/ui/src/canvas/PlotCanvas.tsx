@@ -80,6 +80,29 @@ import {
   toExtentAwareNodes,
 } from "./node-extents.js";
 
+/**
+ * A plugin-contributed card, compact or expanded (§10.1, §3.2): declarative
+ * so a plugin cannot break focus management for the whole board — the host
+ * draws it, never the plugin's own markup. Deliberately the same shape as
+ * `@plotroom/plugin-sdk`'s draft `DraftCardView`, but declared independently
+ * here rather than imported: the canvas is core mechanics and must not take
+ * a hard dependency on an unstable, still-drafting contract (`packages/
+ * plugin-sdk/src/draft/`) — the contribution registry (`plugins/
+ * contribution-registry.ts`) is what maps one onto the other.
+ */
+export interface CanvasCardAction {
+  readonly id: string;
+  readonly label: string;
+  /** Set when the action is a write, so §6.6's approvals apply to a card button too. */
+  readonly writeActionId: string | null;
+}
+
+export interface CanvasCardView {
+  readonly title: string;
+  readonly lines: readonly string[];
+  readonly actions: readonly CanvasCardAction[];
+}
+
 export interface CanvasNodeInput {
   readonly id: string;
   readonly label: string;
@@ -102,6 +125,18 @@ export interface CanvasNodeInput {
    * workstream flow (subject = the ticket's *object*, not its node).
    */
   readonly refId?: string;
+  /**
+   * A content node's concept kind (§3.1), when it stands for a real object —
+   * opaque to the canvas beyond being the key a card renderer is resolved by.
+   */
+  readonly kind?: string;
+  /**
+   * A plugin card view for this node, precomputed by the caller (§10.1) —
+   * resolving one is async and may need IO, so it is never computed here.
+   * Absent: the host's own generic rendering (the `label`) applies —
+   * concepts never render broken for want of a plugin (§10.2).
+   */
+  readonly cardView?: CanvasCardView;
 }
 
 export interface CanvasContainerInput {
@@ -223,6 +258,12 @@ export interface PlotCanvasProps {
    */
   readonly runningCommandNodeIds?: ReadonlySet<string>;
   /**
+   * A card action button was clicked (§10.1) — `actionId` is one of the
+   * clicked node's own `cardView.actions` ids; the host dispatches it
+   * (write actions route through §6.6's approvals, same as any other write).
+   */
+  readonly onCardAction?: (nodeId: string, actionId: string) => void;
+  /**
    * Speech bubbles (§5): every source that could show as a bubble on some
    * node currently on this canvas — the host derives these from its own
    * streams (`bubbles/derive-sources.ts`, a fixture question source, ...).
@@ -260,6 +301,10 @@ type BoxNodeData = {
   onRun?: () => void;
   /** True while this command node's run is already in flight (§4.1). */
   runInFlight: boolean;
+  /** A plugin card view, precomputed by the caller (§10.1) — absent means the generic `label` rendering applies. */
+  cardView: CanvasCardView | null;
+  /** Dispatches a card action's id when its button is clicked (§10.1). */
+  onCardAction?: (actionId: string) => void;
 };
 
 type BoxNode = Node<BoxNodeData, "box">;
@@ -333,7 +378,31 @@ function BoxNodeView({ data, id, selected }: NodeProps<BoxNode>) {
         : {})}
     >
       <Handle type="target" position={Position.Left} />
-      <div>{data.label}</div>
+      {data.cardView ? (
+        // A plugin card (§10.1): declarative title/lines/actions the host
+        // draws, never the plugin's own markup. Absent `cardView`: the
+        // generic `label` below applies — concepts never render broken for
+        // want of a plugin contribution (§10.2).
+        <div data-testid={`canvas-node-card-${id}`}>
+          <div>{data.cardView.title}</div>
+          <ul>
+            {data.cardView.lines.map((line, index) => (
+              <li key={index}>{line}</li>
+            ))}
+          </ul>
+          {data.cardView.actions.map((action) => (
+            <button
+              key={action.id}
+              type="button"
+              onClick={() => data.onCardAction?.(action.id)}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div>{data.label}</div>
+      )}
       {data.warnings.length > 0 ? (
         <div>
           ⚠ {data.warnings.length} warning
@@ -564,6 +633,7 @@ function toBoxNode(
     >;
     readonly onRunCommand?: (commandNodeId: string) => void;
     readonly runningCommandNodeIds?: ReadonlySet<string>;
+    readonly onCardAction?: (nodeId: string, actionId: string) => void;
   },
 ): BoxNode {
   return {
@@ -586,6 +656,7 @@ function toBoxNode(
       warnings: ctx.warningsByNodeId?.get(input.id) ?? [],
       attention: ctx.attentionByNodeId?.get(input.id) ?? null,
       runInFlight: ctx.runningCommandNodeIds?.has(input.id) ?? false,
+      cardView: input.cardView ?? null,
       ...(ctx.onDropDefinitionOnTicket
         ? {
             onDropDefinition: (definitionId: string) =>
@@ -594,6 +665,12 @@ function toBoxNode(
         : {}),
       ...(input.role === "command" && ctx.onRunCommand
         ? { onRun: () => ctx.onRunCommand?.(input.id) }
+        : {}),
+      ...(ctx.onCardAction
+        ? {
+            onCardAction: (actionId: string) =>
+              ctx.onCardAction?.(input.id, actionId),
+          }
         : {}),
     },
   };
@@ -622,6 +699,7 @@ function CanvasInner({
   attentionByNodeId,
   onRunCommand,
   runningCommandNodeIds,
+  onCardAction,
   bubbleSources = [],
   onAnswerQuestion,
   bubbleCap,
@@ -702,6 +780,7 @@ function CanvasInner({
         ...(attentionByNodeId ? { attentionByNodeId } : {}),
         ...(onRunCommand ? { onRunCommand } : {}),
         ...(runningCommandNodeIds ? { runningCommandNodeIds } : {}),
+        ...(onCardAction ? { onCardAction } : {}),
       }),
     );
 
@@ -718,6 +797,7 @@ function CanvasInner({
     attentionByNodeId,
     onRunCommand,
     runningCommandNodeIds,
+    onCardAction,
     zoomLevel,
     selectedNodeId,
   ]);
@@ -843,6 +923,7 @@ function CanvasInner({
           ...(attentionByNodeId ? { attentionByNodeId } : {}),
           ...(onRunCommand ? { onRunCommand } : {}),
           ...(runningCommandNodeIds ? { runningCommandNodeIds } : {}),
+          ...(onCardAction ? { onCardAction } : {}),
         }),
       );
       if (
@@ -867,6 +948,7 @@ function CanvasInner({
     attentionByNodeId,
     onRunCommand,
     runningCommandNodeIds,
+    onCardAction,
     zoomLevel,
     selectedNodeId,
     setNodes,
@@ -893,13 +975,15 @@ function CanvasInner({
     );
   }, [warningsByNodeId, attentionByNodeId, setNodes]);
 
-  // A node's label/running/run-in-flight state can change after it is
-  // already placed — a command node's latest run status arriving well after
-  // the drop that created it, a session's derived phase moving on (§3.6), a
-  // run gesture's guard flipping while the request is outstanding (§4.1) —
-  // unlike the additive effect above (which only ever seeds these once, on
-  // first add), this keeps every already-placed node's label/running/
-  // run-in-flight in sync with its current `CanvasNodeInput`/guard state.
+  // A node's label/running/run-in-flight/card-view state can change after it
+  // is already placed — a command node's latest run status arriving well
+  // after the drop that created it, a session's derived phase moving on
+  // (§3.6), a run gesture's guard flipping while the request is outstanding
+  // (§4.1), a plugin card view resolving after the initial placement since
+  // resolving one is async (§10.1) — unlike the additive effect above (which
+  // only ever seeds these once, on first add), this keeps every
+  // already-placed node's label/running/run-in-flight/cardView in sync with
+  // its current `CanvasNodeInput`/guard state.
   useEffect(() => {
     const byId = new Map(nodeInputs.map((input) => [input.id, input]));
     setNodes((current) =>
@@ -909,16 +993,24 @@ function CanvasInner({
         if (!input) return node;
         const running = input.running ?? false;
         const runInFlight = runningCommandNodeIds?.has(node.id) ?? false;
+        const cardView = input.cardView ?? null;
         if (
           node.data.label === input.label &&
           node.data.running === running &&
-          node.data.runInFlight === runInFlight
+          node.data.runInFlight === runInFlight &&
+          node.data.cardView === cardView
         ) {
           return node;
         }
         return {
           ...node,
-          data: { ...node.data, label: input.label, running, runInFlight },
+          data: {
+            ...node.data,
+            label: input.label,
+            running,
+            runInFlight,
+            cardView,
+          },
         };
       }),
     );

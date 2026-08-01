@@ -10,6 +10,7 @@
 import { isRunning, type NodeRole, type Run } from "@plotroom/core";
 
 import type {
+  CanvasCardView,
   CanvasContainerInput,
   CanvasEdgeInput,
   CanvasNodeInput,
@@ -37,6 +38,14 @@ const PALETTE_OBJECT_KINDS: ReadonlySet<string> = new Set([
 export function buildGraphSnapshot(
   state: BoardState,
   objectContent: ReadonlyMap<string, string>,
+  /**
+   * Plugin card views (§10.1), precomputed by the caller and keyed by node
+   * id — resolving one is async and may need IO, so this function stays
+   * synchronous and simply looks the result up. Empty by default: a caller
+   * that never resolves any (no manifests registered yet, Batch 5 Stage 1's
+   * actual production state) changes nothing about the snapshot it gets.
+   */
+  cardViews: ReadonlyMap<string, CanvasCardView> = new Map(),
 ): GraphSnapshot {
   const containers: CanvasContainerInput[] = [
     ...state.workstreams.values(),
@@ -68,6 +77,12 @@ export function buildGraphSnapshot(
 
   const nodes: CanvasNodeInput[] = liveNodes.map((node, index) => {
     const running = runningFor(node, state);
+    // A content node's concept kind (§3.1) and any plugin card view
+    // resolved for it (§10.1) — both absent for anything but a
+    // content node standing for a real (bound) object.
+    const object =
+      node.role === "content" ? state.objects.get(node.refId) : undefined;
+    const cardView = cardViews.get(node.id);
     return {
       id: node.id,
       label: labelForNode(node.role, node.refId, state, latestRunByCommandId),
@@ -77,6 +92,8 @@ export function buildGraphSnapshot(
       ...(node.workstreamId ? { containerId: node.workstreamId } : {}),
       defaultPosition: gridPosition(index),
       acceptsDefinitionDrop: acceptsDefinitionDrop(node, state),
+      ...(object ? { kind: object.kind } : {}),
+      ...(cardView ? { cardView } : {}),
     };
   });
 
