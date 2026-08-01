@@ -316,23 +316,64 @@ lands (Sync 2). Deferred, recorded: undo of rigid-body push displacement
 props stay the source of truth; create-menu positioning in non-origin host
 layouts._
 
-### Epic 3.4 — Palette and shell basics (`ui`, `app`)
+### Epic 3.4 — Palette and shell basics (`ui`, `app`) — _done (mechanics)_
 
-- [ ] Palette rail: everything not yet on canvas as drag sources; ticket ordering (unblocked-first) (§5)
-- [ ] Command palette: navigation + verbs (§11)
-- [ ] Dock rail + panel registry; state persists across panel close (§11)
-- [ ] Graph warnings surface: legal-but-questionable topologies flagged on card and editor, machine-readable for agents later (§5)
+- [x] Palette rail: everything not yet on canvas as drag sources; ticket ordering (unblocked-first) (§5)
+- [x] Command palette: navigation + verbs (§11)
+- [x] Dock rail + panel registry; state persists across panel close (§11)
+- [x] Graph warnings surface: legal-but-questionable topologies flagged on card and editor, machine-readable for agents later (§5)
+
+_Landed unstyled per the design gate (fleet rule 5), against fixture data in
+`apps/web` (Stage 1 — Sync 2 swaps fixtures for the live API, see below).
+`deriveGraphWarnings` is a pure function in `packages/ui` over the four cases
+the spec names — blocked chain, no context at all, unconsumed published
+output, unreachable node — surfaced both as a per-node card marker and in a
+dedicated `GraphWarningsPanel`, registered through the same `PanelRegistry`
+as Notes; neither ever refuses. `PaletteRail` groups drag sources by kind
+and orders tickets unblocked-first; dropping a non-command-definition entry
+onto empty canvas places it via a new `onDropPaletteEntry` on `PlotCanvas`,
+while command definitions keep the existing bare-ticket one-gesture drop.
+`CommandPalette` (Cmd/Ctrl+K) routes every navigation item through
+`onSelectNode` — the one selection-as-route primitive, never a second way to
+get somewhere. `DockRail`'s panel state lives in the rail's own component
+state, not the panel's, which is what makes closing cheap: the Notes panel's
+`Note` itself is now panel-registry state, and reopening it after a close
+hands back the exact object, edits included. Deferred, honestly: content-
+budget warnings (a distinct, already-implemented mechanism —
+`checkContentBudget` in `@plotroom/core`, not one of the four named checks
+here); rendering-level component tests (this package has none yet for any
+component, canvas included — only pure-logic modules are unit-tested)._
 
 ### Epic 3.0 — Web + desktop shells (`web`, `desktop`) — _do first_
 
 _Moved ahead of 3.1–3.4: nothing in this phase is demoable without a host to
 run the renderer in._
 
-- [ ] `apps/web` renderer served by the server; single renderer for both targets (never forked per target)
-- [ ] **Single-origin rule:** the browser talks to exactly one origin — page, WS, and API on the same port; the client connects to same-origin paths (`/ws`) with no hardcoded host or port anywhere. In dev, the dev server serves the page and proxies WS/API to the server so dev is single-origin too. This is what makes local and tunnelled access identical (§12)
-- [ ] Port/instance selection knob (one setting drives server port, dev port, state dir); dev HMR follows the browser's port with an override for asymmetric tunnels
-- [ ] Electron main: spawn-or-attach to server; packaging decision (electron-builder vs forge — record in AGENTS.md)
-- [ ] Remote-backend connect/remember/switch (§12) — can land late in this epic or slip to Phase 8
+- [ ] `apps/web` renderer served by the server; single renderer for both targets (never forked per target) — _blocked on Track A: `apps/server` has no HTTP listener yet (Epic 2.1). The client is ready to be served from anywhere; there is nothing on the server side yet to serve it._
+- [x] **Single-origin rule:** the browser talks to exactly one origin — page, WS, and API on the same port; the client connects to same-origin paths (`/ws`) with no hardcoded host or port anywhere. In dev, the dev server serves the page and proxies WS/API to the server so dev is single-origin too. This is what makes local and tunnelled access identical (§12)
+- [x] Port/instance selection knob (one setting drives server port, dev port, state dir); dev HMR follows the browser's port with an override for asymmetric tunnels
+- [ ] Electron main: spawn-or-attach to server; packaging decision (electron-builder vs forge — record in AGENTS.md) — _spawn-or-attach mechanism is done (below); the packaging-tool decision is explicitly the operator's per AGENTS.md's open decisions, not made here_
+- [ ] Remote-backend connect/remember/switch (§12) — deferred to Phase 8, as the epic allows
+
+_Landed: `createHttpClient` (fetch wrapper) and `createReconnectingSocket` (WS
+with capped exponential backoff) in `packages/ui`, both structurally same-
+origin — the http client throws on an absolute URL rather than making a
+cross-origin request, and the socket URL is always built from `location`.
+`GraphDataSource` is the seam Stage 2 swaps: `createFixtureGraphDataSource`
+is the only implementation today; a live-API implementation over
+`createHttpClient` lands beside it without the app changing. `PLOTROOM_PORT`
+is the one instance knob: `apps/web/vite.config.ts` binds Vite's own dev
+port to it directly and derives the `/api`/`/ws` proxy target one port above
+(documented in-file; the exact offset convention needs Track A's
+acknowledgment once a real dev-mode server port exists to target), with
+`PLOTROOM_HMR_CLIENT_PORT` overriding HMR's reconnect port for asymmetric
+tunnels. `apps/desktop`'s `spawnOrAttach` (probe → attach, or spawn → poll
+→ throw on timeout) is pure and unit-tested with a mocked probe/spawn/wait;
+`main.ts` wires it to real Electron/`child_process`/`fetch` and spawns
+`apps/server`'s compiled entry point — which does not listen on a port yet
+(Epic 2.1), so today spawning it correctly fails to observe health and
+throws. That failure is expected at Stage 1: the mechanism is complete and
+will succeed unchanged once Track A's server has a listener and `/health`._
 
 ---
 
