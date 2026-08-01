@@ -56,6 +56,15 @@ export interface ConversationPanelProps {
     turnOrdinal: number,
     item: TranscriptViewItem,
   ) => void;
+  /**
+   * The transcript checkpoint gesture (§3.6, §4.5): a live transcript
+   * versions on checkpoint, not on every turn — this is the human half of
+   * that rule (`POST /api/sessions/:id/checkpoint`, already live on the
+   * server). Absent — like `sendDisabledReason` — the button still renders,
+   * disabled with `checkpointDisabledReason`, never silently doing nothing.
+   */
+  readonly onCheckpointTranscript?: (sessionId: SessionId) => void;
+  readonly checkpointDisabledReason?: string | undefined;
   /** Injectable so copy is testable without a real clipboard. */
   readonly copyToClipboard?: (text: string) => void;
 }
@@ -86,6 +95,8 @@ export function ConversationPanel({
   onSend,
   sendDisabledReason,
   onWireAsContext,
+  onCheckpointTranscript,
+  checkpointDisabledReason,
   copyToClipboard = defaultCopyToClipboard,
 }: ConversationPanelProps) {
   const [detail, setDetail] = useState<SessionDetail | null>(null);
@@ -201,6 +212,11 @@ export function ConversationPanel({
     setWindowSize((current) => growTranscriptWindow(current, turns.length));
   }
 
+  function handleCheckpointTranscript(): void {
+    if (checkpointDisabledReason !== undefined) return;
+    onCheckpointTranscript?.(sessionId);
+  }
+
   if (detail === null) {
     return <div role="status">loading session {sessionId}…</div>;
   }
@@ -219,6 +235,22 @@ export function ConversationPanel({
         <span data-testid="session-end">
           end: {session.end?.kind ?? "running"}
         </span>
+      </div>
+
+      <div>
+        <button
+          type="button"
+          onClick={handleCheckpointTranscript}
+          disabled={checkpointDisabledReason !== undefined}
+          title={checkpointDisabledReason}
+        >
+          checkpoint transcript
+        </button>
+        {checkpointDisabledReason !== undefined ? (
+          <div data-testid="checkpoint-disabled-reason">
+            {checkpointDisabledReason}
+          </div>
+        ) : null}
       </div>
 
       <div>

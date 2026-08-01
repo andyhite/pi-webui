@@ -117,6 +117,20 @@ export interface GraphActions {
     nodeId: string,
     edgeIds: readonly string[],
   ): Promise<ActionResult<void>>;
+  /**
+   * The transcript checkpoint gesture (§3.6, §6.1): "a live transcript
+   * versions on checkpoint, not on every turn." `publication` is `null`
+   * when there was nothing new to publish — the server says so rather than
+   * this pretending a version was created.
+   */
+  checkpointTranscript(sessionId: string): Promise<
+    ActionResult<{
+      readonly publication: {
+        readonly ordinal: number;
+        readonly throughTurn: number;
+      } | null;
+    }>
+  >;
 }
 
 export function createApiActions(http: HttpClient): GraphActions {
@@ -192,7 +206,25 @@ export function createApiActions(http: HttpClient): GraphActions {
       asAction(async () => {
         await http.post(contextOrderPath(nodeId), { edgeIds });
       }),
+
+    checkpointTranscript: (sessionId) =>
+      asAction(async () => {
+        const response = await http.post<{
+          published: {
+            publication: {
+              readonly ordinal: number;
+              readonly throughTurn: number;
+            };
+          } | null;
+        }>(checkpointPath(sessionId));
+        return { publication: response.published?.publication ?? null };
+      }),
   };
+}
+
+/** `/api/sessions/<id>/checkpoint` — same path-encoding rule as {@link apiPath}. */
+function checkpointPath(sessionId: string): string {
+  return `${apiPath("/api/sessions", sessionId)}/checkpoint`;
 }
 
 /** `/api/nodes/<id>/context/order` — same path-encoding rule as {@link apiPath}. */

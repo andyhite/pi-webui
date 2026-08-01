@@ -183,4 +183,28 @@ describe("createApiActions", () => {
     await actions.editNote("obj1", { body: "new body" });
     expect(patch).toHaveBeenCalledWith("/api/notes/obj1", { body: "new body" });
   });
+
+  it("checkpointTranscript posts to the session's checkpoint endpoint and returns the publication", async () => {
+    const post = vi.fn(async () => ({
+      published: { publication: { ordinal: 1, throughTurn: 3 } },
+    }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.checkpointTranscript("sess/1");
+
+    expect(post).toHaveBeenCalledWith("/api/sessions/sess%2F1/checkpoint");
+    expect(result).toEqual({
+      ok: true,
+      value: { publication: { ordinal: 1, throughTurn: 3 } },
+    });
+  });
+
+  it("checkpointTranscript reports 'nothing new to publish' as a null publication, not a refusal", async () => {
+    const post = vi.fn(async () => ({ published: null }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.checkpointTranscript("sess1");
+
+    expect(result).toEqual({ ok: true, value: { publication: null } });
+  });
 });
