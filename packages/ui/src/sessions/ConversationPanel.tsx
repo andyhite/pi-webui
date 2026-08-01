@@ -10,12 +10,13 @@
  * whatever the data source currently knows (Stage 2: real, server-derived
  * status; fixtures otherwise).
  *
- * The composer's send is disabled with a visible reason whenever there is
- * nothing that can accept it: injection has no server endpoint yet (Batch 3
- * scope) — see `sendDisabledReason`, which the host sets rather than this
- * panel pretending a click delivered something it did not. Drafts and
- * prompt history persist per session through the same durable-store seam
- * `placement/store.ts` established, unaffected by whether sending is wired.
+ * The composer's send is wired to injection (§6.5, `POST /sessions/:id/
+ * inject`, Stage 2) via `onSend`; `sendDisabledReason` still disables it
+ * with a visible reason whenever nothing can accept it (offline/fixture
+ * mode) — the host sets it, this panel never pretends a click delivered
+ * something it did not. Drafts and prompt history persist per session
+ * through the same durable-store seam `placement/store.ts` established,
+ * unaffected by whether sending is wired.
  *
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
  * `<details>`/`<summary>` supplies collapsible mechanics for tool calls with
@@ -53,7 +54,7 @@ export interface ConversationPanelProps {
    * disables the composer rather than silently pretending to deliver it.
    * Injection has no server endpoint yet (§6.5, Batch 3 scope).
    */
-  readonly sendDisabledReason?: string;
+  readonly sendDisabledReason?: string | undefined;
   /** Placeholder hook: wiring a message as context is Epic 3.5/5.2 territory. */
   readonly onWireAsContext?: (
     sessionId: SessionId,
