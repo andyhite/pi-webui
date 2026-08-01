@@ -180,13 +180,29 @@ would be counted once per ancestor. Enforcement is Phase 6's; the data starts at
 first delegation because attribution that starts later cannot answer what an earlier
 chain cost.
 
-**Scoped runs and the queue** live in `run_batches` / `run_queue` (migrations 13 and
-14). One batch is one gesture over a scope; one entry is one command, admitted rather
-than scheduled. Every entry carries `contract_hash` — the assembled body, the
-configuration, and the exact versions that went in — because **the preview is the
+**Scoped runs and the queue** live in `run_batches` / `run_queue` (migrations 13, 14
+and 15). One batch is one gesture over a scope; one entry is one command, admitted
+rather than scheduled. Every entry carries `contract_hash` — the configuration plus
+every input's version and content, in assembly order — because **the preview is the
 contract**: at admission the preview is taken again, and a mismatch re-asks instead
-of running something else. There is no timer anywhere in it: the queue drains from
-the session event stream, including for a session that never went through it.
+of running something else.
+
+Two rules qualify that, and both are decisions rather than implementation details.
+**The in-batch rule:** a subgraph was previewed as a chain, so an input produced by
+another command in the same batch is the contract _executing_, not drifting — those
+inputs and the `runnable` flip they cause are excluded from that entry's hash, and
+the entry is not admitted until its in-batch producer is `done`. Drift from outside
+the batch re-asks exactly as before. **Confirming answers to the batch:** into a
+paused batch a confirmation is kept and the entry parked (resuming is still the
+operator's separate gesture); into an aborted or completed one it is refused.
+
+There is no timer anywhere in it: the queue drains from the session event stream,
+including for a session that never went through it, and once at boot after
+reconciling entries the last process left in flight — a boot-time drain admits work
+already initiated by a gesture, which is §4.1's "deciding _when_, never _whether_".
+A queue entry's state carries `interrupted` for the same reason the session and the
+run do (principle 11): a restart that reported those as `done` was reporting success
+for work that never happened.
 
 **Commands and runs** live in `command_definitions` / `commands` /
 `command_parameter_bindings` / `command_outputs` and `runs` / `run_inputs` /

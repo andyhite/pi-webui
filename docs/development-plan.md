@@ -1281,20 +1281,62 @@ _Landed as `apps/server/src/runs/{scopes,queue,drift}.ts` over migrations 13 and
   (§4.5), and a scope with nothing drifted is refused as `empty_scope` rather than
   producing an empty batch.
 - **THE PREVIEW IS THE CONTRACT, as a hash.** Every queue entry records
-  `sha256(assembled-body-hash + configuration + the exact versions that went in)`.
-  At admission the preview is taken again and compared; a mismatch does not run —
-  the entry becomes `needs_reask` with a sentence naming which inputs moved, and
-  only `POST /api/run-queue/:id/confirm` (which replaces the contract with the
-  current one) queues it again. Body-hash alone would miss a model change; versions
-  alone would miss an edit producing identical bytes; both is the smallest honest
-  statement of "this is what you agreed to run".
+  `sha256(configuration + every input's version and content hash, in assembly
+order)`. At admission the preview is taken again and compared; a mismatch does not
+  run — the entry becomes `needs_reask` with a sentence naming which inputs moved,
+  and only `POST /api/run-queue/:id/confirm` (which replaces the contract with the
+  current one) queues it again. Configuration alone would miss an edited input;
+  versions alone would miss an edit that produced identical bytes; the ordinals are
+  what make "assembly order is edge order" (§3.5) part of what was agreed rather
+  than an accident of it.
+
+- **The in-batch rule, decided.** A subgraph or what's-missing scope is one gesture
+  over a chain the operator previewed **as a chain**: they were shown that the
+  downstream command consumes the upstream command's output. So when the upstream
+  runs and binds that output, the downstream's input appearing is **the contract
+  executing, not the contract drifting**. Inputs produced by another command in the
+  same batch are therefore excluded from that entry's hash, and so is `runnable`,
+  whose flip from false to true is caused by exactly that binding. Without the rule
+  a batch of two could never finish: it would stop halfway to ask the operator to
+  confirm the thing they had just confirmed. Two details make it hold rather than
+  half-hold — the exclusion set is derived from the batch's own command list (stable
+  for the batch's life, so the set computed at enqueue and at admission cannot
+  disagree), and it covers both spellings of a produced input, the output
+  placeholder and the object it later bound to, because a downstream input node
+  points at the first before and the second after. **Drift from outside the batch is
+  untouched**: an input the batch does not produce is exactly as binding as before,
+  and re-asks. The second half of the same rule is an admission gate: an entry whose
+  in-batch producer has not finished is not admitted at all, so it waits rather than
+  being run and refused for an input nothing had produced yet. `done` is the only
+  state that counts as produced — a sibling that failed, was interrupted, or was
+  cancelled will never produce it, and the batch's own pause is what decides that.
 - **The queue is admission, and it has no timer.** It subscribes to the session
   event stream and drains when a session ends — including a session that never went
-  through it, since an ordinary run under the limit holds a slot too. Draining is
-  serialized by a flag, because two overlapping drains would each see the same free
-  slot. Nothing the product decides can enqueue (principle 2), and a restart
-  re-queues anything left `starting` rather than starting it, so the contract is
-  re-checked rather than assumed.
+  through it, since an ordinary run under the limit holds a slot too. Nothing the
+  product decides can enqueue (principle 2).
+
+  Three things keep that loop honest, each of which was a defect first. Draining is
+  serialized by a flag _and_ re-runs when a drain arrives during one, because two
+  overlapping drains would each see the same free slot while a swallowed one leaves
+  a slot free with nobody to notice. The loop never considers an entry twice in a
+  pass, and the admission path always moves the row it declines: either brace alone
+  leaves a hung server one forgotten branch away, and a queue that spins is worse
+  than a queue that refuses. And a session that ends _before_ the row naming it is
+  written — a scripted or instantly-failing run gets there while `runOne` is still
+  returning — is settled by looking at what already happened right after the
+  binding, because the event that would have settled it found no entry to settle.
+
+  **At boot the queue is reconciled and drained once.** An entry it believes is
+  running has a session whose outcome nothing applied, so it is settled from that
+  session's real end state — `interrupted` where that is what happened, which is
+  neither `done` nor `failed` (principle 11), and which pauses the batch so a human
+  addresses it. An entry admitted but never bound to a session goes back to
+  `queued`, where its contract is re-checked like any other rather than assumed
+  still true. Then one drain: every entry it admits was already initiated by a
+  gesture, and a restart does not un-initiate one, so admitting it is §4.1's "the
+  system is only deciding _when_, never _whether_". Refusing to admit at boot would
+  mean a restart silently dropped work somebody asked for.
+
 - **The limit bounds initiation, not one endpoint.** `POST /api/runs` goes through
   the same admission: **201 `{run, session, status}`** when a slot was free
   (unchanged, and what the W10 gate still gets under the shipped default of four),
@@ -1305,18 +1347,33 @@ _Landed as `apps/server/src/runs/{scopes,queue,drift}.ts` over migrations 13 and
   different runtime is a different run. **Track B's run affordance should render the
   queued position for the 202 case** (cross-track follow-up).
 
-_A batch pauses on a failed or out-of-budget session and is resumable by a human
-gesture only; a user stop **aborts** the remainder and an aborted batch is refused a
-resume, because stopped means stopped. `GET /api/run-batches/:id` returns every
-entry including settled ones, because a paused batch's failed run is precisely what
+_A batch pauses on a failed, out-of-budget, or interrupted session and is resumable
+by a human gesture only; a user stop **aborts** the remainder and an aborted batch is
+refused a resume, because stopped means stopped. The switch from a session end to an
+entry outcome is exhaustive with no `default`, so a seventh end kind fails to compile
+rather than being quietly recorded as success — which is exactly how an interrupted
+run used to be reported as done. `GET /api/run-batches/:id` returns every entry
+including settled ones, because a paused batch's failed run is precisely what
 "address it and resume" is about._
+
+_Confirming a re-ask answers to the **batch**, not only to the entry: into a paused
+batch the contract is accepted and the entry parked, so the operator's answer is kept
+and resuming remains the separate gesture that starts the remainder; into an aborted
+or completed one it is refused, because there is nothing left for a confirmation to
+start. Admission order across batches is gesture order first (`enqueued_at`) with the
+scope's dependency order as the tie-break, so a batch admitted this minute cannot
+overtake one admitted an hour ago just because both have a position 1._
 
 _Deferred, honestly: the scoped estimate aggregates the per-command ones and says so
 in its own sentence — a scope where only some commands have priced history has an
 incomplete range, and the range is `null` rather than zero when none of them do;
 `unblockWith` is always `missing` because that is the only unblocking scope §4.1
 names; and the spend cap is recorded per run in the scope and enforced by Phase 6,
-not here._
+not here. `spend_attributions.session_id` cascades on a deleted session while its
+comment claimed the row survives — the cascade is what shipped and what the code
+assumes, so the comment now says so and making spend outlive its spender is a future
+migration plus a decision about what a total means when the spender is gone (§8 with
+principle 10), not a comment edit._
 
 ---
 
