@@ -196,6 +196,17 @@ export class BlobStore {
    * Compaction: remove unreferenced blobs and their files. Anything with a
    * reference is retained, pinned or not — the retention rule (§3.2) decides
    * which references to drop; this only removes what nothing points at.
+   *
+   * Rows go first, in one transaction, and files afterwards. That order is the
+   * safety property, because a row and a file cannot be removed atomically
+   * together and a crash will land between them:
+   *
+   * - rows-then-files leaves, at worst, a file nothing points at: wasted bytes,
+   *   and `put()` writes the file again if that content ever comes back.
+   * - files-then-rows leaves a blob *row* whose bytes are gone — and `put()`
+   *   dedups on the row, so it would hand the next caller a blob that cannot be
+   *   read. That is silent content loss, and it is strictly worse than waste
+   *   (principle 12: nothing goes quietly).
    */
   compact(): { removed: number; bytesFreed: number } {
     const referenced = this.state.db
@@ -212,13 +223,19 @@ export class BlobStore {
       )
       .all();
 
-    let bytesFreed = 0;
+    if (orphans.length === 0) return { removed: 0, bytesFreed: 0 };
 
+    this.state.db.transaction(() => {
+      for (const orphan of orphans) {
+        this.state.db.delete(blobs).where(eq(blobs.id, orphan.id)).run();
+      }
+    });
+
+    let bytesFreed = 0;
     for (const orphan of orphans) {
       rmSync(blobPath(this.state.layout.blobsDir, orphan.hash), {
         force: true,
       });
-      this.state.db.delete(blobs).where(eq(blobs.id, orphan.id)).run();
       bytesFreed += orphan.size;
     }
 

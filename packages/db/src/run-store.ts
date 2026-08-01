@@ -818,11 +818,17 @@ export class RunStore {
     const versions = this.referencedVersions(ids);
 
     for (const row of doomed) {
-      this.blobs.dereference(row.assembledBlobId, {
-        ownerKind: BLOB_OWNER,
-        ownerId: row.id,
+      // The same pairing as version compaction, and the same reason: between
+      // dropping the reference to a run's assembled content and dropping the
+      // run, the blob sweep could reclaim bytes §15-1 still requires. One
+      // transaction per run.
+      this.state.db.transaction(() => {
+        this.blobs.dereference(row.assembledBlobId, {
+          ownerKind: BLOB_OWNER,
+          ownerId: row.id,
+        });
+        this.state.db.delete(runs).where(eq(runs.id, row.id)).run();
       });
-      this.state.db.delete(runs).where(eq(runs.id, row.id)).run();
     }
 
     // A version stays run-referenced only while some run still points at it;

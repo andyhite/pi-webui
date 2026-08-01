@@ -307,14 +307,17 @@ export class Maintenance {
   }
 
   /**
-   * The compaction sweep (§15-3, §4.4): versions first, then runs, then the
+   * The compaction sweep (§15-3, §4.4): runs first, then versions, then the
    * blobs nothing points at any more.
    *
-   * The order matters and is not arbitrary. Run compaction is what releases the
-   * `run_referenced` flag from versions, and version compaction is what drops
-   * blob references — so blobs are swept last, when the graph of references has
-   * finished shrinking. Nothing here decides *what* is compactable: the pure
-   * predicates do, and pinned or referenced content is never a candidate.
+   * The order matters and is not arbitrary, and it reads backwards from what it
+   * reclaims: run compaction is what releases the `run_referenced` flag from
+   * versions, so it comes first or the versions it freed would survive another
+   * whole interval; version compaction is what drops blob references, so it
+   * comes before the blob sweep for the same reason. Blobs are last, when the
+   * graph of references has finished shrinking. Nothing here decides *what* is
+   * compactable: the pure predicates do, and pinned or referenced content is
+   * never a candidate.
    */
   compact(policies: CompactionPolicies = {}): CompactionResult {
     const runsRemoved = this.runStore.compactRuns(

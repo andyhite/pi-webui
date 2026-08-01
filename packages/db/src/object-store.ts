@@ -358,22 +358,30 @@ export class ObjectStore {
       .all();
 
     for (const candidate of candidates) {
-      this.blobs.dereference(candidate.contentBlobId, {
-        ownerKind: BLOB_OWNER,
-        ownerId: candidate.id,
-      });
-
-      if (candidate.deltaBlobId) {
-        this.blobs.dereference(candidate.deltaBlobId, {
+      // Dropping a version's references and dropping the version are one act.
+      // Halfway between them there is a version nothing claims the content of —
+      // and the blob sweep would then be free to delete bytes a live version
+      // still points at, including one somebody pins in the meantime. One
+      // transaction per candidate, not one for the sweep: a partial sweep is
+      // fine, a partial *candidate* is not.
+      this.state.db.transaction(() => {
+        this.blobs.dereference(candidate.contentBlobId, {
           ownerKind: BLOB_OWNER,
           ownerId: candidate.id,
         });
-      }
 
-      this.state.db
-        .delete(objectVersions)
-        .where(eq(objectVersions.id, candidate.id))
-        .run();
+        if (candidate.deltaBlobId) {
+          this.blobs.dereference(candidate.deltaBlobId, {
+            ownerKind: BLOB_OWNER,
+            ownerId: candidate.id,
+          });
+        }
+
+        this.state.db
+          .delete(objectVersions)
+          .where(eq(objectVersions.id, candidate.id))
+          .run();
+      });
     }
 
     return { removed: candidates.length };

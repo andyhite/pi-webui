@@ -250,3 +250,84 @@ describe("the compaction sweep (§15-3, §4.4)", () => {
     expect(existsSync(path)).toBe(false);
   });
 });
+
+describe("the sweep leaves nothing half-removed (§12, principle 12)", () => {
+  it("never leaves a blob row whose bytes are gone", () => {
+    // Two external blobs: one referenced, one not. The unreferenced one is
+    // swept, and the invariant asserted afterwards is the one the row-before-
+    // file order exists to keep — every surviving row can still be read.
+    const kept = blobs.put("k".repeat(80_000), { kind: "test" });
+    blobs.reference(kept.id, { ownerKind: "test", ownerId: "keeper" });
+    const doomed = blobs.put("d".repeat(80_000), { kind: "test" });
+
+    const result = maintenance.compact();
+
+    expect(result.blobsRemoved).toBe(1);
+    expect(existsSync(blobPath(state.layout.blobsDir, doomed.hash))).toBe(
+      false,
+    );
+
+    for (const row of state.sqlite
+      .prepare<[], { id: string; hash: string; is_external: number }>(
+        "SELECT id, hash, is_external FROM blobs",
+      )
+      .all()) {
+      if (row.is_external === 1) {
+        expect(existsSync(blobPath(state.layout.blobsDir, row.hash))).toBe(
+          true,
+        );
+      }
+      // Readable through the store, which is the claim a row makes.
+      expect(blobs.get(row.id).byteLength).toBeGreaterThan(0);
+    }
+    expect(blobs.text(kept.id)).toBe("k".repeat(80_000));
+  });
+
+  it("heals rather than dedupes into a hole when a file outlives its row", () => {
+    // The crash window, made explicit: rows go first, so an interrupted sweep
+    // can leave a file with no row. Re-putting that content must write a fresh
+    // blob, not hand back a dead one — which is exactly what the reverse order
+    // (file first) would have done.
+    const content = "c".repeat(80_000);
+    const first = blobs.put(content, { kind: "test" });
+    const path = blobPath(state.layout.blobsDir, first.hash);
+
+    state.sqlite.prepare("DELETE FROM blobs WHERE id = ?").run(first.id);
+    expect(existsSync(path)).toBe(true);
+
+    const again = blobs.put(content, { kind: "test" });
+
+    expect(again.deduped).toBe(false);
+    expect(again.id).not.toBe(first.id);
+    expect(blobs.text(again.id)).toBe(content);
+  });
+
+  it("never leaves a version whose content nothing claims", () => {
+    const { objectId } = twoVersions("note");
+    const started = aRun();
+    runs.complete(started.run.id, {
+      cost: { inputTokens: 1, outputTokens: 1, costMicros: 10 },
+    });
+
+    clock.advance(31 * DAY);
+    maintenance.compact();
+
+    // Every surviving version still has a reference to its content, so the next
+    // blob sweep cannot reclaim bytes something points at.
+    const unclaimed = state.sqlite
+      .prepare<[], { count: number }>(
+        `SELECT COUNT(*) AS count
+           FROM object_versions v
+          WHERE NOT EXISTS (
+                  SELECT 1 FROM blob_refs r
+                   WHERE r.blob_id = v.content_blob_id
+                     AND r.owner_kind = 'object_version'
+                     AND r.owner_id = v.id)`,
+      )
+      .get() as { count: number };
+
+    expect(unclaimed.count).toBe(0);
+    expect(objects.read(objectId).renderings.agentContent).toBe("note v2");
+    expect(runs.assembledContent(started.run.id)).toContain("the input");
+  });
+});
