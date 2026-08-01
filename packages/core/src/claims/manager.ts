@@ -82,6 +82,25 @@ import {
 export const DEFAULT_CLAIM_LEASE_SECONDS = 15 * 60;
 
 /**
+ * Lease ceiling, decided: **24 hours of inactivity.**
+ *
+ * "Claims are leases, not locks" (§3.4) was enforced by refusing to *represent*
+ * an absent lease — but a numeric lease can still say a decade, which is a lock
+ * wearing a lease's clothes. A day is far longer than any plausible tool call or
+ * paused turn, and it bounds the worst case for an operator who is not watching:
+ * a wedged holder frees its paths within a day even if nobody force-releases it.
+ *
+ * The clamp is visible rather than silent: the granted claim carries the lease it
+ * actually got, so a caller that asked for more reads the real number back
+ * (`leaseSeconds` on the returned claim) instead of being told what it wanted to
+ * hear.
+ */
+export const MAX_CLAIM_LEASE_SECONDS = 24 * 60 * 60;
+
+/** The shortest lease worth granting; anything less is a claim dead on arrival. */
+export const MIN_CLAIM_LEASE_SECONDS = 1;
+
+/**
  * Past this, a claim wait is worth an alert of its own (§7.2, "a claim wait past
  * a threshold alerts on its own"). Exposed as data here; the alert itself is
  * Phase 6's to render.
@@ -115,6 +134,10 @@ export interface ClaimRequest {
    * Seconds of inactivity to hold it for. Omitted takes the default lease; there
    * is deliberately no way to ask for a claim that never expires — "claims are
    * leases, not locks" (§3.4), and only the operator's root claim is immortal.
+   *
+   * Clamped into `[MIN_CLAIM_LEASE_SECONDS, MAX_CLAIM_LEASE_SECONDS]`, so a
+   * numeric near-forever is not a lock either. The granted claim reports the
+   * lease it got, so the clamp is readable rather than silent.
    */
   readonly leaseSeconds?: number;
   /** Overrides the clock, for replaying a persisted request at its own time. */
@@ -146,7 +169,10 @@ export interface ClaimGrantRequest {
   readonly to: SessionId;
   /** Must be the operator: only they may grant outside the policy hierarchy. */
   readonly by: Author;
-  /** Omitted takes the default lease; a session claim is never immortal (§3.4). */
+  /**
+   * Omitted takes the default lease; a session claim is never immortal (§3.4), and
+   * the operator's grant is clamped to `MAX_CLAIM_LEASE_SECONDS` like any other.
+   */
   readonly leaseSeconds?: number;
   readonly at?: number;
 }
@@ -353,8 +379,12 @@ export interface ClaimManager {
 export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
   const clock = options.clock;
   const ids: ClaimIdFactory = { ...systemClaimIds, ...options.ids };
-  const defaultLease =
-    options.defaultLeaseSeconds ?? DEFAULT_CLAIM_LEASE_SECONDS;
+  // The configured default is clamped like any requested lease, so configuration
+  // cannot buy what a request cannot ask for.
+  const defaultLease = clampLease(
+    options.defaultLeaseSeconds ?? DEFAULT_CLAIM_LEASE_SECONDS,
+    DEFAULT_CLAIM_LEASE_SECONDS,
+  );
 
   const now = (at?: number): number => at ?? clock();
 
@@ -487,6 +517,19 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
   }
 
   /**
+   * The lease a claim actually gets: unspecified takes the default, and anything
+   * asked for is clamped into `[MIN, MAX]`.
+   *
+   * Non-finite input resolves to the default rather than being clamped, because
+   * `NaN` is not a large number — it is an absent one that *reads* as immortal:
+   * `lastActivityAt + NaN <= now` is false forever, so a malformed request body
+   * would have minted exactly the lock the lease rules exist to prevent.
+   */
+  function leaseFor(requested: number | undefined): number {
+    return clampLease(requested, defaultLease);
+  }
+
+  /**
    * Mint a granted claim. Every claim this makes carries a lease: `undefined`
    * means unspecified and resolves to the default, and there is no value that
    * means "never expires" — the only immortal claim is the root one, built by
@@ -513,7 +556,7 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
       grantedBy: input.grantedBy,
       grantedAt: input.at,
       lastActivityAt: input.at,
-      leaseSeconds: input.leaseSeconds ?? defaultLease,
+      leaseSeconds: leaseFor(input.leaseSeconds),
     };
   }
 
@@ -1895,6 +1938,19 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
     waitMetrics,
     isWaitingOnClaim,
   };
+}
+
+/**
+ * Clamp a lease into `[MIN, MAX]`, with an absent or non-finite value taking the
+ * fallback. Shared by the configured default and every requested lease, so there
+ * is one statement of what a lease may be.
+ */
+function clampLease(requested: number | undefined, fallback: number): number {
+  if (requested === undefined || !Number.isFinite(requested)) return fallback;
+  return Math.min(
+    MAX_CLAIM_LEASE_SECONDS,
+    Math.max(MIN_CLAIM_LEASE_SECONDS, Math.floor(requested)),
+  );
 }
 
 export function describeAuthor(author: Author): string {

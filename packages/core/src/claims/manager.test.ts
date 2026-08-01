@@ -4,6 +4,8 @@ import { humanAuthor, sessionAuthor } from "../author.js";
 import {
   createClaimManager,
   DEFAULT_CLAIM_LEASE_SECONDS,
+  MAX_CLAIM_LEASE_SECONDS,
+  MIN_CLAIM_LEASE_SECONDS,
   type ClaimManager,
 } from "./manager.js";
 import {
@@ -760,6 +762,109 @@ describe("leases, not locks", () => {
     const opened = manager.open(ws());
     const held = granted(manager, opened.state, A, "src");
     expect(held.claim.leaseSeconds).toBe(DEFAULT_CLAIM_LEASE_SECONDS);
+  });
+
+  it("clamps a near-forever lease to the maximum, visibly", () => {
+    // Refusing to represent an absent lease is not enough on its own: a numeric
+    // lease can still say a decade, which is a lock wearing a lease's clothes
+    // (§3.4). The granted claim reports what it actually got, so the clamp is
+    // readable rather than silent.
+    const { manager, state } = setup();
+    const decade = ok(
+      manager.request(state, {
+        sessionId: A,
+        path: "src",
+        leaseSeconds: 10 * 365 * 24 * 60 * 60,
+      }),
+    );
+    // No policy here, so this is an approval wait carrying the requested lease.
+    if (decade.result.kind !== "approval-required") {
+      throw new Error("expected an approval");
+    }
+    const answered = ok(
+      manager.answerApproval(decade.state, {
+        waitId: decade.result.wait.id,
+        by: humanAuthor,
+        decision: "grant",
+      }),
+    );
+    if (answered.result.kind !== "granted") throw new Error("expected a grant");
+    expect(answered.result.claim.leaseSeconds).toBe(MAX_CLAIM_LEASE_SECONDS);
+
+    // The operator's direct grant is clamped the same way.
+    const byOperator = ok(
+      manager.grant(state, {
+        path: "docs",
+        to: B,
+        by: humanAuthor,
+        leaseSeconds: Number.MAX_SAFE_INTEGER,
+      }),
+    );
+    if (byOperator.result.kind !== "granted") {
+      throw new Error("expected a grant");
+    }
+    expect(byOperator.result.claim.leaseSeconds).toBe(MAX_CLAIM_LEASE_SECONDS);
+  });
+
+  it("treats a non-finite lease as unspecified rather than as forever", () => {
+    // `NaN` is not a large number, it is an absent one that *reads* as immortal:
+    // `lastActivityAt + NaN <= now` is false forever, so a malformed request body
+    // would otherwise mint exactly the lock the lease rules exist to prevent.
+    const { manager, state, clock } = setup(600);
+    const nonFinite = ok(
+      manager.grant(state, {
+        path: "src",
+        to: A,
+        by: humanAuthor,
+        leaseSeconds: Number.NaN,
+      }),
+    );
+    if (nonFinite.result.kind !== "granted")
+      throw new Error("expected a grant");
+    expect(nonFinite.result.claim.leaseSeconds).toBe(600);
+    expect(violatesLeasePolicy(nonFinite.state)).toEqual([]);
+
+    const lapsed = ok(manager.expire(nonFinite.state, clock.tick(601)));
+    expect(lapsed.result.expired).toEqual([nonFinite.result.claim.id]);
+  });
+
+  it("floors a fractional lease and refuses to grant a zero-second one", () => {
+    const { manager, state } = setup();
+    const fractional = ok(
+      manager.grant(state, {
+        path: "src",
+        to: A,
+        by: humanAuthor,
+        leaseSeconds: 90.7,
+      }),
+    );
+    if (fractional.result.kind !== "granted") {
+      throw new Error("expected a grant");
+    }
+    expect(fractional.result.claim.leaseSeconds).toBe(90);
+
+    const zero = ok(
+      manager.grant(fractional.state, {
+        path: "docs",
+        to: B,
+        by: humanAuthor,
+        leaseSeconds: 0,
+      }),
+    );
+    if (zero.result.kind !== "granted") throw new Error("expected a grant");
+    expect(zero.result.claim.leaseSeconds).toBe(MIN_CLAIM_LEASE_SECONDS);
+  });
+
+  it("clamps the configured default too, so configuration buys no more than a request", () => {
+    const clock = testClock();
+    const manager = createClaimManager({
+      clock,
+      ids: countingClaimIds(),
+      defaultLeaseSeconds: 10 * 365 * 24 * 60 * 60,
+    });
+    const opened = manager.open(ws());
+    const held = granted(manager, opened.state, A, "src");
+    expect(held.claim.leaseSeconds).toBe(MAX_CLAIM_LEASE_SECONDS);
   });
 
   it("leases a claim granted off the waitlist, and expires it like any other", () => {
