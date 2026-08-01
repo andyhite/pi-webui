@@ -52,7 +52,7 @@ describe("factories (Epic 1.0)", () => {
           pinned: makeRun().pinned,
           startedAt: TEST_EPOCH,
           recencyRank: DEFAULT_RUN_RETENTION_POLICY.keepPerDefinition + 1,
-          isLatestForCommand: false,
+          addressedByLatest: false,
         },
         { now: clock.now(), policy: DEFAULT_RUN_RETENTION_POLICY },
       ),

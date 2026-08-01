@@ -14,7 +14,7 @@ function run(overrides: Partial<RunRetentionFacts> = {}): RunRetentionFacts {
     pinned: false,
     startedAt: NOW - WINDOW - 1,
     recencyRank: KEEP + 1,
-    isLatestForCommand: false,
+    addressedByLatest: false,
     ...overrides,
   };
 }
@@ -35,7 +35,7 @@ describe("the run-history retention rule (spec §4.4)", () => {
   });
 
   it("never compacts the run `latest` resolves to", () => {
-    expect(isRunCompactable(run({ isLatestForCommand: true }), context)).toBe(
+    expect(isRunCompactable(run({ addressedByLatest: true }), context)).toBe(
       false,
     );
   });

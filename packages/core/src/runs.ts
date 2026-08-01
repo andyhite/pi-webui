@@ -145,8 +145,11 @@ export interface RunRetentionFacts {
   readonly startedAt: number;
   /** 1-based rank among runs of the same definition, newest first. */
   readonly recencyRank: number;
-  /** True for the newest run of its command, which `latest` resolves to. */
-  readonly isLatestForCommand: boolean;
+  /**
+   * True when an `output@latest` address currently resolves to this run.
+   * Retention must never make a live address stop answering.
+   */
+  readonly addressedByLatest: boolean;
 }
 
 /**
@@ -154,16 +157,16 @@ export interface RunRetentionFacts {
  * reason `isCompactable` is: the rule lives in one place and is asserted
  * directly, and the store mirrors it rather than restating it.
  *
- * A run is compactable only when it is unpinned, not the newest run of its
- * command (or `latest` would stop resolving), outside the last N for its
- * definition, and older than the window.
+ * A run is compactable only when it is unpinned, not the run `latest`
+ * currently resolves to, outside the last N for its definition, and older
+ * than the window.
  */
 export function isRunCompactable(
   run: RunRetentionFacts,
   context: { readonly now: number; readonly policy: RunRetentionPolicy },
 ): boolean {
   if (run.pinned) return false;
-  if (run.isLatestForCommand) return false;
+  if (run.addressedByLatest) return false;
   if (run.recencyRank <= context.policy.keepPerDefinition) return false;
   return run.startedAt < context.now - context.policy.windowSeconds;
 }

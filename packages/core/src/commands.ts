@@ -251,6 +251,17 @@ export type BudgetCheck =
       readonly message: string;
     };
 
+/**
+ * A deliberately crude estimate, stated once so assembly, the run preview, and
+ * the canvas all warn at the same number. Precision is not the point: the
+ * product's answer to "too big" is to refuse or warn, never to guess a
+ * truncation point (principle 12). Counted in characters rather than bytes so
+ * this package stays free of platform imports.
+ */
+export function estimateTokens(content: string): number {
+  return Math.ceil(content.length / 4);
+}
+
 export function checkContentBudget(
   estimatedTokens: number,
   budget: ContentBudget,
