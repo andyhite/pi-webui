@@ -867,6 +867,37 @@ describe("the producing completion loop (§3.5, principle 3)", () => {
     expect(at(ended, "end.proven")).toBe(false);
   });
 
+  it("proves the same submission whether a runtime or the API asked (principle 8)", async () => {
+    const harness = await boot(repository());
+    // No declared conditions: there is nothing to fail, and "every declared
+    // condition was evaluated and holds" is vacuously true — the proof still
+    // records what was checked.
+    const fixture = await command(harness);
+    const started = await run(harness, fixture.commandId, neverEnds);
+    const sessionId = str(started, "session.id");
+
+    const result = await harness.ok(`/sessions/${sessionId}/submit`, {
+      method: "POST",
+      body: {},
+    });
+
+    expect(at(result, "accepted")).toBe(true);
+    expect(typeof at(result, "proof.provenAt")).toBe("number");
+
+    const ended = await endedSession(harness, sessionId);
+    expect(at(ended, "session.end.kind")).toBe("completed");
+    expect(at(ended, "end.proven")).toBe(true);
+
+    // Submitting again is refused as an answer, not as a crash: proof is
+    // written once and a finished run is never silently re-ended (§3.5).
+    const again = await harness.ok(`/sessions/${sessionId}/submit`, {
+      method: "POST",
+      body: {},
+    });
+    expect(at(again, "accepted")).toBe(false);
+    expect(at(again, "feedback")).toMatch(/already ended as completed/);
+  });
+
   it("says so when a declared condition has no checker at all", async () => {
     const harness = await boot(repository());
     const fixture = await command(harness, {
