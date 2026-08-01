@@ -9,6 +9,7 @@ import { planSessionFork, type SessionForkContext } from "./fork.js";
 import {
   declareToolWorld,
   deriveOutsideWorldMarkers,
+  NO_OUTSIDE_WORLD_MARKERS,
 } from "./outside-world.js";
 import type { RuntimeCapabilities, RuntimeObservation } from "./runtime.js";
 import { makeSession, makeTranscript, makeTurn } from "./testing.js";
@@ -110,8 +111,7 @@ describe("a fork is a new session with its own workstream and workspace (§6.3)"
 
     expect(planned.ok).toBe(true);
     if (!planned.ok) return;
-    expect(planned.plan.cleanliness.clean).toBe(true);
-    expect(planned.plan.cleanliness.certain).toBe(true);
+    expect(planned.plan.cleanliness.state).toBe("clean");
   });
 
   it("marks the point as dirty after it, naming the irreversible write", () => {
@@ -119,7 +119,7 @@ describe("a fork is a new session with its own workstream and workspace (§6.3)"
 
     expect(planned.ok).toBe(true);
     if (!planned.ok) return;
-    expect(planned.plan.cleanliness.clean).toBe(false);
+    expect(planned.plan.cleanliness.state).toBe("dirty");
     expect(planned.plan.cleanliness.irreversible).toHaveLength(1);
     expect(planned.plan.cleanliness.description).toContain("merge");
   });
@@ -201,18 +201,66 @@ describe("a fork is a new session with its own workstream and workspace (§6.3)"
     expect(planned.refusal.reason).toBe("source_deleted");
   });
 
-  it("reports cleanliness as uncertain when nothing was declared", () => {
+  it("reports the point as unknown when a call up to it declared nothing", () => {
+    const undeclared = deriveOutsideWorldMarkers(
+      [
+        { kind: "turn-started", turn: 1, at: 1_000 },
+        {
+          kind: "tool-started",
+          toolName: "bash",
+          callId: "c9",
+          input: {},
+          at: 1_010,
+        },
+        {
+          kind: "tool-finished",
+          callId: "c9",
+          output: "",
+          isError: false,
+          at: 1_020,
+        },
+      ],
+      declarations,
+    );
+
     const planned = planSessionFork(
-      { source, transcript, capabilities: CAPABLE },
-      request(2),
+      { ...context, markers: undeclared },
+      request(1),
     );
 
     expect(planned.ok).toBe(true);
     if (!planned.ok) return;
-    // No markers at all: nothing is known to have been touched, and nothing is
-    // known not to have been either — but with no tool calls observed, there is
-    // nothing to be uncertain about.
-    expect(planned.plan.cleanliness.clean).toBe(true);
-    expect(planned.plan.cleanliness.certain).toBe(true);
+    // Neither clean nor dirty: nothing declared an outside-world write, and one
+    // call declared nothing at all (§6.6's source of truth, principle 7).
+    expect(planned.plan.cleanliness.state).toBe("unknown");
+  });
+
+  it("takes markers as a required argument, so 'clean' is never a default", () => {
+    // Omitting them used to produce clean:true with nothing having been examined:
+    // the caller least likely to derive markers got the most reassuring answer.
+    // Never invoked: the assertion is that this does not compile, and a
+    // type-level guard that also has to survive being run is a guard that starts
+    // needing runtime fallbacks to stay green.
+    const omitted = () =>
+      planSessionFork(
+        // @ts-expect-error markers are required (§6.3, principle 7)
+        { source, transcript, capabilities: CAPABLE },
+        request(1),
+      );
+    expect(typeof omitted).toBe("function");
+
+    // A caller with no observation log now says so, and gets the same answer.
+    const said = planSessionFork(
+      {
+        source,
+        transcript,
+        capabilities: CAPABLE,
+        markers: NO_OUTSIDE_WORLD_MARKERS,
+      },
+      request(1),
+    );
+    expect(said.ok).toBe(true);
+    if (!said.ok) return;
+    expect(said.plan.cleanliness.state).toBe("clean");
   });
 });

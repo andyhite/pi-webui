@@ -5,6 +5,8 @@ import {
   deriveOutsideWorldMarkers,
   forkCleanlinessAt,
   forkPointMarkers,
+  isCleanForkPoint,
+  NO_OUTSIDE_WORLD_MARKERS,
   NO_TOOL_WORLD_DECLARATIONS,
   type ToolWorldDeclaration,
 } from "./outside-world.js";
@@ -156,8 +158,8 @@ describe("fork-before-clean, fork-after-dirty (§6.3)", () => {
   it("is clean at a turn before the first touch", () => {
     const cleanliness = forkCleanlinessAt(markers, 1);
 
-    expect(cleanliness.clean).toBe(true);
-    expect(cleanliness.certain).toBe(true);
+    expect(cleanliness.state).toBe("clean");
+    expect(isCleanForkPoint(cleanliness)).toBe(true);
     expect(cleanliness.touches).toEqual([]);
     expect(cleanliness.description).toContain("clean");
   });
@@ -165,11 +167,12 @@ describe("fork-before-clean, fork-after-dirty (§6.3)", () => {
   it("is dirty from the turn the touch happened in, inclusively", () => {
     // A fork at turn 2 inherits turn 2, which is where the comment happened.
     const atTwo = forkCleanlinessAt(markers, 2);
-    expect(atTwo.clean).toBe(false);
+    expect(atTwo.state).toBe("dirty");
     expect(atTwo.touches).toHaveLength(1);
     expect(atTwo.irreversible).toEqual([]);
 
     const atThree = forkCleanlinessAt(markers, 3);
+    expect(atThree.state).toBe("dirty");
     expect(atThree.touches).toHaveLength(2);
     expect(atThree.irreversible).toHaveLength(1);
     expect(atThree.description).toContain("irreversible");
@@ -177,25 +180,67 @@ describe("fork-before-clean, fork-after-dirty (§6.3)", () => {
 
   it("marks every observed turn, so the transcript can draw them", () => {
     expect(
-      forkPointMarkers(markers).map((marker) => [marker.turn, marker.clean]),
+      forkPointMarkers(markers).map((marker) => [marker.turn, marker.state]),
     ).toEqual([
-      [1, true],
-      [2, false],
-      [3, false],
+      [1, "clean"],
+      [2, "dirty"],
+      [3, "dirty"],
     ]);
   });
 
-  it("loses certainty, not cleanliness, when a call was undeclared", () => {
+  it("is unknown, not clean, when a call up to here declared nothing", () => {
     const withBash = deriveOutsideWorldMarkers(
       [turn(1, 1_000), ...call("bash", "c1", 1_010)],
       declarations,
     );
     const cleanliness = forkCleanlinessAt(withBash, 1);
 
-    expect(cleanliness.clean).toBe(true);
-    expect(cleanliness.certain).toBe(false);
-    expect(cleanliness.description).toContain("as far as declarations go");
+    // The point of the third state: no *declared* write happened, which is not
+    // the same as nothing having happened (principle 7). A boolean `clean` here
+    // read as "safe to fork", which nobody had checked.
+    expect(cleanliness.state).toBe("unknown");
+    expect(isCleanForkPoint(cleanliness)).toBe(false);
+    expect(cleanliness.touches).toEqual([]);
+    expect(cleanliness.description).toContain("declare nothing either way");
+    expect(cleanliness.description).toContain("bash");
     expect(cleanliness.undeclaredCalls).toHaveLength(1);
+  });
+
+  it("stays dirty when a declared write and an undeclared call share the prefix", () => {
+    // Dirty wins over unknown: something definitely happened. The undeclared
+    // calls are still reported, and the sentence says "at least", because the
+    // count of known writes is a floor rather than a total.
+    const mixed = deriveOutsideWorldMarkers(
+      [
+        turn(1, 1_000),
+        ...call("github_merge", "c1", 1_010),
+        ...call("bash", "c2", 1_020),
+      ],
+      declarations,
+    );
+    const cleanliness = forkCleanlinessAt(mixed, 1);
+
+    expect(cleanliness.state).toBe("dirty");
+    expect(cleanliness.undeclaredCalls).toHaveLength(1);
+    expect(cleanliness.description).toContain("at least 1 write");
+  });
+
+  it("gives the three situations three answers", () => {
+    const none = deriveOutsideWorldMarkers([turn(1, 1_000)], declarations);
+    const undeclaredOnly = deriveOutsideWorldMarkers(
+      [turn(1, 1_000), ...call("bash", "c1", 1_010)],
+      declarations,
+    );
+    const declaredWrite = deriveOutsideWorldMarkers(
+      [turn(1, 1_000), ...call("github_comment", "c1", 1_010)],
+      declarations,
+    );
+
+    expect([
+      forkCleanlinessAt(none, 1).state,
+      forkCleanlinessAt(undeclaredOnly, 1).state,
+      forkCleanlinessAt(declaredWrite, 1).state,
+    ]).toEqual(["clean", "unknown", "dirty"]);
   });
 
   it("with nothing declared, reports every call as undeclared", () => {
@@ -206,7 +251,16 @@ describe("fork-before-clean, fork-after-dirty (§6.3)", () => {
 
     expect(nothing.touches).toEqual([]);
     expect(nothing.undeclared).toHaveLength(4);
-    expect(forkCleanlinessAt(nothing, 3).certain).toBe(false);
+    // Not clean: with nothing declared, nothing is known either way.
+    expect(forkCleanlinessAt(nothing, 3).state).toBe("unknown");
+  });
+
+  it("reads an empty observation log as clean, said out loud", () => {
+    // `NO_OUTSIDE_WORLD_MARKERS` is what a caller with no log passes on purpose.
+    // It reads clean because a session that made no tool calls touched nothing —
+    // the difference from before is that the caller had to say so, rather than
+    // getting this answer by leaving an argument out (`planSessionFork`).
+    expect(forkCleanlinessAt(NO_OUTSIDE_WORLD_MARKERS, 1).state).toBe("clean");
   });
 
   it("cannot express a declaration that forgot to say", () => {

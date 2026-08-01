@@ -207,8 +207,18 @@ export interface SessionForkContext {
   readonly source: Session;
   readonly transcript: Transcript;
   readonly capabilities: RuntimeCapabilities;
-  /** The markers cleanliness is read from; empty means nothing was declared. */
-  readonly markers?: OutsideWorldMarkers;
+  /**
+   * The markers cleanliness is read from — `deriveOutsideWorldMarkers` over the
+   * session's observation log.
+   *
+   * **Required, deliberately.** It was optional, and omitting it produced a plan
+   * claiming `clean` with nothing having been examined: the caller least likely to
+   * pass markers is the one that never derived any, and that caller got the most
+   * reassuring answer. There is no default that is honest here (§6.3, principle
+   * 7). A session with no observations yields `NO_OUTSIDE_WORLD_MARKERS`, which
+   * says the same thing on purpose rather than by omission.
+   */
+  readonly markers: OutsideWorldMarkers;
   readonly loadReleased?: (
     marker: ReleaseMarker,
     callId: string,
@@ -246,12 +256,6 @@ export function planSessionFork(
     context.loadReleased,
   );
 
-  const markers: OutsideWorldMarkers = context.markers ?? {
-    touches: [],
-    undeclared: [],
-    turns: [],
-  };
-
   return {
     ok: true,
     plan: {
@@ -286,7 +290,7 @@ export function planSessionFork(
         toSessionId: request.ids.sessionId,
         recordedAt: request.at,
       },
-      cleanliness: forkCleanlinessAt(markers, request.point.turn),
+      cleanliness: forkCleanlinessAt(context.markers, request.point.turn),
       seedComplete: runtime.mode === "native" ? true : runtime.complete,
       forkedBy: request.forkedBy,
       at: request.at,

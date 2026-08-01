@@ -53,6 +53,17 @@ export const NO_TOOL_WORLD_DECLARATIONS: ToolWorldDeclarations = {
   forTool: () => null,
 };
 
+/**
+ * Nothing observed. Stated as a value so a caller that has no observation log
+ * says so, rather than omitting an argument and being handed the same answer by
+ * accident — `planSessionFork` requires markers for exactly that reason.
+ */
+export const NO_OUTSIDE_WORLD_MARKERS: OutsideWorldMarkers = {
+  touches: [],
+  undeclared: [],
+  turns: [],
+};
+
 /** How a declared write call ended, as far as the observation log knows. */
 export type TouchOutcome = "succeeded" | "failed" | "unfinished";
 
@@ -160,25 +171,52 @@ export function deriveOutsideWorldMarkers(
 }
 
 /**
+ * Whether a fork at this point is clean — in three values, not two.
+ *
+ * `clean` as a boolean was a trap: an undeclared tool call means the product does
+ * not *know* whether the world was touched, and a boolean forces that into one of
+ * the two answers it is not. Anything reading `.clean` alone would then read
+ * "nobody declared anything" as "nothing happened", which is principle 7 exactly
+ * backwards. So the third value is a value, and a caller must handle it to
+ * compile a `switch` over this type.
+ */
+export const FORK_CLEANLINESS_STATES = [
+  /** Nothing at or before this point touched the outside world, and we can tell. */
+  "clean",
+  /** A declared outside-world write happened at or before this point. */
+  "dirty",
+  /**
+   * No declared write — but a tool call up to here has no declaration at all, so
+   * whether the world was touched is unknown. Not clean: unproven (principle 7).
+   */
+  "unknown",
+] as const;
+
+export type ForkCleanlinessState = (typeof FORK_CLEANLINESS_STATES)[number];
+
+/**
  * What a fork at one point inherits, in the terms §6.3 asks for: was the world
- * already touched, and can the product be sure.
+ * already touched, and can the product tell.
  */
 export interface ForkCleanliness {
   readonly turn: number;
-  /** No declared outside-world touch at or before this turn. */
-  readonly clean: boolean;
-  /**
-   * True when every tool call up to this point had a declaration. False means
-   * "clean as far as the declarations go" — which the UI must say, rather than
-   * promising a cleanliness nobody can prove (principle 7, principle 12).
-   */
-  readonly certain: boolean;
+  readonly state: ForkCleanlinessState;
   readonly touches: readonly OutsideWorldTouch[];
   /** The irreversible subset: what a fork after this point can never undo (§6.6). */
   readonly irreversible: readonly OutsideWorldTouch[];
+  /**
+   * Calls up to this point that nothing declared. Non-empty with `state: "dirty"`
+   * too — a dirty point can also be incompletely known, and the count is what the
+   * UI needs to say "at least these".
+   */
   readonly undeclaredCalls: readonly UndeclaredCall[];
   /** The sentence a fork dialog shows, so two surfaces cannot word it differently. */
   readonly description: string;
+}
+
+/** True only for `"clean"`. Named so no caller has to remember which states pass. */
+export function isCleanForkPoint(cleanliness: ForkCleanliness): boolean {
+  return cleanliness.state === "clean";
 }
 
 /**
@@ -198,30 +236,39 @@ export function forkCleanlinessAt(
   const irreversible = touches.filter(
     (touch) => touch.reversibility === "irreversible",
   );
-  const clean = touches.length === 0;
-  const certain = undeclaredCalls.length === 0;
+  const state: ForkCleanlinessState =
+    touches.length > 0
+      ? "dirty"
+      : undeclaredCalls.length > 0
+        ? "unknown"
+        : "clean";
 
   return {
     turn,
-    clean,
-    certain,
+    state,
     touches,
     irreversible,
     undeclaredCalls,
-    description: describe(clean, certain, touches, irreversible),
+    description: describe(state, touches, irreversible, undeclaredCalls),
   };
 }
 
 function describe(
-  clean: boolean,
-  certain: boolean,
+  state: ForkCleanlinessState,
   touches: readonly OutsideWorldTouch[],
   irreversible: readonly OutsideWorldTouch[],
+  undeclaredCalls: readonly UndeclaredCall[],
 ): string {
-  if (clean) {
-    return certain
-      ? "clean: this session had not touched the outside world yet"
-      : "clean as far as declarations go: some tool calls up to here declare no effect on the outside world";
+  if (state === "clean") {
+    return "clean: this session had not touched the outside world yet";
+  }
+  if (state === "unknown") {
+    const tools = [
+      ...new Set(undeclaredCalls.map((call) => call.toolName)),
+    ].join(", ");
+    return `unknown: nothing here declares an outside-world write, but ${undeclaredCalls.length} call${
+      undeclaredCalls.length === 1 ? "" : "s"
+    } up to this point (${tools}) declare nothing either way`;
   }
   const systems = [...new Set(touches.map((touch) => touch.system))].join(", ");
   const suffix =
@@ -230,7 +277,10 @@ function describe(
       : `, ${irreversible.length} of them irreversible (${[
           ...new Set(irreversible.map((touch) => touch.action)),
         ].join(", ")})`;
-  return `not clean: ${touches.length} write${
+  // "at least" when some calls up to here declared nothing: the count of known
+  // writes is a floor, not a total.
+  const atLeast = undeclaredCalls.length === 0 ? "" : "at least ";
+  return `not clean: ${atLeast}${touches.length} write${
     touches.length === 1 ? "" : "s"
   } to ${systems} happened at or before this point${suffix}`;
 }
