@@ -25,6 +25,21 @@ const reorderBody = z.object({
 });
 
 /**
+ * Canvas coordinates (§5). Null clears the authored position, so a derived
+ * initial arrangement decides again — there is no sentinel like 0,0 to misread
+ * as "unset".
+ */
+const position = z
+  .object({ x: z.number().finite(), y: z.number().finite() })
+  .nullable();
+
+const positionBody = z.object({ position });
+
+const arrangementBody = z.object({
+  positions: z.array(z.object({ nodeId: z.string().min(1), position })).min(1),
+});
+
+/**
  * The graph itself (spec §3.7): placing nodes, wiring context, reordering it,
  * and taking any of it back.
  *
@@ -70,6 +85,44 @@ export function graphRoutes(stores: ApiStores): Hono<ApiEnv> {
   app.get("/nodes/:id", (c) =>
     c.json({ node: toPlacedNode(graph.node(param(c, "id"))) }),
   );
+
+  /**
+   * Durable placement (§5): where a node sits is authored state, so it lives in
+   * the one portable store rather than in one browser's local storage. Nothing
+   * derives it — "an arrangement at rest stays put" — so moving a node is a
+   * mutation like any other, and it is announced like any other.
+   */
+  app.patch("/nodes/:id/position", validateJsonBody(positionBody), (c) => {
+    const input = body<z.infer<typeof positionBody>>(c);
+    const author = actorOf(c);
+    const node = toPlacedNode(
+      graph.setPosition(param(c, "id"), input.position),
+    );
+
+    bus.publish({ entity: "node", verb: "updated", node, author });
+
+    return c.json({ node });
+  });
+
+  /**
+   * One drag of a selection is one gesture (principle 9), so a whole arrangement
+   * moves in one call and one transaction: a half-applied arrangement is not what
+   * the operator asked for. An unknown node id refuses the lot rather than moving
+   * the rest of it.
+   */
+  app.patch("/arrangement", validateJsonBody(arrangementBody), (c) => {
+    const input = body<z.infer<typeof arrangementBody>>(c);
+    const author = actorOf(c);
+    const moved = graph
+      .setPositions(input.positions)
+      .map((row) => toPlacedNode(row));
+
+    for (const node of moved) {
+      bus.publish({ entity: "node", verb: "updated", node, author });
+    }
+
+    return c.json({ nodes: moved });
+  });
 
   app.delete("/nodes/:id", (c) => {
     const author = actorOf(c);

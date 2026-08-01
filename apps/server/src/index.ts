@@ -87,6 +87,10 @@ export function startServer(config = loadServerConfig()) {
         "the server shut down while this session was in flight",
       );
 
+      // Nothing depends on a sweep having run, so shutting the schedule down is
+      // just tidiness; leaving a timer behind would keep a test process alive.
+      runtime.compaction.stop();
+
       await new Promise<void>((resolve) => {
         server.close(() => {
           db.close();

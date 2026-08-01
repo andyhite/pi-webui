@@ -4,6 +4,7 @@ import type { UpgradeWebSocket } from "hono/ws";
 import type { PlotroomDatabase } from "@plotroom/db";
 import type { ServerConfig } from "./config.js";
 import { createConditionChecks } from "./conditions/registry.js";
+import { startCompactionJob } from "./maintenance/compaction.js";
 import type { EventBus } from "./events/bus.js";
 import { actorMiddleware } from "./http/actor.js";
 import { toApiError } from "./http/domain-errors.js";
@@ -13,11 +14,13 @@ import {
   requestLogMiddleware,
 } from "./http/middleware.js";
 import type { Logger } from "./logging/logger.js";
+import type { CompactionSchedule } from "./maintenance/compaction.js";
 import { createStores } from "./routes/api.js";
 import { commandRoutes } from "./routes/commands.js";
 import { graphRoutes } from "./routes/graph.js";
 import { healthRoutes } from "./routes/health.js";
 import { logLevelRoutes } from "./routes/log-level.js";
+import { maintenanceRoutes } from "./routes/maintenance.js";
 import { objectRoutes } from "./routes/objects.js";
 import { restorableRoutes } from "./routes/restorable.js";
 import { runRoutes } from "./routes/runs.js";
@@ -48,6 +51,8 @@ export interface AppDependencies {
 export interface AppRuntime {
   readonly hub: SessionHub;
   readonly runs: RunService;
+  /** The scheduled version-compaction sweep (§15-3, Epic 2.3). */
+  readonly compaction: CompactionSchedule;
 }
 
 /**
@@ -77,6 +82,15 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
 
   const stores = createStores(db, bus);
 
+  // Durability (Epic 2.3): the sweep runs on a schedule the operator configures
+  // and is reachable on demand. The rule it applies is §15-3's predicate; this
+  // only decides when to ask.
+  const compaction = startCompactionJob({
+    maintenance: stores.maintenance,
+    logger,
+    intervalSeconds: config.compactionIntervalSeconds,
+  });
+
   // The run spine (Epics 4.1/4.2): one adapter registry over the runtime seam,
   // one workspace-kind registry over the mechanism contract, one condition-check
   // registry over the world conditions a submission is proven against.
@@ -100,6 +114,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", commandRoutes(stores));
   app.route("/api", runRoutes(stores, runs));
   app.route("/api", sessionRoutes(stores, runs));
+  app.route("/api", maintenanceRoutes(stores, config, compaction, logger));
   app.route("/api", restorableRoutes(stores));
   app.route("/api", snapshotRoutes(stores));
 
@@ -158,5 +173,5 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     );
   });
 
-  return { hub, runs };
+  return { hub, runs, compaction };
 }

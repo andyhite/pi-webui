@@ -28,6 +28,12 @@ const runBody = z.object({
       script: runtimeScriptSchema.optional(),
     })
     .optional(),
+  /**
+   * The cap accepted at the preview (§4.1, §8), in integer micros. Recorded on
+   * the run; enforcement is Phase 6. Null is "no cap accepted", which is not the
+   * same as a cap of zero — hence nullable rather than defaulted.
+   */
+  spendCapMicros: z.number().int().nonnegative().nullable().optional(),
 });
 
 const submitBody = z.object({
@@ -48,6 +54,18 @@ export function runRoutes(
 ): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
 
+  /**
+   * The run preview (§4.1): exactly what will execute, what history says it will
+   * cost, and the cap to accept — before anything starts.
+   *
+   * A GET, because it is a read: it provisions nothing, starts nothing, and
+   * records nothing. Everything that would refuse the run is reported here
+   * instead, so this is also the endpoint that answers "why can't I run this".
+   */
+  app.get("/commands/:id/preview", (c) =>
+    c.json(service.preview(param(c, "id"))),
+  );
+
   /** Run one command (§4.1): idempotent in the initiation key. */
   app.post("/runs", validateJsonBody(runBody), async (c) => {
     const input = body<z.infer<typeof runBody>>(c);
@@ -56,6 +74,9 @@ export function runRoutes(
       initiationKey: input.initiationKey,
       actor: actorOf(c),
       ...(input.runtime === undefined ? {} : { runtime: input.runtime }),
+      ...(input.spendCapMicros === undefined
+        ? {}
+        : { spendCapMicros: input.spendCapMicros }),
     });
 
     return c.json(

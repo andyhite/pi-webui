@@ -39,6 +39,12 @@ export interface ServerConfig {
   readonly runtime: RuntimeConfig;
   /** How the first run provisions a workspace (§3.4, Epic 4.3). */
   readonly workspace: WorkspaceConfig;
+  /**
+   * Seconds between version-compaction sweeps (§15-3, Epic 2.3). Zero disables
+   * the schedule; the endpoint still works, because "never automatically" and
+   * "never" are different answers.
+   */
+  readonly compactionIntervalSeconds: number;
 }
 
 export interface RuntimeConfig {
@@ -132,9 +138,30 @@ export interface ServerConfigOverrides {
   readonly logLevel?: ServerConfig["logLevel"];
   readonly runtime?: Partial<RuntimeConfig>;
   readonly workspace?: Partial<WorkspaceConfig>;
+  readonly compactionIntervalSeconds?: number;
 }
 
 export const DEFAULT_RUNTIME_ADAPTER = "pi-coding-agent";
+
+/**
+ * Six hours: often enough that the store does not grow unbounded between
+ * restarts, rare enough that the sweep is never what the operator notices.
+ */
+export const DEFAULT_COMPACTION_INTERVAL_SECONDS = 6 * 60 * 60;
+
+function parseSeconds(value: string | undefined, fallback: number): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  // A malformed interval is reported, not silently treated as "off": a sweep
+  // that never runs because of a typo is exactly the kind of quiet failure §12
+  // is about.
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(
+      `PLOTROOM_COMPACTION_INTERVAL_SECONDS must be a non-negative number of seconds (got ${value})`,
+    );
+  }
+  return parsed;
+}
 
 function parseSetup(value: string | undefined): WorkspaceSetupConfig | null {
   if (!value) return null;
@@ -197,6 +224,12 @@ export function loadServerConfig(
     staticDir:
       overrides.staticDir ?? env.PLOTROOM_STATIC_DIR ?? defaultStaticDir(),
     logLevel: overrides.logLevel ?? parseLogLevel(env.PLOTROOM_LOG_LEVEL),
+    compactionIntervalSeconds:
+      overrides.compactionIntervalSeconds ??
+      parseSeconds(
+        env.PLOTROOM_COMPACTION_INTERVAL_SECONDS,
+        DEFAULT_COMPACTION_INTERVAL_SECONDS,
+      ),
     runtime: {
       adapterId:
         overrides.runtime?.adapterId ??

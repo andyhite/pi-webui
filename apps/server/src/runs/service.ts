@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
+  checkReady,
   classifyEnd,
   readinessProvisionFailed,
   readinessProvisioned,
@@ -23,7 +24,7 @@ import {
   type WorkspaceKindConfig,
   type WorkspaceKindRegistry,
 } from "@plotroom/core";
-import type { StoredSession } from "@plotroom/db";
+import type { RunPreview, StoredSession } from "@plotroom/db";
 import type { ServerConfig } from "../config.js";
 import type { ConditionCheckRegistry } from "../conditions/registry.js";
 import type { EventBus } from "../events/bus.js";
@@ -73,6 +74,30 @@ export interface RunOneInput {
     readonly adapterId?: string | undefined;
     readonly script?: RuntimeScript | undefined;
   };
+  /**
+   * The cap accepted at the preview (§4.1, §8). Recorded on the run so what was
+   * agreed can be compared with what it cost; Phase 6 enforces it.
+   */
+  readonly spendCapMicros?: number | null | undefined;
+}
+
+/** What the preview endpoint answers with (§4.1). */
+export interface RunPreviewResult {
+  readonly preview: RunPreview;
+  readonly workspace: {
+    readonly state: string;
+    /** True when running this will provision a workspace first (§3.4). */
+    readonly provisionsAtFirstRun: boolean;
+    readonly reason: string | null;
+    /** False when nothing is configured to provision from — a run would refuse. */
+    readonly configured: boolean;
+  };
+  readonly spendCap: {
+    readonly suggestedMicros: number | null;
+    readonly basis: string;
+    /** Always null here: accepting one is the run request's business. */
+    readonly accepted: number | null;
+  };
 }
 
 export interface RunOneResult {
@@ -120,6 +145,57 @@ export interface RunServiceDeps {
 
 export class RunService {
   constructor(private readonly deps: RunServiceDeps) {}
+
+  /* -------------------------------------------------------------- preview */
+
+  /**
+   * The run preview (§4.1): "exactly what will execute, what it is likely to
+   * cost, and the spend cap it will run under — before anything starts".
+   *
+   * It is a **read**. It provisions no workspace, starts no runtime, and records
+   * nothing: the whole value of a preview is that looking is free, and a preview
+   * with a side effect is a run with extra steps. The workspace half is
+   * therefore reported from the record — what state it is in, and whether the
+   * first run will have to provision one — rather than by touching a mechanism.
+   */
+  preview(commandId: string): RunPreviewResult {
+    const { stores, config } = this.deps;
+    const preview = stores.runs.preview(commandId);
+    const command = stores.commands.command(commandId);
+    const workspace = stores.workspaces.forWorkstream(command.workstreamId);
+
+    const readiness =
+      workspace === null
+        ? {
+            state: "unprovisioned" as const,
+            provisionsAtFirstRun: true,
+            reason:
+              "no workspace yet; the first run provisions one, which takes time and disk (§3.4)",
+            configured:
+              config.workspace.repositoryPath !== null ||
+              config.workspace.remoteUrl !== null,
+          }
+        : {
+            state: workspace.readiness.state,
+            provisionsAtFirstRun: workspace.provisionedAt === null,
+            reason: readinessReason(workspace),
+            configured: true,
+          };
+
+    return {
+      preview,
+      workspace: readiness,
+      // What the operator is being asked to accept. The suggestion is the most
+      // expensive prior run, because a cap under that is a cap this command has
+      // already exceeded once — and there is deliberately no suggestion at all
+      // when nothing has ever been priced (§4.1: no bare numbers).
+      spendCap: {
+        suggestedMicros: preview.estimate.range?.highMicros ?? null,
+        basis: preview.estimate.basis,
+        accepted: null,
+      },
+    };
+  }
 
   /* --------------------------------------------------------------- run one */
 
@@ -183,7 +259,12 @@ export class RunService {
       });
     }
 
-    const started = stores.runs.start({ commandId: input.commandId });
+    const started = stores.runs.start({
+      commandId: input.commandId,
+      ...(input.spendCapMicros === undefined
+        ? {}
+        : { spendCapMicros: input.spendCapMicros }),
+    });
     const assembled = stores.runs.assembledContent(started.run.id);
 
     const launch = {
@@ -931,3 +1012,13 @@ export type SubmissionResult =
       readonly failed: readonly ConditionEvaluation[];
       readonly evaluations: readonly ConditionEvaluation[];
     };
+
+/**
+ * What the preview says about a workspace that already exists, in the readiness
+ * gate's own words (§3.4) — so the reason shown before a run is the reason a run
+ * would refuse with, not a second wording of it.
+ */
+function readinessReason(workspace: Workspace): string | null {
+  const check = checkReady(workspace.readiness);
+  return check.ready ? null : check.refusal.message;
+}

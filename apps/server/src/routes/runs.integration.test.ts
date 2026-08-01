@@ -513,6 +513,164 @@ describe("the readiness gate (§3.4)", () => {
   });
 });
 
+describe("the run preview (§4.1)", () => {
+  it("says exactly what will execute, and provisions nothing", async () => {
+    // Deliberately no repository configured: a preview must not need one,
+    // because it provisions nothing and starts nothing.
+    const harness = await boot({ workspace: { repositoryPath: null } });
+    const fixture = await command(harness, {
+      notes: [
+        { title: "first", body: "AAA the first input" },
+        { title: "second", body: "BBB the second input" },
+      ],
+    });
+
+    const preview = await harness.ok(`/commands/${fixture.commandId}/preview`);
+
+    expect(at(preview, "preview.runnable")).toBe(true);
+    expect(
+      list(preview, "preview.inputs").map((input) => at(input, "ordinal")),
+    ).toEqual([1, 2]);
+    const bodyText = str(preview, "preview.body");
+    expect(bodyText.indexOf("AAA")).toBeLessThan(bodyText.indexOf("BBB"));
+    expect(at(preview, "preview.estimatedTokens")).toBeGreaterThan(0);
+    expect(at(preview, "preview.nextOrdinal")).toBe(1);
+    expect(at(preview, "preview.configuration.instruction")).toBe(
+      "Implement it.",
+    );
+    // Every version that would be consumed is named, so "exactly what will
+    // execute" includes which version of each input (§15-1).
+    for (const input of list(preview, "preview.inputs")) {
+      expect(typeof at(input, "versionId")).toBe("string");
+      expect(at(input, "bytes")).toBeGreaterThan(0);
+    }
+
+    // It says a first run will have to provision, and that nothing is
+    // configured to provision from — without doing either.
+    expect(at(preview, "workspace.provisionsAtFirstRun")).toBe(true);
+    expect(at(preview, "workspace.configured")).toBe(false);
+
+    // Nothing was recorded and nothing was started.
+    expect(
+      list(await harness.ok(`/commands/${fixture.commandId}/runs`), "runs"),
+    ).toHaveLength(0);
+    expect(list(await harness.ok("/sessions"), "sessions")).toHaveLength(0);
+    const inventory = await harness.ok("/maintenance/state");
+    expect(at(inventory, "inventory.counts.runs")).toBe(0);
+  });
+
+  it("states its estimate's basis, and prices only from history", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness, {
+      notes: [{ title: "ticket", body: "do the thing" }],
+    });
+
+    const before = await harness.ok(`/commands/${fixture.commandId}/preview`);
+    expect(at(before, "preview.estimate.basis")).toBe("input-size-only");
+    // No history means no number: null, not zero (§4.1, principle 7).
+    expect(at(before, "preview.estimate.range")).toBeNull();
+    expect(at(before, "preview.estimate.description")).toMatch(
+      /no priced history/,
+    );
+    expect(at(before, "spendCap.suggestedMicros")).toBeNull();
+
+    const started = await run(harness, fixture.commandId, oneTurn);
+    await endedSession(harness, str(started, "session.id"));
+
+    const after = await harness.ok(`/commands/${fixture.commandId}/preview`);
+    // The scripted turn reported $0.002, so history now has one priced run.
+    expect(at(after, "preview.estimate.basis")).toBe("prior-runs");
+    expect(at(after, "preview.estimate.priorRuns")).toBe(1);
+    expect(at(after, "preview.estimate.range.lowMicros")).toBe(2_000);
+    expect(at(after, "preview.estimate.range.highMicros")).toBe(2_000);
+    expect(at(after, "preview.estimate.description")).toMatch(
+      /based on 1 prior run of this definition/,
+    );
+    // The cap the operator is offered is the most expensive prior run.
+    expect(at(after, "spendCap.suggestedMicros")).toBe(2_000);
+    expect(at(after, "spendCap.accepted")).toBeNull();
+    expect(at(after, "preview.nextOrdinal")).toBe(2);
+  });
+
+  it("reports what blocks a run rather than refusing to say", async () => {
+    const harness = await boot(repository());
+    const definition = await harness.ok("/command-definitions", {
+      method: "POST",
+      body: {
+        name: "Parameterised",
+        instruction: "Do it in {repo}.",
+        model: "fixture-model",
+        effort: "medium",
+        lifecycle: "open",
+        parameters: [
+          { name: "repo", label: "Repository", type: "text", required: true },
+        ],
+      },
+    });
+    const workstream = str(
+      await harness.ok("/workstreams", { method: "POST", body: {} }),
+      "workstream.id",
+    );
+    const instantiated = await harness.ok("/commands", {
+      method: "POST",
+      body: {
+        definitionId: str(definition, "definition.id"),
+        workstreamId: workstream,
+      },
+    });
+    const commandId = str(instantiated, "command.id");
+
+    const preview = await harness.ok(`/commands/${commandId}/preview`);
+
+    expect(at(preview, "preview.runnable")).toBe(false);
+    expect(at(preview, "preview.configuration")).toBeNull();
+    expect(
+      list(preview, "preview.blockers").map((one) => at(one, "reason")),
+    ).toEqual(["parameters_unconfirmed"]);
+    expect(str(list(preview, "preview.blockers")[0], "message")).toMatch(
+      /confirm repo before running/,
+    );
+
+    // And the run refuses with exactly the reason the preview showed.
+    const res = await harness.call("/runs", {
+      method: "POST",
+      body: {
+        commandId,
+        initiationKey: "blocked-by-parameter",
+        runtime: { script: oneTurn },
+      },
+    });
+    expect(res.status).toBe(409);
+    expect(at(res.body, "error.details")).toEqual({
+      reason: "parameters_unconfirmed",
+    });
+  });
+
+  it("records the spend cap the operator accepted (§4.1, §8)", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness);
+
+    const started = await harness.ok("/runs", {
+      method: "POST",
+      body: {
+        commandId: fixture.commandId,
+        initiationKey: "capped-gesture",
+        spendCapMicros: 500_000,
+        runtime: { script: oneTurn },
+      },
+    });
+
+    expect(at(started, "run.spendCapMicros")).toBe(500_000);
+
+    const read = await harness.ok(`/runs/${str(started, "run.id")}`);
+    expect(at(read, "run.spendCapMicros")).toBe(500_000);
+
+    // No cap accepted stays null rather than becoming a cap of zero.
+    const uncapped = await run(harness, fixture.commandId, oneTurn);
+    expect(at(uncapped, "run.spendCapMicros")).toBeNull();
+  });
+});
+
 describe("assembly and run history (§3.5, §15-1, §15-4)", () => {
   it("assembles ordered content whole and records exactly what ran", async () => {
     const harness = await boot(repository());

@@ -27,4 +27,5 @@ export * from "./run-store.js";
 export * from "./workspace-store.js";
 export * from "./session-transcript.js";
 export * from "./session-store.js";
+export * from "./maintenance.js";
 export { migrations, type Migration } from "./migrations.js";

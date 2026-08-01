@@ -1,0 +1,252 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { humanAuthor } from "@plotroom/core";
+import {
+  makeRenderings,
+  manualClock,
+  type ManualClock,
+} from "@plotroom/core/testing";
+import { blobPath } from "./paths.js";
+import { BlobStore } from "./blob-store.js";
+import { openDatabase, type PlotroomDatabase } from "./client.js";
+import { CommandStore } from "./command-store.js";
+import { GraphStore } from "./graph-store.js";
+import { Maintenance } from "./maintenance.js";
+import { ObjectStore } from "./object-store.js";
+import { RunStore } from "./run-store.js";
+import { WorkstreamStore } from "./workstream-store.js";
+
+const DAY = 24 * 60 * 60;
+
+let dir: string;
+let state: PlotroomDatabase;
+let clock: ManualClock;
+let maintenance: Maintenance;
+let objects: ObjectStore;
+let graph: GraphStore;
+let commands: CommandStore;
+let runs: RunStore;
+let blobs: BlobStore;
+let workstreamId: string;
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "plotroom-maintenance-"));
+  state = openDatabase({ stateDir: dir });
+  clock = manualClock();
+  maintenance = new Maintenance(state, clock.now);
+  objects = new ObjectStore(state, clock.now);
+  graph = new GraphStore(state, clock.now);
+  commands = new CommandStore(state, clock.now);
+  runs = new RunStore(state, clock.now);
+  blobs = new BlobStore(state, clock.now);
+  workstreamId = new WorkstreamStore(state, clock.now).create({
+    author: humanAuthor,
+  }).id;
+});
+
+afterEach(() => {
+  state.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** An object with two versions: the older one is the compaction candidate. */
+function twoVersions(title: string) {
+  const first = objects.write({
+    kind: "note",
+    title,
+    renderings: makeRenderings({ agentContent: `${title} v1` }),
+    workstreamId,
+  });
+  const second = objects.edit(first.objectId, {
+    renderings: makeRenderings({ agentContent: `${title} v2` }),
+  });
+  return { objectId: first.objectId, older: first, newer: second };
+}
+
+/** A run of a producing command over one note, so history has something in it. */
+function aRun() {
+  const definition = commands.define({
+    name: "Implement",
+    instruction: "Do it.",
+    model: "fixture-model",
+    effort: "medium",
+    lifecycle: "producing",
+    outcome: { name: "result", kind: "document", conditions: [] },
+  });
+  const instance = commands.instantiate({
+    definitionId: definition.id,
+    workstreamId,
+    author: humanAuthor,
+  });
+  const note = objects.write({
+    kind: "note",
+    title: "input",
+    renderings: makeRenderings({ agentContent: "the input" }),
+    workstreamId,
+  });
+  const node = graph.place({
+    role: "content",
+    refId: note.objectId,
+    workstreamId,
+  });
+  graph.addContextEdge({
+    from: node.id,
+    to: instance.node.id,
+    author: humanAuthor,
+  });
+
+  return runs.start({ commandId: instance.command.id });
+}
+
+describe("the state inventory (§12)", () => {
+  it("names the directory to back up, and what is in it", () => {
+    twoVersions("note");
+
+    const inventory = maintenance.inventory();
+
+    expect(inventory.stateDir).toBe(dir);
+    expect(inventory.databaseFile).toBe(join(dir, "plotroom.db"));
+    expect(inventory.blobsDir).toBe(join(dir, "blobs"));
+    expect(inventory.schemaVersion).toBeGreaterThanOrEqual(8);
+    expect(inventory.counts["objects"]).toBe(1);
+    expect(inventory.counts["object_versions"]).toBe(2);
+    expect(inventory.blobBytes.inline).toBeGreaterThan(0);
+  });
+});
+
+describe("reset states what it removes first (§12)", () => {
+  it("plans and clears the arrangement, and nothing else", () => {
+    const object = objects.write({
+      kind: "note",
+      title: "note",
+      renderings: makeRenderings({ agentContent: "content" }),
+      workstreamId,
+    });
+    const node = graph.place({
+      role: "content",
+      refId: object.objectId,
+      workstreamId,
+    });
+    graph.setPosition(node.id, { x: 10, y: 20 });
+
+    const plan = maintenance.resetPlan("arrangement");
+    expect(plan.counts["arrangedNodes"]).toBe(1);
+    expect(plan.removes[0]).toMatch(/authored position of 1 node/);
+    expect(plan.keeps.join(" ")).toMatch(/only where things sit is forgotten/);
+
+    expect(maintenance.reset("arrangement")).toEqual({
+      scope: "arrangement",
+      removed: { arrangedNodes: 1 },
+    });
+
+    expect(graph.node(node.id).x).toBeNull();
+    // The node itself is still there: the arrangement is not the board.
+    expect(graph.liveNodes()).toHaveLength(1);
+    expect(objects.live()).toHaveLength(1);
+  });
+
+  it("plans derived state as re-provisionable, keeping the records", () => {
+    const plan = maintenance.resetPlan("derived");
+
+    expect(plan.removes.join(" ")).toMatch(/re-provisioned at the next run/);
+    expect(plan.keeps.join(" ")).toMatch(/run history, sessions/);
+    // Honest about what it will not touch and why (principle 12).
+    expect(plan.keeps.join(" ")).toMatch(/no rebuild step yet/);
+  });
+
+  it("counts every row before emptying the store, and empties it", () => {
+    const started = aRun();
+    runs.complete(started.run.id, {
+      cost: { inputTokens: 1, outputTokens: 1, costMicros: 10 },
+    });
+
+    const plan = maintenance.resetPlan("everything");
+    expect(plan.counts["runs"]).toBe(1);
+    expect(plan.counts["objects"]).toBeGreaterThan(0);
+    expect(plan.removes[0]).toMatch(/every row in the store/);
+    expect(plan.keeps[0]).toMatch(/the schema/);
+
+    const result = maintenance.reset("everything");
+
+    expect(result.removed["runs"]).toBe(1);
+    expect(result.removed["blobs"]).toBeGreaterThan(0);
+    expect(maintenance.inventory().counts["objects"]).toBe(0);
+    expect(maintenance.inventory().counts["blobs"]).toBe(0);
+    // Emptied, not broken: the schema is still there to write into.
+    expect(
+      new WorkstreamStore(state, clock.now).create({ author: humanAuthor }).id,
+    ).toBeTruthy();
+  });
+});
+
+describe("the compaction sweep (§15-3, §4.4)", () => {
+  it("removes an old unreferenced intermediate version and its bytes", () => {
+    const { objectId, older } = twoVersions("note");
+
+    clock.advance(31 * DAY);
+    const result = maintenance.compact();
+
+    expect(result.versionsRemoved).toBe(1);
+    expect(result.blobsRemoved).toBeGreaterThan(0);
+    expect(result.bytesFreed).toBeGreaterThan(0);
+    // The object and its latest version survive: only the intermediate went.
+    expect(objects.versions(objectId).map((each) => each.id)).not.toContain(
+      older.versionId,
+    );
+    expect(objects.read(objectId).renderings.agentContent).toBe("note v2");
+  });
+
+  it("never compacts a version a run consumed (§15-1's interplay)", () => {
+    const started = aRun();
+    const consumed = started.run.inputs[0];
+    expect(consumed).toBeDefined();
+
+    clock.advance(31 * DAY);
+    const result = maintenance.compact();
+
+    expect(result.versionsRemoved).toBe(0);
+    // The run is inside the retention window, so nothing about it moved.
+    expect(result.runsRemoved).toBe(0);
+    expect(runs.run(started.run.id).inputs[0]?.versionId).toBe(
+      consumed?.versionId,
+    );
+    expect(runs.assembledContent(started.run.id)).toContain("the input");
+  });
+
+  it("never compacts pinned content, at any age", () => {
+    const { objectId, older } = twoVersions("note");
+    objects.setPinned([older.versionId], true);
+
+    clock.advance(365 * DAY);
+    expect(maintenance.compact().versionsRemoved).toBe(0);
+    expect(objects.versions(objectId).map((each) => each.id)).toContain(
+      older.versionId,
+    );
+  });
+
+  it("keeps a blob any live reference still points at", () => {
+    const stored = blobs.put("shared content", { kind: "test" });
+    blobs.reference(stored.id, { ownerKind: "test", ownerId: "keeper" });
+
+    clock.advance(365 * DAY);
+    const result = maintenance.compact();
+
+    expect(result.blobsRemoved).toBe(0);
+    expect(blobs.text(stored.id)).toBe("shared content");
+  });
+
+  it("sweeps a blob nothing points at, file and row together", () => {
+    const external = "x".repeat(100_000);
+    const stored = blobs.put(external, { kind: "test" });
+    const path = blobPath(state.layout.blobsDir, stored.hash);
+    expect(existsSync(path)).toBe(true);
+
+    const result = maintenance.compact();
+
+    expect(result.blobsRemoved).toBe(1);
+    expect(result.bytesFreed).toBe(external.length);
+    expect(existsSync(path)).toBe(false);
+  });
+});

@@ -2,6 +2,7 @@ import { systemClock, type Author, type Clock } from "@plotroom/core";
 import {
   CommandStore,
   GraphStore,
+  Maintenance,
   ObjectStore,
   RunStore,
   SessionStore,
@@ -34,6 +35,8 @@ export interface ApiStores {
   readonly runs: RunStore;
   readonly sessions: SessionStore;
   readonly workspaces: WorkspaceStore;
+  /** Durability, cleanup, and the compaction sweep (§12, Epic 2.3). */
+  readonly maintenance: Maintenance;
 }
 
 export function createStores(
@@ -55,6 +58,7 @@ export function createStores(
     // clock is the same instant at a different resolution, never a second
     // source of time.
     workspaces: new WorkspaceStore(db, () => clock() * 1000),
+    maintenance: new Maintenance(db, clock),
   };
 }
 
