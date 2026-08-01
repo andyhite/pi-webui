@@ -31,6 +31,7 @@ import { commandRoutes } from "./routes/commands.js";
 import { continuationRoutes } from "./routes/continuation.js";
 import { graphRoutes } from "./routes/graph.js";
 import { healthRoutes } from "./routes/health.js";
+import { integrationRoutes } from "./routes/integrations.js";
 import { logLevelRoutes } from "./routes/log-level.js";
 import { maintenanceRoutes } from "./routes/maintenance.js";
 import { objectRoutes } from "./routes/objects.js";
@@ -54,6 +55,17 @@ import { serveRenderer } from "./static/serve.js";
 import { nodeCommandExec } from "./workspaces/exec.js";
 import { createWorkspaceKinds } from "./workspaces/kinds.js";
 import { mountWsRoute } from "./ws/route.js";
+import {
+  createFakeIntegrationState,
+  createFakeProducer,
+} from "./integrations/fake-plugin.js";
+import {
+  startRefreshJob,
+  type RefreshJob,
+} from "./integrations/refresh-job.js";
+import { IntegrationRegistry } from "./integrations/registry.js";
+import { IntegrationService } from "./integrations/service.js";
+import { integrationWorldDeclarations } from "./integrations/world.js";
 
 export interface AppDependencies {
   readonly config: ServerConfig;
@@ -87,6 +99,9 @@ export interface AppRuntime {
   /** §7.3's outbound routes, and the deliveries in flight. */
   readonly notifications: NotificationRouter;
   readonly stopNotifications: () => void;
+  /** §9.1's integration substrate, and its own scheduled-read tick. */
+  readonly integrations: IntegrationService;
+  readonly integrationRefresh: RefreshJob;
 }
 
 /**
@@ -155,11 +170,41 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   const approvals = new ApprovalService({ stores, bus, logger, hub, claims });
   const unsubscribeClaimApprovals = approvals.subscribeToClaimWaits();
 
+  // The integration substrate (§9.1–§9.3, Epic 7.2). Registered here, before the
+  // gate, because the gate's own `world` declarations are built from exactly
+  // these producers' write actions — the Batch-4 external-write seam
+  // (`decideToolPermission`) a plugin's declared reversibility plugs into.
+  //
+  // The fake producer is Epic 7.2 scope item 5's in-repo fixture: a
+  // direct-invocation stand-in for Track C's still-unfinished plugin host
+  // (`packages/plugin-sdk` speaks only load/ping/dispose). It is registered
+  // unconditionally rather than behind a flag because it contributes nothing
+  // to the board on its own — an operator has to connect it through
+  // `POST /api/integrations` naming its producer id, exactly like a real
+  // plugin's producer would be connected once Track C's host loads one.
+  const integrationRegistry = new IntegrationRegistry();
+  integrationRegistry.register(
+    createFakeProducer(createFakeIntegrationState()),
+  );
+  const integrations = new IntegrationService({
+    stores,
+    registry: integrationRegistry,
+    logger,
+    approvals,
+  });
+  const integrationRefresh = startRefreshJob({
+    integrations,
+    logger,
+    intervalSeconds: config.integrationTickSeconds,
+    now: stores.clock,
+  });
+
   const gate = createSessionGate({
     claims,
     sessions: stores.sessions,
     logger,
     approvals,
+    world: integrationWorldDeclarations(integrationRegistry),
   });
 
   // Budgets (§8, Epic 6.2). Constructed before the run service because the run
@@ -292,6 +337,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   );
   app.route("/api", restorableRoutes(stores));
   app.route("/api", snapshotRoutes(stores));
+  app.route("/api", integrationRoutes(integrations));
 
   mountWsRoute({ app, path: "/ws", upgradeWebSocket, bus, logger });
 
@@ -364,5 +410,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     attentionTick,
     notifications,
     stopNotifications: unsubscribeNotifications,
+    integrations,
+    integrationRefresh,
   };
 }

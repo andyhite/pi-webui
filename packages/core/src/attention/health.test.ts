@@ -324,6 +324,35 @@ describe("blocked on you", () => {
   });
 });
 
+describe("integration broken", () => {
+  it("alerts immediately on a broken connection, with no threshold to wait out", () => {
+    const alerts = deriveHealthAlerts(
+      observations({
+        integrations: [
+          {
+            integrationId: "integration-1",
+            name: "Fake GitHub",
+            system: "github",
+            target: { nodeId: "node-1", workstreamId: null },
+            since: NOW,
+            reason: "authentication failed",
+          },
+        ],
+      }),
+    );
+    expect(alerts.map((alert) => alert.id)).toEqual([
+      "health:integration-broken:integration-1",
+    ]);
+    expect(alerts[0]?.summary).toContain("authentication failed");
+    expect(alerts[0]?.since).toBe(NOW);
+  });
+
+  it("reports nothing when no integration is broken", () => {
+    expect(deriveHealthAlerts(observations({ integrations: [] }))).toEqual([]);
+    expect(deriveHealthAlerts(observations({}))).toEqual([]);
+  });
+});
+
 describe("path overlap", () => {
   it("is the claim vocabulary: the same path, or one inside the other", () => {
     expect(pathsOverlap("src/a.ts", "src/a.ts")).toBe(true);

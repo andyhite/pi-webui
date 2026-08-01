@@ -25,4 +25,5 @@ export * from "./sessions/index.js";
 export * from "./workspaces/index.js";
 export * from "./claims/index.js";
 export * from "./attention/index.js";
+export * from "./integrations/index.js";
 export * from "./events.js";

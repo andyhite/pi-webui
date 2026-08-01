@@ -112,12 +112,30 @@ export interface WorkstreamPathActivity {
   readonly writtenPaths: readonly string[];
 }
 
+/**
+ * One integration whose connection is broken (§9.3), as the health deriver needs
+ * it. `since` is the observed moment the connection broke — never inferred from
+ * "we have not heard from it in a while", which is exactly the silent-degradation
+ * shape principle 7 rules out. The objects it produced are untouched by this: they
+ * keep their last-known content, and this alert is the only thing that changes.
+ */
+export interface IntegrationHealthObservation {
+  readonly integrationId: string;
+  readonly name: string;
+  readonly system: string;
+  readonly target: AttentionTarget;
+  readonly since: number;
+  readonly reason: string;
+}
+
 export interface HealthObservations {
   readonly now: number;
   readonly sessions: readonly HealthSessionObservation[];
   readonly pendingAsks: readonly PendingAsk[];
   readonly claimWaits: readonly ClaimWaitObservation[];
   readonly workstreams: readonly WorkstreamPathActivity[];
+  /** Broken integrations (§9.3). Absent reads as "none broken", not "unknown". */
+  readonly integrations?: readonly IntegrationHealthObservation[];
   readonly thresholds?: HealthThresholds;
 }
 
@@ -154,7 +172,28 @@ export function deriveHealthAlerts(
     ...conflictAlerts(observations, thresholds, now),
     ...unansweredAlerts(observations, thresholds, now),
     ...blockedOnYouAlerts(observations, thresholds, now),
+    ...integrationBrokenAlerts(observations),
   ];
+}
+
+/**
+ * Broken connection = health problem, never missing data (§9.3).
+ *
+ * No threshold: unlike "idle" or "spinning", which wait for a duration to become
+ * suspicious, a broken connection is already an observed fact by the time it
+ * reaches here — the refresh that found it is what set `since`. Alerting only
+ * after some further wait would be the product sitting on a known auth failure.
+ */
+function integrationBrokenAlerts(
+  observations: HealthObservations,
+): readonly HealthAlert[] {
+  return (observations.integrations ?? []).map((integration) => ({
+    alert: "integration-broken" as const,
+    id: healthItemId("integration-broken", integration.integrationId),
+    target: integration.target,
+    summary: `${integration.name} (${integration.system}) is disconnected: ${integration.reason}`,
+    since: integration.since,
+  }));
 }
 
 function idleAlerts(

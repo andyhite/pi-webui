@@ -105,7 +105,10 @@ export type AttentionAnswerPayload =
         | "spinning"
         | "conflict-predicted"
         | "unanswered"
-        | "blocked-on-you";
+        | "blocked-on-you"
+        /** A broken integration connection (§9.3, Epic 7.2): present-or-absent
+         * data, never degraded — this alert is the health-not-data half. */
+        | "integration-broken";
     }
   | { readonly kind: "completion"; readonly sessionId: string }
   | {

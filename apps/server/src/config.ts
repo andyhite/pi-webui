@@ -57,6 +57,14 @@ export interface ServerConfig {
    * every read, so disabling it costs punctuality rather than the queue.
    */
   readonly attentionTickSeconds: number;
+  /**
+   * Seconds between integration refresh ticks (§9.1, Epic 7.2). Every tick is a
+   * scheduled **read**, never a run (principle 2): it checks which connected
+   * integrations declare an interval mode and are due, and re-reads only those.
+   * Zero disables the schedule; on-demand refresh (per integration and per
+   * object) stays available regardless.
+   */
+  readonly integrationTickSeconds: number;
 }
 
 export interface RuntimeConfig {
@@ -153,6 +161,7 @@ export interface ServerConfigOverrides {
   readonly compactionIntervalSeconds?: number;
   readonly concurrencyLimit?: number;
   readonly attentionTickSeconds?: number;
+  readonly integrationTickSeconds?: number;
 }
 
 export const DEFAULT_RUNTIME_ADAPTER = "pi-coding-agent";
@@ -193,6 +202,17 @@ export const DEFAULT_CONCURRENCY_LIMIT = 4;
  * `attention/tick.ts`, where that stance is stated in full.
  */
 export const DEFAULT_ATTENTION_TICK_SECONDS = 30;
+
+/**
+ * Thirty seconds between integration refresh ticks (§9.1).
+ *
+ * The same order of magnitude as the attention tick, for the same reason: often
+ * enough that an interval-mode integration's declared seconds are honored
+ * promptly, rare enough that checking "is anything due" is never what the
+ * process is doing. Individual integrations still control their own cadence
+ * through their declared `seconds`; this only bounds how often that check runs.
+ */
+export const DEFAULT_INTEGRATION_TICK_SECONDS = 30;
 
 function parseSeconds(
   name: string,
@@ -304,6 +324,13 @@ export function loadServerConfig(
         "PLOTROOM_ATTENTION_TICK_SECONDS",
         env.PLOTROOM_ATTENTION_TICK_SECONDS,
         DEFAULT_ATTENTION_TICK_SECONDS,
+      ),
+    integrationTickSeconds:
+      overrides.integrationTickSeconds ??
+      parseSeconds(
+        "PLOTROOM_INTEGRATION_TICK_SECONDS",
+        env.PLOTROOM_INTEGRATION_TICK_SECONDS,
+        DEFAULT_INTEGRATION_TICK_SECONDS,
       ),
     runtime: {
       adapterId:

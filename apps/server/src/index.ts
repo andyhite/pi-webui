@@ -118,6 +118,7 @@ export function startServer(config = loadServerConfig()) {
       // Nothing depends on a sweep having run, so shutting the schedule down is
       // just tidiness; leaving a timer behind would keep a test process alive.
       runtime.compaction.stop();
+      runtime.integrationRefresh.stop();
 
       await new Promise<void>((resolve) => {
         server.close(() => {

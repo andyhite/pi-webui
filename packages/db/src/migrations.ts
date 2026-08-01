@@ -1722,4 +1722,57 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    id: 24,
+    name: "integrations",
+    sql: `
+      -- Integration instances (§9.1–§9.3, Epic 7.2): a connected use of a plugin's
+      -- concept producer. \`scope\` is the source's own query language, opaque to
+      -- this table and runtime-configurable without restart (§9.1) — a PATCH
+      -- updates the row, the producer reads it fresh on its next call.
+      --
+      -- Connection state is observed, never inferred (principle 7): a refresh that
+      -- fails sets \`last_broken_at\`/\`last_broken_reason\`; nothing here ever infers
+      -- broken from silence. A broken connection is a health problem, never missing
+      -- data (§9.3) — the objects an integration produced are untouched by this row
+      -- changing, and \`apps/server\`'s health feed is what reports it.
+      CREATE TABLE integrations (
+        id                  TEXT PRIMARY KEY,
+        plugin_id           TEXT NOT NULL,
+        producer_id         TEXT NOT NULL,
+        name                TEXT NOT NULL,
+        system              TEXT NOT NULL,
+        scope               TEXT,
+        connection_state    TEXT NOT NULL CHECK (connection_state IN ('connected', 'disconnected', 'broken')),
+        last_connected_at   INTEGER,
+        last_refresh_at     INTEGER,
+        last_broken_at      INTEGER,
+        last_broken_reason  TEXT,
+        created_at          INTEGER NOT NULL,
+        updated_at          INTEGER NOT NULL
+      );
+
+      CREATE INDEX integrations_producer_idx ON integrations (producer_id);
+
+      -- A credential, at rest, for one integration (§9.3): "credentials are stored
+      -- by the app, exposed to no session and no other plugin." No read path in
+      -- \`CredentialStore\` returns \`value\` to an API response — the only callers of
+      -- the reveal method are the per-call injection seam a write action or a read
+      -- runs through, never a route handler's own JSON.
+      --
+      -- One row per (integration, name): a plugin may need more than one named
+      -- secret (a token and a webhook signing key), each requested by name rather
+      -- than handed over wholesale.
+      CREATE TABLE integration_credentials (
+        id             TEXT PRIMARY KEY,
+        integration_id TEXT NOT NULL REFERENCES integrations (id) ON DELETE CASCADE,
+        name           TEXT NOT NULL,
+        value          TEXT NOT NULL,
+        created_at     INTEGER NOT NULL
+      );
+
+      CREATE UNIQUE INDEX integration_credentials_unique_idx
+        ON integration_credentials (integration_id, name);
+    `,
+  },
 ];

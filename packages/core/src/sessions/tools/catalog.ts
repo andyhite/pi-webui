@@ -1583,6 +1583,165 @@ const continuationTools: readonly AgentTool[] = [
   }),
 ];
 
+/* ------------------------------------------------------- integrations (7.2) */
+
+/**
+ * The integration substrate (§9.1–§9.3, Epic 7.2).
+ *
+ * Connect, disconnect, and scoping are the operator's own gestures —
+ * entering or naming what a plugin reads is the same class of decision as a
+ * budget write, and a credential is entered nowhere but here (§9.3). Refresh
+ * and a declared write action are session-callable: "manual refresh always
+ * available" and "every write action is available as an agent tool" are both
+ * §9's own words, said about a session as much as a person.
+ */
+const integrationTools: readonly AgentTool[] = [
+  read(
+    "integration_plugin_list",
+    "List the registered integration producers a connect flow can use, with their declared refresh mode, scoping language, and write actions (§9.1, §9.2).",
+    "the connect-flow's own picker",
+    "/api/integration-plugins",
+  ),
+  mutate({
+    name: "integration_connect",
+    summary:
+      "Connect an integration instance to a plugin's concept producer, with its initial scoping and credential (§9.1, §9.3).",
+    gesture: "the in-app connect flow",
+    method: "POST",
+    endpoint: "/api/integrations",
+    input: {
+      pluginId: {
+        type: "string",
+        required: true,
+        description: "the plugin id",
+      },
+      producerId: {
+        type: "string",
+        required: true,
+        description: "the concept producer to connect",
+      },
+      name: {
+        type: "string",
+        required: true,
+        description: "a name for this instance",
+      },
+      scope: {
+        type: "string",
+        required: false,
+        description:
+          "the source's own query language, runtime-configurable (§9.1)",
+      },
+      credentialName: {
+        type: "string",
+        required: false,
+        description: "which named secret this sets",
+      },
+      credentialValue: {
+        type: "string",
+        required: false,
+        description:
+          "the secret itself — stored by the app, never read back (§9.3)",
+      },
+    },
+    // Entering a credential is the operator's own act; a session connecting an
+    // integration would be a session granting itself reach to a system nobody
+    // asked it to reach (§9.3, principle 1).
+    requires: { humanOnly: true },
+  }),
+  read(
+    "integration_list",
+    "List every integration instance, its connection state, and its scoping (§9.1, §9.3).",
+    "the integrations settings panel",
+    "/api/integrations",
+  ),
+  read(
+    "integration_get",
+    "Read one integration instance.",
+    "select an integration row",
+    "/api/integrations/:id",
+    { id: ID },
+  ),
+  mutate({
+    name: "integration_scoping_update",
+    summary:
+      "Change an integration's scoping query, in its own source language, without restart (§9.1).",
+    gesture: "edit the scoping field on an integration row",
+    method: "PATCH",
+    endpoint: "/api/integrations/:id",
+    input: {
+      id: ID,
+      scope: {
+        type: "string",
+        required: true,
+        description: "the new scoping query, or null to clear it",
+      },
+    },
+    requires: { humanOnly: true },
+  }),
+  mutate({
+    name: "integration_disconnect",
+    summary:
+      "Disconnect an integration. Its objects keep their last-known content (§3.1, §9.3).",
+    gesture: "disconnect from the integrations settings panel",
+    method: "POST",
+    endpoint: "/api/integrations/:id/disconnect",
+    input: { id: ID },
+    requires: { humanOnly: true },
+  }),
+  mutate({
+    name: "integration_refresh",
+    summary:
+      "Manually refresh a whole integration now — a read, reconciled through the object store; never a run (§9.1, principle 2).",
+    gesture: "the refresh button on an integration row",
+    method: "POST",
+    endpoint: "/api/integrations/:id/refresh",
+    input: { id: ID },
+  }),
+  mutate({
+    name: "integration_object_refresh",
+    summary:
+      "Manually refresh one object by its external id — manual refresh is always available per object too (§9.1).",
+    gesture: "the refresh action on one card",
+    method: "POST",
+    endpoint: "/api/integrations/:id/objects/:externalId/refresh",
+    input: {
+      id: ID,
+      externalId: id("the object's id in the source system"),
+    },
+  }),
+  read(
+    "integration_write_actions_read",
+    "List the write actions one integration's producer declares, with their reversibility (§9.2, §6.6).",
+    "the actions available on a card",
+    "/api/integrations/:id/write-actions",
+    { id: ID },
+  ),
+  mutate({
+    name: "integration_write_action_perform",
+    summary:
+      "Perform a declared write action. Subject to approval per its declared reversibility (§9.2, §6.6); the result is read back and reported, rejection text included, never assumed.",
+    gesture: "a card's write action, or the equivalent UI button",
+    method: "POST",
+    endpoint: "/api/integrations/:id/write-actions/:actionId",
+    input: {
+      id: ID,
+      actionId: id("the write action's own id"),
+      input: {
+        type: "object",
+        required: false,
+        description: "the action's own declared input",
+      },
+      callId: {
+        type: "string",
+        required: true,
+        description:
+          "the caller's own name for this call; a retry finds the same approval rather than raising a second one (principle 9)",
+      },
+    },
+    requires: { approval: "outside-policy" },
+  }),
+];
+
 /* ------------------------------------------------------------ whole board */
 
 const boardTools: readonly AgentTool[] = [
@@ -1865,6 +2024,7 @@ export const AGENT_TOOL_CATALOG: readonly AgentTool[] = [
   ...sessionTools,
   ...steeringTools,
   ...continuationTools,
+  ...integrationTools,
   ...boardTools,
   ...claimTools,
   ...agencyTools,

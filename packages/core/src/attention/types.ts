@@ -50,6 +50,13 @@ export const HEALTH_ALERTS = [
   "unanswered",
   /** Time a session spent waiting on a human, claim waits included (§7.2). */
   "blocked-on-you",
+  /**
+   * An integration's connection is broken (§9.3): "broken connection is a health
+   * problem, never missing data" — the objects it produced stay present with
+   * their last-known content, and this is the alert that says why they stopped
+   * updating.
+   */
+  "integration-broken",
 ] as const;
 
 export type HealthAlertKind = (typeof HEALTH_ALERTS)[number];

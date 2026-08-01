@@ -300,3 +300,51 @@ describe("the derivation as a whole", () => {
     });
   });
 });
+
+describe("integration broken (§9.3, Epic 7.2)", () => {
+  it("surfaces a broken connection as a health alert, and clears it once reconnected", () => {
+    const integration = stores.integrations.connect({
+      pluginId: "fake-plugin",
+      producerId: "fake-tickets",
+      name: "Fake tickets",
+      system: "fake",
+    });
+    stores.integrations.markBroken(integration.id, "authentication failed");
+
+    const derived = attention.derive();
+    const broken = derived.find(
+      (entry) =>
+        entry.item.feed === "health" && entry.item.id.includes(integration.id),
+    );
+    expect(broken).toBeDefined();
+    expect(broken?.item.summary).toContain("authentication failed");
+
+    stores.integrations.markRefreshed(integration.id);
+    const recovered = attention.derive();
+    expect(
+      recovered.some((entry) => entry.item.id.includes(integration.id)),
+    ).toBe(false);
+  });
+
+  it("never touches or hides the object an integration produced (§3.1)", () => {
+    const integration = stores.integrations.connect({
+      pluginId: "fake-plugin",
+      producerId: "fake-tickets",
+      name: "Fake tickets",
+      system: "fake",
+    });
+    const written = stores.objects.write({
+      kind: "ticket",
+      title: "a ticket",
+      renderings: { card: {}, summary: "s", agentContent: "body" },
+      external: { system: integration.system, id: "FAKE-1" },
+    });
+    stores.integrations.markBroken(integration.id, "authentication failed");
+
+    attention.derive();
+    expect(stores.objects.get(written.objectId)?.deletedAt ?? null).toBeNull();
+    expect(stores.objects.read(written.objectId).renderings.agentContent).toBe(
+      "body",
+    );
+  });
+});

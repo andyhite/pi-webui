@@ -1404,6 +1404,68 @@ export const notificationRouteFires = sqliteTable(
   (table) => [primaryKey({ columns: [table.routeId, table.itemId] })],
 );
 
+/**
+ * An integration instance (§9.1–§9.3, Epic 7.2): a connected use of a plugin's
+ * concept producer. `scope` is opaque — the source's own query language,
+ * runtime-configurable without restart (§9.1) — and this table never parses it.
+ *
+ * Connection state is observed, never inferred (principle 7): `broken_at` is set
+ * only by a refresh that actually failed, and the objects an integration produced
+ * are untouched by it — present-or-absent is about whether the integration exists
+ * at all, not about whether it is currently reachable (§3.1, §9.3).
+ */
+export const integrations = sqliteTable("integrations", {
+  id: text("id").primaryKey(),
+  pluginId: text("plugin_id").notNull(),
+  producerId: text("producer_id").notNull(),
+  name: text("name").notNull(),
+  system: text("system").notNull(),
+  scope: text("scope"),
+  connectionState: text("connection_state", {
+    enum: ["connected", "disconnected", "broken"],
+  }).notNull(),
+  lastConnectedAt: integer("last_connected_at"),
+  lastRefreshAt: integer("last_refresh_at"),
+  lastBrokenAt: integer("last_broken_at"),
+  lastBrokenReason: text("last_broken_reason"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+/**
+ * A credential, at rest, for one integration (§9.3): "credentials are stored by
+ * the app, exposed to no session and no other plugin." There is deliberately no
+ * store method anywhere that returns `value` to an HTTP response — see
+ * `CredentialStore.reveal` in `credential-store.ts`, whose only callers are the
+ * per-call injection seam a write action or a read runs through.
+ *
+ * One row per (integration, name): a plugin may need more than one named secret
+ * (a token and a webhook signing key), and each is requested by name rather than
+ * handed over wholesale.
+ */
+export const integrationCredentials = sqliteTable(
+  "integration_credentials",
+  {
+    id: text("id").primaryKey(),
+    integrationId: text("integration_id")
+      .notNull()
+      .references(() => integrations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    value: text("value").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("integration_credentials_unique_idx").on(
+      table.integrationId,
+      table.name,
+    ),
+  ],
+);
+
+export type IntegrationRow = typeof integrations.$inferSelect;
+export type IntegrationCredentialRow =
+  typeof integrationCredentials.$inferSelect;
+
 export type ApprovalRow = typeof approvals.$inferSelect;
 export type PreGrantRow = typeof preGrants.$inferSelect;
 export type AttentionTriageRow = typeof attentionTriage.$inferSelect;

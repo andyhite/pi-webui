@@ -17,6 +17,7 @@ import {
   type EventEntity,
   type HealthSessionObservation,
   type HealthThresholds,
+  type IntegrationHealthObservation,
   type PendingAsk,
   type SessionBroadcastCategory,
   type SessionId,
@@ -403,8 +404,36 @@ export class AttentionService {
       pendingAsks: this.pendingAsks(),
       claimWaits: this.claimWaits(now),
       workstreams: this.workstreamActivity(),
+      integrations: this.integrationHealth(),
       thresholds: this.#config.thresholds,
     });
+  }
+
+  /**
+   * Broken connections (§9.3, Epic 7.2): "broken connection is a health
+   * problem, never missing data." Read straight off `IntegrationStore` —
+   * `lastBrokenAt`/`lastBrokenReason` are set only by an observed refresh
+   * failure (`IntegrationService.refresh`), never inferred from silence, so
+   * this is a fold rather than a judgement (principle 7).
+   *
+   * `target.nodeId` carries the integration's own id: there is no canvas node
+   * for an integration yet (that surface is later Phase 7 work), and a
+   * synthetic, stable id here is what lets this alert's own id
+   * (`healthItemId("integration-broken", ...)`) and its target agree on what
+   * they mean without inventing a graph node to mean it.
+   */
+  private integrationHealth(): readonly IntegrationHealthObservation[] {
+    return this.deps.stores.integrations
+      .list()
+      .filter((integration) => integration.connectionState === "broken")
+      .map((integration) => ({
+        integrationId: integration.id,
+        name: integration.name,
+        system: integration.system,
+        target: { nodeId: `integration:${integration.id}`, workstreamId: null },
+        since: integration.lastBrokenAt ?? this.deps.stores.clock(),
+        reason: integration.lastBrokenReason ?? "connection broken",
+      }));
   }
 
   private sessionObservations(): readonly HealthSessionObservation[] {

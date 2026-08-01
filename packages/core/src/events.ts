@@ -34,6 +34,7 @@ import type {
   CommandOutput,
 } from "./commands.js";
 import type { AttentionItem, NotificationRoute } from "./attention/index.js";
+import type { Integration } from "./integrations/index.js";
 import type { Budget } from "./budgets.js";
 import type { Edge, PlacedNode } from "./edges.js";
 import type {
@@ -134,6 +135,13 @@ export const EVENT_ENTITIES = [
   "attention",
   /** An outbound notification route and its delivery health (§7.3). */
   "notification_route",
+  /**
+   * An integration instance (§9.1–§9.3): connected, disconnected, its scoping
+   * changed, or its connection went healthy/broken. One vocabulary for the
+   * connect flow's own state, so the settings surface and an outbound health
+   * alert describe the same row rather than two.
+   */
+  "integration",
 ] as const;
 
 export type EventEntity = (typeof EVENT_ENTITIES)[number];
@@ -478,6 +486,16 @@ export type DomainEventBody =
       readonly entity: "notification_route";
       readonly verb: "deleted";
       readonly routeId: string;
+    }
+  | {
+      readonly entity: "integration";
+      readonly verb: "created" | "updated";
+      readonly integration: Integration;
+    }
+  | {
+      readonly entity: "integration";
+      readonly verb: "deleted";
+      readonly integrationId: string;
     };
 
 /** One message on the state-change stream: envelope plus a typed body. */

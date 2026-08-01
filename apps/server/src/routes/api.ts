@@ -6,7 +6,9 @@ import {
   BudgetStore,
   ClaimStore,
   CommandStore,
+  CredentialStore,
   GraphStore,
+  IntegrationStore,
   Maintenance,
   ObjectStore,
   QuestionStore,
@@ -61,6 +63,10 @@ export interface ApiStores {
   readonly workspaces: WorkspaceStore;
   /** Durability, cleanup, and the compaction sweep (§12, Epic 2.3). */
   readonly maintenance: Maintenance;
+  /** Integration instances: connection, scoping, and refresh history (§9.1–§9.3). */
+  readonly integrations: IntegrationStore;
+  /** Credentials for integrations — never read by a route's own response (§9.3). */
+  readonly credentials: CredentialStore;
 }
 
 export function createStores(
@@ -91,6 +97,8 @@ export function createStores(
     // source of time.
     workspaces: new WorkspaceStore(db, () => clock() * 1000),
     maintenance: new Maintenance(db, clock),
+    integrations: new IntegrationStore(db, clock),
+    credentials: new CredentialStore(db, clock),
   };
 }
 

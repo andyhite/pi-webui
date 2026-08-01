@@ -3,6 +3,7 @@ import {
   createPiWriteIntents,
   decideToolPermission,
   isApproved,
+  NO_TOOL_WORLD_DECLARATIONS,
   sessionAuthor,
   UNKNOWN_WRITE_INTENTS,
   type Approval,
@@ -13,6 +14,7 @@ import {
   type RuntimeRequest,
   type SessionId,
   type ToolGateDecision,
+  type ToolWorldDeclarations,
   type WorkstreamId,
   type WriteIntentDeclaration,
 } from "@plotroom/core";
@@ -77,6 +79,15 @@ export interface SessionGateDeps {
    * nowhere to look for one.
    */
   readonly approvals?: GateApprovals;
+  /**
+   * What a runtime's tools do to the outside world (§9.2, §6.3), across every
+   * adapter — unlike `intents`, this is not keyed by adapter id, because a
+   * declared write action's reversibility is the plugin's fact, not the
+   * adapter's. Absent means nothing is declared, which is the same honest
+   * default `decideToolPermission` already has (`NO_TOOL_WORLD_DECLARATIONS`):
+   * it costs certainty about fork cleanliness (§6.3) and grants nothing.
+   */
+  readonly world?: ToolWorldDeclarations;
 }
 
 /**
@@ -145,6 +156,7 @@ export function createSessionGate(deps: SessionGateDeps): SessionGate {
         workstreamId: workstreamId as WorkstreamId,
         preGrants:
           deps.approvals?.preGrantsFor(input.sessionId, workstreamId) ?? [],
+        world: deps.world ?? NO_TOOL_WORLD_DECLARATIONS,
         ...(approvedCallIds === undefined ? {} : { approvedCallIds }),
       });
 
