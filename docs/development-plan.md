@@ -133,6 +133,8 @@ retention/`output@n` tests need until Epic 1.4 lands the schema._
 - [ ] Hono app, route structure, error shape, request validation
 - [ ] WebSocket state-change stream: one event vocabulary for everything the canvas and queue render live
 - [ ] Operator credential: optional shared secret locally; auth required for non-local binding (§12)
+- [ ] Loopback-only bind by default — never `0.0.0.0` without explicit opt-in plus the credential requirement (§12)
+- [ ] Origin/Host validation on WebSocket upgrades and state-changing requests: loopback names always trusted, anything else requires explicit allow-listing — DNS-rebinding and drive-by-page protection that also makes SSH-tunnel access (`ssh -L`, browser at `http://localhost:<port>`) work with zero config (§12)
 - [ ] Structured logs: consistent shape, runtime-adjustable level, redaction (§8)
 
 ### Epic 2.2 — Graph and workstream API (`server`, `graph`)
@@ -197,6 +199,8 @@ _Moved ahead of 3.1–3.4: nothing in this phase is demoable without a host to
 run the renderer in._
 
 - [ ] `apps/web` renderer served by the server; single renderer for both targets (never forked per target)
+- [ ] **Single-origin rule:** the browser talks to exactly one origin — page, WS, and API on the same port; the client connects to same-origin paths (`/ws`) with no hardcoded host or port anywhere. In dev, the dev server serves the page and proxies WS/API to the server so dev is single-origin too. This is what makes local and tunnelled access identical (§12)
+- [ ] Port/instance selection knob (one setting drives server port, dev port, state dir); dev HMR follows the browser's port with an override for asymmetric tunnels
 - [ ] Electron main: spawn-or-attach to server; packaging decision (electron-builder vs forge — record in AGENTS.md)
 - [ ] Remote-backend connect/remember/switch (§12) — can land late in this epic or slip to Phase 8
 
@@ -406,6 +410,7 @@ run the renderer in._
 
 - [ ] Desktop installers per platform; updater per the packaging decision (§12)
 - [ ] Local binding by default; tunnelled remote access posture; remote-backend semantics (workspaces/diffs are the backend's machine) (§12)
+- [ ] Documented tunnel workflow: forward the page's loopback port only (`ssh -N -L <port>:127.0.0.1:<port>`), verified end-to-end against a cloud VM — including the desktop app attaching to the tunnelled backend
 - [ ] Backup/move verification for the portable store; reset/cleanup UX finalized (§12)
 
 ### Epic 8.5 — E2E hardening (`ci`)
