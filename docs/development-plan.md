@@ -910,10 +910,20 @@ cannot masquerade as task context where a reader would find it. A session
 broadcast **deliberately does not check lineage** — §6.5 says the scope rule is
 what closes the collusion channel, and "excluding the sender's chain would
 exclude exactly the sessions most likely affected" — and a test asserts a parent
-in scope receives it. `planBatch` is partial by design: a member that cannot take
+in scope receives it. Because the scope rule is what does that work, the sender
+must **stand in the scope it declares** (`senderSharesScope`, checked before the
+rate bound so probing costs nothing): §6.5's scopes are deictic — "everyone in
+_this_ repository," "_this_ workspace" — and a foreign workspace with one session
+in it would otherwise be a recipient list of exactly one, which is the thing a
+session may not write. `planBatch` is partial by design: a member that cannot take
 the gesture is skipped with a reason rather than failing the twelve, and every
 member's idempotency key derives from the batch key so a half-failed batch is
-replayable (principle 9).
+replayable (principle 9). Its lineage check applies to the **injecting** kind
+only, decided rather than overlooked: principle 1 governs authoring intent, while
+stop, close, and archive take capability away — checking them stopped a parent
+from batch-stopping its own runaway child, which is the most useful batch stop
+there is. §4.1's separate rule (no running, resuming, or re-running inside your own
+chain) is untouched, and `authorsIntent` states the reasoning beside the branch.
 
 **No timed defaults, enforced structurally.** §6.4's prohibition is a type-level
 impossibility rather than a runtime refusal: `SessionQuestion` has no default,
@@ -922,10 +932,29 @@ literal `"escalate-attention"`, so `"answer"` and `"proceed"` do not typecheck;
 and an answer requires an `Author`, which has no system variant, so "answered by
 the timer" cannot be written down. `questions.test.ts` asserts all three as
 `@ts-expect-error` cases — if any becomes expressible, the unused directive fails
-the build. The generated `plotroom_ask` extension passes no `timeout` to pi's
-dialog (pi supports one), and a test asserts the source string contains no timer
-of any kind; a dismissed question returns an **error** to the model, never one of
-the options nobody picked.
+the build.
+
+That last sentence was **false when it was first written**, and the correction is
+worth recording because it is a whole class of inert test: `packages/core`'s
+`tsconfig.json` excludes `src/**/*.test.ts` (it is the build, and a build must not
+emit its own tests), vitest's esbuild transform strips types without checking
+them, and eslint here is not type-aware — so nothing typechecked a test file, and
+every `@ts-expect-error` guard in the repo's core package was decoration. Core's
+`typecheck` script now also runs `tsc -p tsconfig.tests.json` (`noEmit`, tests
+included, ~1s warm), which puts the guards inside `pnpm verify`. Proven by
+regression rather than by assertion: adding `defaultOptionId` to `SessionQuestion`
+fails `pnpm typecheck` with `TS2578: Unused '@ts-expect-error' directive`, and
+removing it passes. Type-level assertions are also kept in never-invoked closures,
+so a guard's only job is to not compile — one of them was silently throwing at
+runtime instead. (`packages/db` and `packages/plugin-sdk` still exclude their
+tests; same fix applies when someone needs it there.)
+
+The generated `plotroom_ask` extension passes no `timeout` to pi's dialog (pi
+supports one), and a test asserts the source string contains no timer of any kind;
+a dismissed question returns an **error** to the model, never one of the options
+nobody picked. Option **labels** must be distinct as well as ids: the label is
+what a runtime's select returns and what the extension filters on, so twins would
+answer for each other and erase each other from the paths not taken.
 
 **Two decided defaults, recorded here rather than inferred:** a session may send
 **3 broadcasts per hour** (`DEFAULT_SESSION_BROADCAST_POLICY` — enough for an
@@ -1052,10 +1081,20 @@ summarised continuation stays a recorded intention.
 §6.6 names the source of truth ("the same declarations are what mark where a
 session touched the outside world... so fork-cleanliness comes from the source of
 truth rather than a heuristic"), so `ToolWorldDeclaration` is `local` or
-`outside-world` with a reversibility — and an **undeclared** tool is a third,
-visible state that costs `certain` rather than being read as harmless. A declared
-write that merely _started_ counts as a touch, because a merge that returned an
-error may still have merged and "we are not sure" must never render as "clean".
+`outside-world` with a reversibility — and an **undeclared** tool produces a third
+answer rather than being read as harmless. `ForkCleanliness.state` is
+`clean | dirty | unknown`, not a boolean plus a caveat: a boolean `clean` was a
+trap, because anything reading it alone turned "nobody declared anything" into
+"nothing happened", which is principle 7 exactly backwards. `unknown` is what an
+undeclared call up to the point produces, `isCleanForkPoint` is the only thing that
+answers yes, and a dirty point that also has undeclared calls says "at least N
+writes" because the known count is a floor. A declared write that merely _started_
+counts as a touch, because a merge that returned an error may still have merged and
+"we are not sure" must never render as "clean". `planSessionFork` **requires**
+markers for the same reason: they were optional, and omitting them produced a plan
+claiming clean with nothing examined — the caller least likely to derive markers got
+the most reassuring answer. A caller with no observation log passes
+`NO_OUTSIDE_WORLD_MARKERS` and says so.
 
 **Continue-vs-fresh compares tokens, not invented money.** `estimateRunCost`
 prices per _definition_, so both modes inherit the same range and scaling it by a
@@ -1074,10 +1113,21 @@ command to send at all — `pi --fork <ref>` has already produced a session hold
 the whole conversation (`resolvePiForkTarget` returns `inherited`). Two other real
 defects went with it: a fork an extension cancelled answers `success: true` and
 says so only in `data.cancelled`, which the old code read as success; and an
-unreachable point now falls back to a **seeded** session from PlotRoom's own
-transcript (`PiForkUnavailable` → `start({ seedTranscript })`) instead of throwing,
-with the half-forked process aborted first. The live spike proves the prefix: a
-fork at turn 1 of a two-turn session sends the model turn 1 and not turn 2.
+unreachable point raises `PiForkUnavailable` with the half-forked pi process
+aborted, rather than leaving one running that nothing drives. The live spike proves
+the prefix: a fork at turn 1 of a two-turn session sends the model turn 1 and not
+turn 2.
+
+**The adapter does not substitute a seeded fork for a native one.** It briefly did,
+which sounds generous and is not: the caller decided `native` from `planFork` and
+writes `runtime.mode` from that decision, so a silently seeded session got stored
+as a native fork — and a seeded fork is not bit-identical to a native one, which is
+the entire reason the two are distinguished. Reporting the substitution back would
+have been the second-best fix; not making it is better, because the false mode
+stops being _representable_ instead of becoming something the caller must remember
+to re-read. So `fork()` either does what it was asked or raises, seeding is the
+caller's own `start({ seedTranscript })` branch, and whichever branch ran is the
+mode recorded (the contract table's Fork row spells out the two lines).
 
 **Contract for Track A (stage 2).** Everything below is a pure function in
 `@plotroom/core`; the server owns persistence, transport, and events.
@@ -1115,7 +1165,10 @@ is a query over sends Track A records; and the pi fork mapping assumes pi's k-th
 forkable user message opens PlotRoom's k-th turn — true for how PlotRoom drives pi
 (one user message per turn, injections included) and now demonstrated by the
 spike, but a pi release that changes what `get_fork_messages` lists would break it
-quietly, so that spike is the thing to run against a new pi.
+quietly, so that spike is the thing to run against a new pi. One shape is knowingly
+left loose: `senderSharesScope` reads membership from the `BroadcastWorld` Track A
+builds, so a wrong `repositoryIds` join would widen what a session may declare — the
+rule is stated once and enforced once, but its inputs are the server's to get right.
 
 ### Epic 5.5 — Scoped runs and the queue of work (`runs`)
 
