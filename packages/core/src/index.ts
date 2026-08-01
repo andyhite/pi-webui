@@ -20,4 +20,5 @@ export * from "./commands.js";
 export * from "./runs.js";
 export * from "./sessions/index.js";
 export * from "./workspaces/index.js";
+export * from "./claims/index.js";
 export * from "./events.js";

@@ -201,7 +201,13 @@ function compareUnit(
  * Uncommitted changes deliberately do not — the operator is an implicit claim
  * holder and hand edits are their own divergence class (§3.4); staling every
  * session on the first keystroke is the failure that rule exists to prevent.
- * Claim-precise attribution (Epic 4.4) narrows this further.
+ *
+ * This is the verdict available from a *fingerprint alone*. Given a claim write
+ * ledger, `checkClaimContinuation` (`claims/divergence.ts`) narrows it in both
+ * directions: `commits-added` stops forcing fresh once every write in the
+ * interval is accounted for, and a hand edit starts blocking when it touched a
+ * path the session read. `isPathAttributable` is where the two modules agree on
+ * which kinds a ledger may speak for.
  */
 export function forcesFresh(kind: DivergenceKind): boolean {
   switch (kind) {
