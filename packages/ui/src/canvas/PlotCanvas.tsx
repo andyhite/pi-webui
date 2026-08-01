@@ -153,6 +153,19 @@ export interface PlotCanvasProps {
   readonly onSelectNode: (nodeId: string | null) => void;
   /** Ids of nodes off-screen attention markers should track (spec §5, §7). */
   readonly attentionNodeIds?: readonly string[];
+  /**
+   * "One derivation, many surfaces" (§7): node state is one of them, and it
+   * reads the exact same attention feed `attentionNodeIds` clusters into
+   * off-screen markers — same items, one rendering per node instead of one
+   * per off-screen cluster. Rendered the same way `warningsByNodeId`
+   * already flags a card (a small badge, regardless of zoom), because a
+   * node wanting attention and a node with a graph warning are the same
+   * *kind* of fact even though they come from different derivations.
+   */
+  readonly attentionByNodeId?: ReadonlyMap<
+    string,
+    { readonly count: number; readonly topFeed: string }
+  >;
   /** Zoom thresholds for the workstream/inner/detail renderer switch. */
   readonly zoomThresholds?: ZoomThresholds;
   /** A batch action chosen from the contextual action bar over a multi-selection. */
@@ -241,6 +254,8 @@ type BoxNodeData = {
   onDropDefinition?: (definitionId: string) => void;
   /** Graph warnings for this node (§5): flagged on the card, regardless of zoom. */
   warnings: readonly string[];
+  /** One derivation, many surfaces (§7): this node's own attention badge, if any. */
+  attention: { readonly count: number; readonly topFeed: string } | null;
   /** Set on a command node when the host wired the run gesture (§4.1). */
   onRun?: () => void;
   /** True while this command node's run is already in flight (§4.1). */
@@ -323,6 +338,14 @@ function BoxNodeView({ data, id, selected }: NodeProps<BoxNode>) {
         <div>
           ⚠ {data.warnings.length} warning
           {data.warnings.length === 1 ? "" : "s"}
+        </div>
+      ) : null}
+      {data.attention ? (
+        // One derivation, many surfaces (§7): the same badge shape
+        // `warningsByNodeId` renders above, for the attention feed instead
+        // of graph warnings — a node can carry both at once, independently.
+        <div data-testid={`node-attention-${id}`}>
+          ● {data.attention.count} attention ({data.attention.topFeed})
         </div>
       ) : null}
       {data.acceptsDefinitionDrop ? (
@@ -535,6 +558,10 @@ function toBoxNode(
       definitionId: string,
     ) => void;
     readonly warningsByNodeId?: ReadonlyMap<string, readonly string[]>;
+    readonly attentionByNodeId?: ReadonlyMap<
+      string,
+      { readonly count: number; readonly topFeed: string }
+    >;
     readonly onRunCommand?: (commandNodeId: string) => void;
     readonly runningCommandNodeIds?: ReadonlySet<string>;
   },
@@ -557,6 +584,7 @@ function toBoxNode(
       routeSelected: input.id === ctx.selectedNodeId,
       acceptsDefinitionDrop: input.acceptsDefinitionDrop ?? false,
       warnings: ctx.warningsByNodeId?.get(input.id) ?? [],
+      attention: ctx.attentionByNodeId?.get(input.id) ?? null,
       runInFlight: ctx.runningCommandNodeIds?.has(input.id) ?? false,
       ...(ctx.onDropDefinitionOnTicket
         ? {
@@ -591,6 +619,7 @@ function CanvasInner({
   onDropDefinitionOnTicket,
   onDropPaletteEntry,
   warningsByNodeId,
+  attentionByNodeId,
   onRunCommand,
   runningCommandNodeIds,
   bubbleSources = [],
@@ -670,6 +699,7 @@ function CanvasInner({
         collapsedContainerIds: effectiveCollapsedContainerIds,
         ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
         ...(warningsByNodeId ? { warningsByNodeId } : {}),
+        ...(attentionByNodeId ? { attentionByNodeId } : {}),
         ...(onRunCommand ? { onRunCommand } : {}),
         ...(runningCommandNodeIds ? { runningCommandNodeIds } : {}),
       }),
@@ -685,6 +715,7 @@ function CanvasInner({
     onToggleContainer,
     onDropDefinitionOnTicket,
     warningsByNodeId,
+    attentionByNodeId,
     onRunCommand,
     runningCommandNodeIds,
     zoomLevel,
@@ -809,6 +840,7 @@ function CanvasInner({
           collapsedContainerIds: effectiveCollapsedContainerIds,
           ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
           ...(warningsByNodeId ? { warningsByNodeId } : {}),
+          ...(attentionByNodeId ? { attentionByNodeId } : {}),
           ...(onRunCommand ? { onRunCommand } : {}),
           ...(runningCommandNodeIds ? { runningCommandNodeIds } : {}),
         }),
@@ -832,6 +864,7 @@ function CanvasInner({
     onToggleContainer,
     onDropDefinitionOnTicket,
     warningsByNodeId,
+    attentionByNodeId,
     onRunCommand,
     runningCommandNodeIds,
     zoomLevel,
@@ -847,16 +880,18 @@ function CanvasInner({
       current.map((node) => {
         if (node.type !== "box") return node;
         const warnings = warningsByNodeId?.get(node.id) ?? [];
-        if (
-          node.data.warnings.length === warnings.length &&
-          node.data.warnings.every((w, i) => w === warnings[i])
-        ) {
-          return node;
-        }
-        return { ...node, data: { ...node.data, warnings } };
+        const attention = attentionByNodeId?.get(node.id) ?? null;
+        const warningsChanged =
+          node.data.warnings.length !== warnings.length ||
+          !node.data.warnings.every((w, i) => w === warnings[i]);
+        const attentionChanged =
+          node.data.attention?.count !== attention?.count ||
+          node.data.attention?.topFeed !== attention?.topFeed;
+        if (!warningsChanged && !attentionChanged) return node;
+        return { ...node, data: { ...node.data, warnings, attention } };
       }),
     );
-  }, [warningsByNodeId, setNodes]);
+  }, [warningsByNodeId, attentionByNodeId, setNodes]);
 
   // A node's label/running/run-in-flight state can change after it is
   // already placed — a command node's latest run status arriving well after
