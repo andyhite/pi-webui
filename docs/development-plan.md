@@ -1638,7 +1638,7 @@ epic's:_
 
 **Exit criteria:** the queue answers questions/approvals/drift without opening anything; budgets bind transitively; a capped session ends as out-of-budget, not failed.
 
-### Epic 6.1 — Attention system (`attention`) — _done: surfaces (Track B, Stage 1) + derivation, health alerts, and outbound routing (Track A, Stage 2)_
+### Epic 6.1 — Attention system (`attention`) — _done: surfaces (Track B, Stage 1), derivation/health/routing (Track A, Stage 2), live wiring + the batch gate (Track B, Stage 2)_
 
 - [x] One derivation, many surfaces: node state, off-screen marker, header, window title, badge, system notification (§7)
 - [x] The queue: single ranked keyboard-driven list; rows answerable in place; selection navigates the canvas (§7.1)
@@ -1760,6 +1760,41 @@ queue that accumulated every completion for ever is the inbox you cannot clear �
 the exact failure §7.1's triage verbs exist to prevent — and the alternative
 (dropping them on read) would make "acknowledge" meaningless._
 
+_Stage 2's live wiring landed (Track B, Batch 4): `createApiAttentionDataSource`
+(`packages/ui/src/attention/data-source.ts`) replaces the fixture at `App.tsx`'s
+one call site for `LIVE` mode, over the exact interface `docs/attention-contract.md`
+recorded — nothing downstream of it (the queue, the badges, the title, the
+notification) changed at all. The resync recipe is `createApiGraphDataSource`'s,
+adapted for an endpoint with no `seq` of its own: every buffered `attention` event
+replays as an idempotent upsert-or-delete once `GET /api/attention`'s snapshot
+lands, so a caller never sees a transient state older than what it already had and
+never a bare `[]` mid-resync (the contract's own NORMATIVE rule). `answerQuestion`/
+`decideApproval` resolve the attention item id to the real target
+(`payload.questionId`/`payload.approvalId`) and rely on the server's own
+attention refresh — already wired to the question/approval event stream — to
+remove the row; there is no optimistic local mutation anywhere in this seam, one
+source of truth throughout. `decideApproval`'s decision is `@plotroom/core`'s own
+`ApprovalDecision` (`APPROVAL_ANSWER_OPTIONS`), not a synthetic `"approve"`, so
+`QueuePanel` renders exactly the answer options the server declares — a reason
+input appears only where `requiresReason` says so, and the keyboard `d` binding is
+a no-op until one is typed, matching the row's own disabled button.
+
+The what-changed-while-away panel (`WhatChangedPanel`) moved from a static
+`history` prop to an `ActivityDataSource` seam the same shape gives every other
+live panel (`createApiActivityDataSource`/`createFixtureActivityDataSource`,
+`attention/what-changed.ts`) — a plain read over `GET /api/activity`, since the
+server's own `cap` query param already trims per workstream and there is no
+client-side capping left for this package to own.
+
+**THE BATCH 4 GATE PASSED**
+(`apps/web/e2e/batch4-gate.spec.ts`, recorded in the timeline's W18 milestone
+entry): budgets binding transitively live (a delegated child stopped
+out-of-budget by its parent's run cap, never the parent, never worded as
+"failed"), and the queue answering a question, an approval, and a drift item
+each in its own row without ever opening the Conversation panel. The drift
+row's live-update leg was break-verified against the exact code path the
+paragraph above describes._
+
 ### Epic 6.2 — Budgets and spend (`budgets`) — _done: enforcement and data (Track A) + the two panels (Track B, Stage 1)_
 
 - [x] Persistent spend accounting per session / workstream / fleet; totals outlive sessions (§8)
@@ -1845,27 +1880,20 @@ stopped billing sessions the fold already bills — the recipient and its own
 ancestors — so every induced row is `descendant` and a recipient's turn reaches a
 workstream or fleet total exactly once._
 
-_The Fleet panel (`packages/ui/src/fleet/`) aggregates real data from what
-exists on main today — `GET /api/sessions` (running vs total) and each
-session's own `GET /api/sessions/:id/spend` (today's total and the biggest
-spender, real per-entry timestamps) — not a fixture standing in for missing
-endpoints. **One genuine gap, recorded rather than faked:** the concurrency
-limit's configured *value* has no read endpoint anywhere (`apps/server/src/
-config.ts` resolves it at boot and never publishes it); `createApiFleetDataSource`
-takes it as a parameter defaulting to the shipped default, with a `TODO`
-in `fleet/types.ts`/`fleet/data-source.ts` naming exactly what a fleet
-aggregate endpoint should add. `queuedCount` counts only entries in the
-`queued` state (`@plotroom/core`'s own `isQueuedRunStartable` predicate) —
-`GET /api/run-queue`'s `queued` array also carries `starting`/`running`/
-`needs_reask`/`paused` entries, which hold a concurrency slot or are
-mid-flight rather than admitted-but-waiting, and an earlier version of this
-panel counted all of them (a review-caught over-count). The Timeline panel
+_The Fleet panel (`packages/ui/src/fleet/`) is now a plain field mapping over
+`GET /api/fleet` (Stage 2, Track A) — the N+1 per-session spend fan-out and the
+shipped-default concurrency-limit fallback Stage 1 needed are both gone, along
+with `fleet/derive.ts` (there is nothing left to aggregate client-side once the
+server returns today's total, the biggest spender with its workstream, running vs
+the real configured limit, and the queued count in one read).
+`createApiFleetDataSource` takes only `{http}` now. The Timeline panel
 (`packages/ui/src/timeline/`) lays out turns and tool calls
-time-proportionally from `GET /api/sessions/:id/observations`, already live
-on main — no gap there. 15 tests (`fleet/derive.test.ts`,
-`fleet/data-source.test.ts`, `timeline/layout.test.ts`)._
+time-proportionally from `GET /api/sessions/:id/observations`, live since Stage 1
+— no gap there, then or now. 10 tests (`fleet/data-source.test.ts`,
+`timeline/layout.test.ts`), plus 4 new `ActivityDataSource` tests inside
+`attention/what-changed.test.ts`._
 
-### Epic 6.3 — Approvals (`approvals`) — _domain landed (Track C) and wired (Track A); the queue row is Track B's_
+### Epic 6.3 — Approvals (`approvals`) — _domain landed (Track C), wired (Track A), the queue row landed (Track B, Batch 4 Stage 2)_
 
 - [x] Approval raise/answer semantics: the record outlives the call it blocks, approve-once or deny **with a reason returned to the session structurally** (§6.6) — `approvals/approval.ts`
 - [x] One payload every attention surface renders, answerable without opening the session (§6.6, §7.1) — `approvalAttention`; the queue rendering it is Track B's (below)
@@ -1873,7 +1901,7 @@ on main — no gap there. 15 tests (`fleet/derive.test.ts`,
 - [x] Irreversibility pierces pre-grants: irreversible integration writes always ask (§6.6, §9.2) — structural: an irreversible ask has no pre-grantable form
 - [x] Agent-requested destruction of authored state routes through approvals; recoverable regardless (§6.6, principle 10) — `decideDestruction` over catalog metadata
 - [x] Endpoints, stores, events, and the gate/claim-wait wiring — Track A's stage 2, against the contract below
-- [ ] The queue row that answers one in place, and the other four surfaces (§7, §7.1) — Track B's Epic 6.1, over `ApprovalAttention`
+- [x] The queue row that answers one in place, and the other four surfaces (§7, §7.1) — Track B's Epic 6.1, over `ApprovalAttention`
 
 _Landed as `@plotroom/core`'s `sessions/approvals/` subtree plus the write gate's
 second axis. **One record, one evaluator.** Approvals already existed in two shapes
@@ -2009,6 +2037,16 @@ approval five ways is worse than no approval feed. It carries what answering nee
 It returns `null` once answered: the feed ranks what is still asking. `isAnswered`
 stays `questions.ts`'s name and approvals use `isApprovalAnswered`, because a surface
 importing both from `@plotroom/core` must not have to know which one it got.
+
+_Consumed (Track B, Batch 4 Stage 2): `QueuePanel` renders `APPROVAL_ANSWER_OPTIONS`
+directly rather than a hardcoded approve/deny pair, so a reason input appears only
+where `requiresReason` says so and the row can never offer a decision the server
+does not recognise. `decideApproval` resolves the queue item's `payload.approvalId`
+and posts straight to `POST /api/approvals/:id/answer`; the row's own removal is the
+server's attention refresh, not a local guess. Proven end to end by the batch 4 gate
+(Epic 6.1's own note): a scripted `call` step raises exactly this row, "Approve
+once" clicked in it unblocks the waiting runtime call, and the session's script
+plays on to its own end — all without the Conversation panel ever opening._
 
 _Deferred, honestly: pre-grants match on **tool patterns, kinds, and write extents
 only** — not on paths. Paths are claims' business (§3.4) and a pre-grant that also
@@ -2309,6 +2347,22 @@ clean runs recorded, and the question-bubble leg break-verified (see Epic
 | A     | Epic 6.2 budgets/spend + fleet and timeline **data** (the panels are B's); Epic 6.4 run comparison          |
 | B     | Epic 6.1 queue + health alerts + outbound routing surfaces                                                  |
 | C     | Epic 6.3 approvals/pre-grants/irreversibility; begin finalizing the 7.1 plugin contract (shapes now stable) |
+
+**🏁 Milestone (end W18) — PASSED:** the attention system live end to
+end — budgets binding transitively (a delegated child stopped out-of-budget
+by its parent's run cap, never the parent, and never worded as "failed"),
+and the queue answering a question, an approval, and a drift item each in
+its own row, without ever opening the Conversation panel. Proven by
+`apps/web/e2e/batch4-gate.spec.ts` (Playwright, same real-server/
+real-browser convention as W10/W14) — run via `pnpm --filter @plotroom/web
+e2e`, deliberately not part of `pnpm verify`; 6 consecutive clean runs of
+the new spec alone, plus 3 consecutive clean full-suite runs, recorded. The
+drift row's stream-dependent leg (edited only after the page's own `/ws`
+subscription is live) was break-verified: temporarily disabling
+`createApiAttentionDataSource`'s live-event branch failed the gate on the
+very first in-row answer — the whole live queue depends on it, not only
+drift — and the source was restored byte-identical (`md5sum`-confirmed)
+before landing.
 
 **Weeks 19–23 — Plugins (Phase 7)**
 
