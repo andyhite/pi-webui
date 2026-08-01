@@ -48,6 +48,28 @@ export type TranscriptEntry =
       readonly injectionId: InjectionId;
       readonly author: Author;
       readonly text: string;
+    }
+  | {
+      /**
+       * PlotRoom's own report back to the session — today, a submission whose
+       * world conditions failed: "a submission whose conditions fail is rejected,
+       * with the failing condition returned as feedback, and the session
+       * continues" (§3.5).
+       *
+       * Its own kind rather than an `injection` with a system author, because the
+       * two differences both matter. Nobody *authored* it: it is proof, not
+       * intent, and §15-2's `Author` has no system variant on purpose — the
+       * schema reserves `system` for provenance edges and forbids it on context
+       * edges, so widening `Author` to fit this here would let an unattributed
+       * context edge typecheck everywhere else. And it renders as what it is: an
+       * "[injected by human]" label on a machine-generated rejection would be a
+       * lie in the one record that explains why the session kept going.
+       */
+      readonly kind: "feedback";
+      readonly source: "world-condition";
+      readonly text: string;
+      /** The declared conditions that failed, named rather than paraphrased (§3.5). */
+      readonly failedConditionIds: readonly string[];
     };
 
 export interface TranscriptTurn {
@@ -71,6 +93,7 @@ export function entryBytes(entry: TranscriptEntry): number {
     case "reasoning":
     case "output":
     case "injection":
+    case "feedback":
       return byteLength(entry.text);
     case "tool-call":
       return byteLength(entry.input);
@@ -157,6 +180,10 @@ function renderEntry(entry: TranscriptEntry): string {
         : `[tool ${entry.toolName} result] ${entry.output}`;
     case "injection":
       return `[injected by ${entry.author.kind}] ${entry.text}`;
+    case "feedback":
+      return entry.failedConditionIds.length > 0
+        ? `[feedback · ${entry.source} · failed: ${entry.failedConditionIds.join(", ")}] ${entry.text}`
+        : `[feedback · ${entry.source}] ${entry.text}`;
   }
 }
 
@@ -183,8 +210,11 @@ export interface ReleasePlan {
 
 /**
  * Choose what to release. Pure: it decides, it does not mutate, and it never
- * considers reasoning, output, or injected content — releasing what a human
- * said or an agent concluded would be deleting the record, not bounding it.
+ * considers reasoning, output, injected content, or feedback — releasing what a
+ * human said, an agent concluded, or the product proved would be deleting the
+ * record, not bounding it. (Feedback in particular is the reason a producing
+ * session kept going; dropping it would make the transcript unable to explain
+ * itself.)
  *
  * The newest turn is never a candidate: releasing the output a session is
  * still working from is a correctness bug, not a size win.

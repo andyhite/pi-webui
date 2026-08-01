@@ -12,6 +12,11 @@ import {
   transcriptRenderings,
   type Transcript,
 } from "./transcript.js";
+import {
+  consumersDrift,
+  INITIAL_PUBLICATION_STATE,
+  reduceTranscriptPublication,
+} from "./checkpoint.js";
 import { makeTranscript, makeTurn } from "./testing.js";
 
 const BIG = "x".repeat(4_000);
@@ -175,5 +180,80 @@ describe("bounded transcripts with recoverable release (§6.1)", () => {
 
     const releasedIds = plan.release.map((candidate) => candidate.callId);
     expect(releasedIds).toEqual(["call-big", "call-small"]);
+  });
+});
+
+describe("world-condition feedback (§3.5)", () => {
+  const withFeedback = (): Transcript =>
+    makeTranscript({
+      turns: [
+        makeTurn({
+          ordinal: 1,
+          entries: [
+            { kind: "output", text: "submitting" },
+            {
+              kind: "feedback",
+              source: "world-condition",
+              text: "checks are not green: build failed on node 20",
+              failedConditionIds: ["checks-green"],
+            },
+          ],
+        }),
+      ],
+    });
+
+  it("is a record with no author, because nobody authored it", () => {
+    // The alternative was an `injection` with a system author, which would have
+    // meant widening §15-2's `Author`: the schema reserves `system` for provenance
+    // edges and forbids it on context edges, so that variant would let an
+    // unattributed context edge typecheck everywhere else in the product.
+    const entry = withFeedback().turns[0]?.entries[1];
+    expect(entry?.kind).toBe("feedback");
+    expect(entry && "author" in entry).toBe(false);
+  });
+
+  it("names the conditions that failed, in the record and the rendering", () => {
+    const rendered = transcriptRenderings(withFeedback()).agentContent;
+    expect(rendered).toContain("feedback");
+    expect(rendered).toContain("checks-green");
+    expect(rendered).toContain("build failed on node 20");
+    // Never "[injected by human]": the label has to say what it is.
+    expect(rendered).not.toContain("injected by");
+  });
+
+  it("counts toward the size budget but is never released", () => {
+    const transcript = withFeedback();
+    expect(transcriptBytes(transcript)).toBeGreaterThan(0);
+
+    // Budget of zero: everything releasable would go, and feedback still does not.
+    const plan = planRelease(transcript, 0);
+    expect(plan.release).toEqual([]);
+    expect(plan.withinBudget).toBe(false);
+  });
+
+  it("survives an export whole", () => {
+    const exported = exportTranscript(withFeedback(), () => null);
+    expect(exported.complete).toBe(true);
+    expect(exported.document).toContain("checks-green");
+  });
+
+  it("publishes on checkpoint like any other turn content", () => {
+    // The checkpoint rule is about turns, not entry kinds, so feedback changes
+    // nothing about when consumers drift (§3.6) — asserted so a future entry kind
+    // cannot quietly acquire a publication rule of its own.
+    const afterTurn = reduceTranscriptPublication(INITIAL_PUBLICATION_STATE, {
+      kind: "turn-ended",
+      at: 10,
+      turn: 1,
+    });
+    expect(afterTurn.pendingTurns).toBe(1);
+
+    const published = reduceTranscriptPublication(afterTurn, {
+      kind: "checkpoint",
+      at: 20,
+      by: humanAuthor,
+    });
+    expect(published.publishedThroughTurn).toBe(1);
+    expect(consumersDrift(published, 0)).toBe(true);
   });
 });
