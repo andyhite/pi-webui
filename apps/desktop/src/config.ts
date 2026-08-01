@@ -9,7 +9,11 @@
  * config package yet).
  */
 
-export const DEFAULT_PLOTROOM_PORT = 4317;
+// Must match `apps/server/src/config.ts`'s `DEFAULT_PORT` (Track A's file,
+// not importable here: @plotroom/server declares no package "exports"/
+// "main", so there is nothing to import this constant from). Duplicated on
+// purpose — keep the two literals in sync if either changes.
+export const DEFAULT_PLOTROOM_PORT = 4600;
 
 export function resolvePort(
   env: Readonly<Record<string, string | undefined>> = process.env,

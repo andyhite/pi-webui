@@ -11,6 +11,12 @@ describe("resolvePort", () => {
     expect(resolvePort({ PLOTROOM_PORT: "5555" })).toBe(5555);
   });
 
+  it("defaults to the same port apps/server binds by default", () => {
+    // apps/server/src/config.ts's DEFAULT_PORT (duplicated, not imported —
+    // see the comment on DEFAULT_PLOTROOM_PORT).
+    expect(DEFAULT_PLOTROOM_PORT).toBe(4600);
+  });
+
   it("rejects a non-integer value", () => {
     expect(() => resolvePort({ PLOTROOM_PORT: "abc" })).toThrow();
   });
