@@ -81,8 +81,9 @@ export function stateFromSnapshot(raw: RawSnapshot): BoardState {
  * something already gone — exactly what makes applying the buffered tail of
  * events after a snapshot fetch safe (the documented resync recipe).
  *
- * Unknown-to-the-canvas entities (`version`, `run`, `session`) advance `seq`
- * and nothing else — nothing here renders them yet.
+ * Unknown-to-the-canvas entities (`version`, `run`, `session`,
+ * `session_observation`, `session_transcript`) advance `seq` and nothing else —
+ * nothing here renders them yet.
  */
 export function applyEvent(state: BoardState, event: DomainEvent): BoardState {
   const next = { ...state, seq: event.seq };
@@ -140,6 +141,8 @@ export function applyEvent(state: BoardState, event: DomainEvent): BoardState {
     case "version":
     case "run":
     case "session":
+    case "session_observation":
+    case "session_transcript":
       return next;
   }
 }

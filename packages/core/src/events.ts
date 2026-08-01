@@ -35,11 +35,17 @@ import type {
   OutputId,
   RunId,
   SessionId,
+  VersionId,
   WorkstreamId,
 } from "./ids.js";
 import type { PlotObject } from "./objects.js";
 import type { Run } from "./runs.js";
-import type { Session } from "./sessions/index.js";
+import type {
+  RuntimeObservation,
+  Session,
+  SessionStatus,
+  TranscriptPublication,
+} from "./sessions/index.js";
 import type { ObjectVersion } from "./versions.js";
 import type { Workstream } from "./workstreams.js";
 
@@ -55,6 +61,8 @@ export const EVENT_ENTITIES = [
   "command_output",
   "run",
   "session",
+  "session_observation",
+  "session_transcript",
 ] as const;
 
 export type EventEntity = (typeof EVENT_ENTITIES)[number];
@@ -168,15 +176,57 @@ export type DomainEventBody =
       readonly run: Run;
     }
   | { readonly entity: "run"; readonly verb: "deleted"; readonly runId: RunId }
+  /**
+   * A session and its derived status travel together, because a session card is
+   * both: the record (launch choices, accounting, end state) and the phase
+   * PlotRoom folded out of the observation log. The status is derived here and
+   * never agent-reported (principle 7), so a subscriber renders the phase it is
+   * given rather than inferring one from the record.
+   *
+   * This one shape covers created, phase change, accounting change, and end:
+   * every one of them is "the session, as it now is".
+   */
   | {
       readonly entity: "session";
       readonly verb: "created" | "updated";
       readonly session: Session;
+      readonly status: SessionStatus;
     }
   | {
       readonly entity: "session";
       readonly verb: "deleted";
       readonly sessionId: SessionId;
+    }
+  /**
+   * One appended observation record — turns, streamed deltas, tool calls,
+   * requests, ends. `seqInSession` is 1-based per session and is the log's own
+   * ordering primitive (distinct from the envelope's stream-wide `seq`), so
+   * applying one twice is idempotent by (sessionId, seqInSession) and a
+   * subscriber can tell a gap from a reorder.
+   *
+   * This is what a streaming transcript renders from: the log is the record
+   * (§3.6), and PlotRoom's own observation vocabulary is what crosses the wire,
+   * never a vendor payload (decision 0001).
+   */
+  | {
+      readonly entity: "session_observation";
+      readonly verb: "created";
+      readonly sessionId: SessionId;
+      readonly seqInSession: number;
+      readonly observation: RuntimeObservation;
+    }
+  /**
+   * A published transcript version (§3.6's checkpoint rule): consumers drift on
+   * session end or an explicit checkpoint, never per turn — so this is a much
+   * rarer event than the observation stream above, and that is the point.
+   */
+  | {
+      readonly entity: "session_transcript";
+      readonly verb: "created";
+      readonly sessionId: SessionId;
+      readonly publication: TranscriptPublication;
+      readonly objectId: ObjectId;
+      readonly versionId: VersionId;
     };
 
 /** One message on the state-change stream: envelope plus a typed body. */
