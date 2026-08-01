@@ -88,6 +88,30 @@ describe("createApiActions", () => {
     expect(del).toHaveBeenCalledWith("/api/edges/e%201");
   });
 
+  it("instantiateCommand posts to /api/commands and returns the new command/node ids", async () => {
+    const post = vi.fn(async () => ({
+      command: { id: "cmd1" },
+      node: { id: "n_cmd1" },
+    }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.instantiateCommand({
+      definitionId: "def1",
+      workstreamId: "ws1",
+      context: ["n_ticket"],
+    });
+
+    expect(post).toHaveBeenCalledWith("/api/commands", {
+      definitionId: "def1",
+      workstreamId: "ws1",
+      context: ["n_ticket"],
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: { commandId: "cmd1", nodeId: "n_cmd1" },
+    });
+  });
+
   it("createNote/editNote hit the notes endpoints", async () => {
     const post = vi.fn(async () => ({ object: { id: "obj1" } }));
     const patch = vi.fn(async () => undefined);

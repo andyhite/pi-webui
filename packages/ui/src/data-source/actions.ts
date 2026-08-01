@@ -59,6 +59,13 @@ export interface CreateNoteInput {
   readonly workstreamId?: string;
 }
 
+export interface InstantiateCommandInput {
+  readonly definitionId: string;
+  readonly workstreamId: string;
+  /** Existing node ids wired as context in the same gesture (§3.5). */
+  readonly context?: readonly string[];
+}
+
 export interface GraphActions {
   createWorkstream(
     subjectId?: string,
@@ -78,6 +85,12 @@ export interface GraphActions {
     objectId: string,
     input: { readonly title?: string; readonly body: string },
   ): Promise<ActionResult<void>>;
+  /** A command definition dropped onto a bare ticket (§3.5, §3.3), post-workstream. */
+  instantiateCommand(
+    input: InstantiateCommandInput,
+  ): Promise<
+    ActionResult<{ readonly commandId: string; readonly nodeId: string }>
+  >;
 }
 
 export function createApiActions(http: HttpClient): GraphActions {
@@ -129,6 +142,15 @@ export function createApiActions(http: HttpClient): GraphActions {
     editNote: (objectId, input) =>
       asAction(async () => {
         await http.patch(apiPath("/api/notes", objectId), input);
+      }),
+
+    instantiateCommand: (input) =>
+      asAction(async () => {
+        const response = await http.post<{
+          command: { readonly id: string };
+          node: { readonly id: string };
+        }>("/api/commands", input);
+        return { commandId: response.command.id, nodeId: response.node.id };
       }),
   };
 }
