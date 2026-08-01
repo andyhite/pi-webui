@@ -346,4 +346,51 @@ describe("createApiActions", () => {
       },
     });
   });
+
+  it("resumeSession posts to the session's resume endpoint", async () => {
+    const post = vi.fn(async () => ({
+      session: { id: "sess1" },
+      firstTurnQueued: true,
+    }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.resumeSession({
+      sessionId: "sess1",
+      initiationKey: "key1",
+      firstTurn: "keep going",
+    });
+
+    expect(post).toHaveBeenCalledWith("/api/sessions/sess1/resume", {
+      initiationKey: "key1",
+      firstTurn: "keep going",
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: { sessionId: "sess1", firstTurnQueued: true },
+    });
+  });
+
+  it("forkSession posts to the session's fork endpoint", async () => {
+    const post = vi.fn(async () => ({
+      session: { id: "sess2" },
+      workstreamId: "ws1",
+      mode: "native",
+    }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.forkSession({
+      sessionId: "sess1",
+      turn: 3,
+      initiationKey: "key1",
+    });
+
+    expect(post).toHaveBeenCalledWith("/api/sessions/sess1/fork", {
+      turn: 3,
+      initiationKey: "key1",
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: { sessionId: "sess2", workstreamId: "ws1", mode: "native" },
+    });
+  });
 });

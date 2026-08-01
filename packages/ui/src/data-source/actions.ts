@@ -216,6 +216,37 @@ export interface GraphActions {
   stopScope(
     input: StopScopeInput & { readonly confirm?: boolean },
   ): Promise<ActionResult<{ readonly stoppedSessionIds: readonly string[] }>>;
+  /**
+   * Resume an ended session (§6.3): the same record continues — the whole
+   * difference from a fork. Typing into an ended session has no disposition
+   * of its own (`dispositionOfTypedInput`); resume and fork are the two
+   * explicit choices a caller makes instead.
+   */
+  resumeSession(input: {
+    readonly sessionId: string;
+    readonly initiationKey: string;
+    readonly firstTurn?: string;
+  }): Promise<
+    ActionResult<{
+      readonly sessionId: string;
+      readonly firstTurnQueued: boolean;
+    }>
+  >;
+  /**
+   * Fork from a point (§6.3): a new session with its own workstream and
+   * workspace, inheriting the conversation up to and including that turn.
+   */
+  forkSession(input: {
+    readonly sessionId: string;
+    readonly turn: number;
+    readonly initiationKey: string;
+  }): Promise<
+    ActionResult<{
+      readonly sessionId: string;
+      readonly workstreamId: string;
+      readonly mode: string;
+    }>
+  >;
 }
 
 export function createApiActions(http: HttpClient): GraphActions {
@@ -385,6 +416,40 @@ export function createApiActions(http: HttpClient): GraphActions {
           },
         );
         return { stoppedSessionIds: response.stopped };
+      }),
+
+    resumeSession: (input) =>
+      asAction(async () => {
+        const response = await http.post<{
+          session: { readonly id: string };
+          firstTurnQueued: boolean;
+        }>(`${apiPath("/api/sessions", input.sessionId)}/resume`, {
+          initiationKey: input.initiationKey,
+          ...(input.firstTurn === undefined
+            ? {}
+            : { firstTurn: input.firstTurn }),
+        });
+        return {
+          sessionId: response.session.id,
+          firstTurnQueued: response.firstTurnQueued,
+        };
+      }),
+
+    forkSession: (input) =>
+      asAction(async () => {
+        const response = await http.post<{
+          session: { readonly id: string };
+          workstreamId: string;
+          mode: string;
+        }>(`${apiPath("/api/sessions", input.sessionId)}/fork`, {
+          turn: input.turn,
+          initiationKey: input.initiationKey,
+        });
+        return {
+          sessionId: response.session.id,
+          workstreamId: response.workstreamId,
+          mode: response.mode,
+        };
       }),
   };
 }
