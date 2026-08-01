@@ -1638,14 +1638,14 @@ epic's:_
 
 **Exit criteria:** the queue answers questions/approvals/drift without opening anything; budgets bind transitively; a capped session ends as out-of-budget, not failed.
 
-### Epic 6.1 — Attention system (`attention`) — _UI surfaces landed, Stage 1 of 2 (Batch 4, Weeks 15–18); fixture-fed — derivation and outbound routing are Track A's Stage 2_
+### Epic 6.1 — Attention system (`attention`) — _done: surfaces (Track B, Stage 1) + derivation, health alerts, and outbound routing (Track A, Stage 2)_
 
 - [x] One derivation, many surfaces: node state, off-screen marker, header, window title, badge, system notification (§7)
 - [x] The queue: single ranked keyboard-driven list; rows answerable in place; selection navigates the canvas (§7.1)
 - [x] Feeds: questions, approvals, drift, health alerts, completions — each with acknowledge/snooze/mute (§7.1, §4.5)
-- [ ] Health alerts from observation only: idle, spinning, conflict-predicted (cross-workstream path overlap + intra-workstream waitlist overlap), unanswered, blocked-on-you with claim-wait thresholds (§7.2)
+- [x] Health alerts from observation only: idle, spinning, conflict-predicted (cross-workstream path overlap + intra-workstream waitlist overlap), unanswered, blocked-on-you with claim-wait thresholds (§7.2)
 - [x] What-changed-while-away: capped per-workstream event history, entries route to targets and tolerate their absence (§7.3)
-- [ ] Outbound notification routing: state-attached routes (push/webhook), edge-triggered, redacted (§7.3)
+- [x] Outbound notification routing: state-attached routes (webhook), edge-triggered, redacted (§7.3)
 
 _Landed as `packages/ui/src/attention/` (Track B, Batch 4 Stage 1): every
 surface named above is real mechanics against `AttentionDataSource`
@@ -1671,6 +1671,62 @@ it in place), the edge-triggered/batched notification decision, and the
 what-changed capped history with its honest tombstone are all pure and
 unit-tested (`attention/*.test.ts`, 38 tests — `off-screen.test.ts`'s own 5
 predate this stage and are not counted here)._
+
+_Stage 2 landed (Track A, Batch 4): the derivation is `@plotroom/core`'s
+`attention/` subtree plus `apps/server/src/attention/`, and it is **one**
+derivation — six feeds in, one ranked list out, over records the product already
+keeps. Four things about it are decisions rather than implementation:_
+
+**Hiding is the source's job, and the ledger is durable.** `deriveAttention` is
+handed the persisted triage ledger on every derivation, so a muted item never
+leaves the server again and a snoozed one does not leave until its time is up. The
+ledger is rows (`attention_triage`, keyed by the item's own stable id, per
+consumer) for the reason the broadcast rate window is rows: a snooze held in memory
+comes back the moment the server does, which is the failure "bring it back later"
+exists to avoid. Every id is derived from the fact behind it — a question's own id,
+`driftItemKey`, a health alert's subject — because the outbound edge-trigger and
+the queue's selection both fold state forward **by id**, and an id minted per read
+would re-notify every open row on the next emission.
+
+**Health alerts are readings, and the tick is a scheduled read.** All five come
+from observation only (`core/attention/health.ts`, thresholds configurable):
+`idle` from the last observation that produced output — a tool call is not output,
+because a session compiling for twenty minutes is working; `spinning` from
+**both** halves, cost climbing _and_ a workspace nothing changed in, priced from
+what the runtime reported and therefore silent on a runtime that reports no cost;
+`conflict-predicted` in both of §7.2's directions, two active workstreams writing
+overlapping paths in one repository (identity is the configured source, so a
+worktree and its checkout are one) and overlapping waitlisted claims inside one;
+`unanswered` from a question or approval's age; and `blocked-on-you` from the time
+the operator has been the bottleneck, with **a claim wait alerting on its own
+threshold** because a queue behind another session and a queue behind a human are
+different bottlenecks. The queue is re-derived when something is observed to
+change; a slow tick (`PLOTROOM_ATTENTION_TICK_SECONDS`, default 30, `0` disables
+the schedule but never the endpoint) covers the two facts made true by time alone —
+a threshold coming due and a snooze elapsing. **That tick initiates nothing**:
+principle 2 forbids the product originating work, and a scheduled read that
+publishes a list nobody is obliged to act on starts no session, queues no run, and
+spends nothing. The stance is stated in `attention/tick.ts` rather than assumed.
+
+**A route attaches to a state, and carries a whitelist.** `notification_routes` has
+`state` and no node, session, or workstream column beside it (§7.3). Delivery is a
+generic JSON webhook — enough for a chat hook, a relay, or ntfy; push services need
+per-vendor credentials and payloads, which is plugin territory. The redaction rule
+is stated once, as a whitelist: **titles and summaries pass, content bodies never**
+— the body carries the item's id, feed, state, target ids, timestamp and one
+truncated summary, and `payload` is not on the wire at all, because a webhook
+cannot answer a row and does not need what answering takes. What each route has
+already sent is rows too (`notification_route_fires`), so a restart cannot re-fire
+every open item at once, and a delivery failure is **route health** rather than an
+exception: an unreachable webhook must never be able to stop the derivation that
+feeds it.
+
+**Completions and broadcasts have a window, and it is a decision.** A finished
+session and a session-originated broadcast stay in the queue for 24 hours unless
+triaged; after that they are history, and the session card is what shows them. A
+queue that accumulated every completion for ever is the inbox you cannot clear —
+the exact failure §7.1's triage verbs exist to prevent — and the alternative
+(dropping them on read) would make "acknowledge" meaningless._
 
 ### Epic 6.2 — Budgets and spend (`budgets`) — _done: enforcement and data (Track A) + the two panels (Track B, Stage 1)_
 
@@ -1777,14 +1833,14 @@ time-proportionally from `GET /api/sessions/:id/observations`, already live
 on main — no gap there. 15 tests (`fleet/derive.test.ts`,
 `fleet/data-source.test.ts`, `timeline/layout.test.ts`)._
 
-### Epic 6.3 — Approvals (`approvals`) — _domain landed; server and surfaces pending_
+### Epic 6.3 — Approvals (`approvals`) — _domain landed (Track C) and wired (Track A); the queue row is Track B's_
 
 - [x] Approval raise/answer semantics: the record outlives the call it blocks, approve-once or deny **with a reason returned to the session structurally** (§6.6) — `approvals/approval.ts`
 - [x] One payload every attention surface renders, answerable without opening the session (§6.6, §7.1) — `approvalAttention`; the queue rendering it is Track B's (below)
 - [x] Pre-grants per session / per workstream (§6.6) — `approvals/pre-grants.ts`, deny-wins precedence, `humanOnly` enforced
 - [x] Irreversibility pierces pre-grants: irreversible integration writes always ask (§6.6, §9.2) — structural: an irreversible ask has no pre-grantable form
 - [x] Agent-requested destruction of authored state routes through approvals; recoverable regardless (§6.6, principle 10) — `decideDestruction` over catalog metadata
-- [ ] Endpoints, stores, events, and the gate/claim-wait wiring — Track A's stage 2, against the contract below
+- [x] Endpoints, stores, events, and the gate/claim-wait wiring — Track A's stage 2, against the contract below
 - [ ] The queue row that answers one in place, and the other four surfaces (§7, §7.1) — Track B's Epic 6.1, over `ApprovalAttention`
 
 _Landed as `@plotroom/core`'s `sessions/approvals/` subtree plus the write gate's
@@ -1928,6 +1984,50 @@ scoped paths would be a second path-authority to keep in agreement. "A command t
 run", which §6.6 lists among the things a session may request, has no ask builder
 yet: the run path's own lineage and budget checks (§4.1) are what refuse it today,
 and routing it through here is Epic 6.2's boundary rather than this one's._
+
+_Wired (Track A, Batch 4 Stage 2): `approvals` and `pre_grants` (migration 23),
+`ApprovalStore`, `ApprovalService`, `GET/POST /api/approvals`, the pre-grant CRUD,
+and the two raise paths. Four things about the wiring are worth reading:_
+
+**An approval is matched by what it blocks, never by whose it is.** `settlesAsk`
+compares tool and target, so an ask with **no** target — every tool-permission and
+integration-write raise — degrades to matching on the tool alone. Nothing here ever
+looks one up by session: the gate matches by **call id** (`approvals_call_idx` is
+unique per session and call, so a re-raise finds the row already waiting rather
+than asking twice), the queue answers by **approval id**, and only a destruction
+ask, which always names its target, is matched by target. Looking one up by session
+would let an approved `shell` call authorize a different `shell` call the operator
+never saw.
+
+**A raised approval leaves the call blocked.** The gate's raise comes with a
+refusal, and sending it would settle the call before anybody was asked — the
+session would be told "no" to a question the operator was about to answer "yes". So
+the pump leaves the request open, exactly as it does for a question (§6.4), the
+phase derives as `waiting-approval` from PlotRoom's own record, and answering
+settles _that_ call through the live handle.
+
+**A session's destructive gesture never reaches the store.** `destructionGuard` is
+one middleware over the whole API, and which routes it covers is catalog metadata
+(`requires.destroys`) rather than a list of its own — the same property
+`decideDestruction` has upstream, and the reason a new destructive verb is covered
+by declaring one. A session's DELETE answers **202** with the approval row (accepted
+and waiting on a person: not a success, nothing was deleted; not a refusal, nothing
+said no), and the soft delete runs when the operator approves — **attributed to the
+session that asked**, because the operator authorized the gesture and the agent made
+it. An actor naming a session with no record fails closed: an approval belongs to a
+session, so there is nobody to raise one for.
+
+**A claim wait no policy covers becomes the same record.** Subscribed to the event
+stream rather than called from `ClaimService`, because `blockedOnHuman` is already
+derived and published by the claim manager, and a second notification path would be
+a second place to keep that derivation right. Answering the approval grants or
+denies the wait; a wait that was settled some other way stops asking rather than
+sitting in the queue about something that no longer exists.
+
+_Deferred: the approval reads and every triage/route verb are **operator-only with
+no agent tool at all**, recorded in `catalog.test.ts`'s `OPERATOR_ONLY_ROUTES` — the
+budgets precedent, for the budgets reason (principle 1). The write verbs are
+enforced by the actor as well as declared, the way the claim verbs are._
 
 ### Epic 6.4 — Run comparison and cross-run outcomes (`runs`) — _done (endpoints; no UI)_
 

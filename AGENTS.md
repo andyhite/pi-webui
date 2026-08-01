@@ -142,6 +142,21 @@ is a pure predicate (`isCompactable` in `@plotroom/core`) mirrored by
 `ObjectStore.compactVersions` — change both together, and keep the predicate as
 the place the rule is stated.
 
+**Attention is one derivation** (`@plotroom/core`'s `attention/`, joined by
+`apps/server/src/attention/`). Six feeds — questions, approvals, drift, health,
+completions, broadcasts — become one ranked list, and **hiding is the source's job**:
+a muted item never leaves the server again, a snoozed one does not leave until its
+time is up, and no surface holds a ledger of its own. Every item id is derived from
+the fact behind it, because the outbound edge-trigger and the queue's selection both
+fold state forward by id. §7.2's five health alerts are derived **from observation
+only**, with configurable thresholds. The queue is re-derived when something is
+observed to change, plus a slow tick (`PLOTROOM_ATTENTION_TICK_SECONDS`, default 30)
+for the two facts elapsed time alone makes true — a threshold coming due and a snooze
+elapsing. That tick is a scheduled **read** and initiates nothing (principle 2); the
+stance is stated in `attention/tick.ts`. Outbound routes (§7.3) attach to a state,
+fire edge-triggered by item id, and carry a **whitelist**: titles and summaries pass,
+content bodies never.
+
 **Graph rules are predicates in `@plotroom/core`, called by the store.** Never
 reimplement a rule at a call site — the canvas, the API, and agent tools must
 refuse identically (principle 8):
@@ -214,6 +229,25 @@ already told it?" cannot be answered from memory. The warning and the stop notic
 reach a session as an injection with `origin = 'budget-notice'` — PlotRoom answering,
 authoring nothing, rendered as the transcript's `feedback` entry sourced to `budget`
 (migration 21 widened that CHECK by rebuild).
+
+**Approvals, triage, and outbound routes** live in `approvals`, `pre_grants`,
+`attention_triage`, `notification_routes` and `notification_route_fires`
+(migration 23). An approval is a row because it **outlives the call it blocks**
+(§6.6), and it is matched by what it blocks rather than by whose it is: `settlesAsk`
+compares tool and target, so a target-less ask matches on the tool alone — the gate
+therefore matches by **call id** (unique per session and call, so a re-raise finds
+the row already waiting), the queue answers by **approval id**, and only a
+destruction ask is matched by target. A raised approval leaves the runtime call
+**blocked**, like a question: sending the refusal that accompanies a raise would
+settle the call before anybody was asked. Pre-grants have no expiry column, because
+one that lapsed on a clock would change what an agent may do with nobody behind it
+(principle 2), and are withdrawn rather than deleted. `attention_triage` is
+`@plotroom/core`'s `TriageLedger` at rest, keyed by the attention item's own stable
+id for **every** feed rather than for drift alone — durable because a snooze held in
+memory returns the moment the server does. A notification route attaches to a
+**state** and has no node column beside it (§7.3); what it has already sent is rows,
+so a restart cannot re-fire every open item, and a delivery failure is route health
+rather than an exception.
 
 **Scoped runs and the queue** live in `run_batches` / `run_queue` (migrations 13, 14
 and 15). One batch is one gesture over a scope; one entry is one command, admitted

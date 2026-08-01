@@ -8,6 +8,53 @@ implement the same interface server-side (`createApiAttentionDataSource`,
 which does not exist yet) and swap it in at `apps/web/src/App.tsx`'s one
 call site — nothing downstream should need to change.
 
+## Stage 2 has landed (Track A) — what to wire against
+
+The server-side derivation now exists and satisfies the interface below. What
+Track B's Stage-2 wiring needs, in one place:
+
+- **`GET /api/attention`** → `{ items: AttentionItem[], states: Record<itemId, AttentionState[]> }`.
+  `items` is the contract's list, already ranked and **already hidden**: muted and
+  snoozed items are not in it. `states` is additive and only for a surface that
+  wants to show what an outbound route would have caught; ignore it otherwise.
+- **WS `attention` events**, full-entity like every other entity on the stream:
+  `{entity: "attention", verb: "created"|"updated", item}` and
+  `{entity: "attention", verb: "deleted", itemId, reason: "resolved"|"triaged"}`.
+  The documented resync recipe applies unchanged — connect, buffer, fetch one real
+  snapshot, apply, then deliver. Ids are stable across a resync.
+- **Triage:** `POST /api/attention/:id/acknowledge | snooze | mute` (snooze takes
+  `{snoozedUntil}`, in Unix seconds, and refuses a time in the past), and
+  `DELETE /api/attention/:id/triage` to undo one. All four are operator-only,
+  enforced by the actor.
+- **The two answer hooks:** `answerQuestion` → `POST /api/questions/:id/answer`
+  with `{optionId}` (already on main), `decideApproval` →
+  `POST /api/approvals/:id/answer` with `{decision: "approve-once"|"deny", reason}`.
+  A denial needs a reason; the first answer wins (a second is a 409 carrying
+  `already_answered`). Answering **also acknowledges** in the sense the contract
+  requires: the source row stops asking, so the item leaves the list on the next
+  derivation — no separate triage call, and none is recorded.
+- **Other entities on the stream:** `approval` (raised/answered),
+  `pre_grant`, `notification_route`.
+- **Outbound routes (§7.3):** `GET/POST /api/notification-routes`,
+  `PATCH/DELETE /api/notification-routes/:id`. A route is `{name, state, url,
+enabled}` where `state` is `blocked | failed | wants-decision | anything`; each
+  row carries its delivery `health`.
+- **What changed while you were away:** `GET /api/activity?workstreamId=&cap=`
+  returns `{entries}` in `WorkstreamActivityEntry`'s exact shape (`id`,
+  `workstreamId`, `kind`, `text`, `at`, `targetNodeId`), derived rather than stored.
+- **The fleet gap is closed by `GET /api/fleet`**, which already returns today's
+  total, the biggest spender, running vs `concurrency.limit` **and the limit's
+  configured value**, plus queued and every budget. `FleetPanel` no longer needs to
+  aggregate per session or to know the shipped default.
+
+Two deviations from the fixture, both deliberate and neither a change to the
+interface: **ranks are the server's own numbers** (approval 0, question 100,
+blocking health 200, a decision-wanting end 300, other health 400, drift 500,
+proven completion 600, broadcast 700 — a surface still only sorts by them), and a
+**broadcast row's summary names the category and the reach rather than quoting the
+text**, because that text is content and the same summary goes out over a
+notification route.
+
 ## Why this shape
 
 Spec §7: "one derivation, many surfaces." The queue, node badges, off-screen
