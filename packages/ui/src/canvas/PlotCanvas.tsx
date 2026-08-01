@@ -81,6 +81,13 @@ export interface CanvasNodeInput {
    * which creates a workstream in one gesture (§3.5, §3.3).
    */
   readonly acceptsDefinitionDrop?: boolean;
+  /**
+   * The object/command/output/session this node stands for (a `PlacedNode`'s
+   * `refId`, spec §3.7) — opaque to the canvas itself, but what a host needs
+   * to resolve "what does this node mean" for a gesture like the one-gesture
+   * workstream flow (subject = the ticket's *object*, not its node).
+   */
+  readonly refId?: string;
 }
 
 export interface CanvasContainerInput {
@@ -135,11 +142,14 @@ export interface PlotCanvasProps {
   readonly createMenuOptions?: readonly CreateMenuOption[];
   /**
    * A command definition was dropped onto a bare ticket (§3.5): dropping a
-   * definition onto a bare ticket creates a workstream in one gesture. The
-   * host decides what "definition" was dragged (out of band, via its own
-   * drag source) and what to do with the result.
+   * definition onto a bare ticket creates a workstream in one gesture.
+   * `definitionId` is exactly what the drag source set as the
+   * `COMMAND_DEFINITION_DRAG_TYPE` payload (the palette's own entry id).
    */
-  readonly onDropDefinitionOnTicket?: (ticketNodeId: string) => void;
+  readonly onDropDefinitionOnTicket?: (
+    ticketNodeId: string,
+    definitionId: string,
+  ) => void;
   /**
    * A palette entry (§5) was dropped onto empty canvas — the palette rail's
    * drag sources place a not-yet-placed object. The host resolves the
@@ -167,7 +177,7 @@ type BoxNodeData = {
   routeSelected: boolean;
   /** Set when this is a bare ticket that accepts a dropped definition. */
   acceptsDefinitionDrop: boolean;
-  onDropDefinition?: () => void;
+  onDropDefinition?: (definitionId: string) => void;
   /** Graph warnings for this node (§5): flagged on the card, regardless of zoom. */
   warnings: readonly string[];
 };
@@ -226,7 +236,10 @@ function BoxNodeView({ data, id, selected }: NodeProps<BoxNode>) {
               if (
                 event.dataTransfer.types.includes(COMMAND_DEFINITION_DRAG_TYPE)
               ) {
-                data.onDropDefinition?.();
+                const definitionId = event.dataTransfer.getData(
+                  COMMAND_DEFINITION_DRAG_TYPE,
+                );
+                data.onDropDefinition?.(definitionId);
               }
             },
           }
@@ -440,7 +453,10 @@ function toBoxNode(
     readonly selectedNodeId: string | null;
     readonly placements: Placements;
     readonly collapsedContainerIds: ReadonlySet<string>;
-    readonly onDropDefinitionOnTicket?: (ticketNodeId: string) => void;
+    readonly onDropDefinitionOnTicket?: (
+      ticketNodeId: string,
+      definitionId: string,
+    ) => void;
     readonly warningsByNodeId?: ReadonlyMap<string, readonly string[]>;
   },
 ): BoxNode {
@@ -463,7 +479,10 @@ function toBoxNode(
       acceptsDefinitionDrop: input.acceptsDefinitionDrop ?? false,
       warnings: ctx.warningsByNodeId?.get(input.id) ?? [],
       ...(ctx.onDropDefinitionOnTicket
-        ? { onDropDefinition: () => ctx.onDropDefinitionOnTicket?.(input.id) }
+        ? {
+            onDropDefinition: (definitionId: string) =>
+              ctx.onDropDefinitionOnTicket?.(input.id, definitionId),
+          }
         : {}),
     },
   };

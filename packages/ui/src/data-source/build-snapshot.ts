@@ -57,6 +57,7 @@ export function buildGraphSnapshot(
     id: node.id,
     label: labelForNode(node.role, node.refId, state),
     role: node.role,
+    refId: node.refId,
     ...(node.running !== undefined ? { running: node.running } : {}),
     ...(node.workstreamId ? { containerId: node.workstreamId } : {}),
     defaultPosition: gridPosition(index),
