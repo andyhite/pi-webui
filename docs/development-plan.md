@@ -274,13 +274,22 @@ recoverability is the answer principle 10 gives._
 
 - [x] xyflow integration; nodes DOM-based (plugin renderers + a11y later, §11)
 - [x] Rigid-body push: custom drag handling + collision/push solver over node extents; chains propagate; at-rest stays put (§5)
-- [ ] Durable placement across restarts; derived initial arrangement; "reset arrangement" as the only auto-layout verb (§5) — _placement persistence landed behind a storage interface (localStorage until the server exists); derived initial arrangement and the reset verb remain_
+- [x] Durable placement across restarts; derived initial arrangement; "reset arrangement" as the only auto-layout verb (§5)
 - [x] Selection as the route: selected node reflected in the address; one navigation primitive for click/palette/queue/deep-link (§5)
 
 _Landed unstyled per the design gate (fleet rule 5), against fixture data in
 `apps/web`; mid-drag refusal wired through `isValidConnection` over
 `checkConnection`. Epic 3.0's server-served renderer and Electron
-spawn-or-attach wait for Phase 2 as planned._
+spawn-or-attach wait for Phase 2 as planned. **Batch 2 close-out:**
+`deriveInitialArrangement` (`packages/ui/src/placement/derive.ts`) is a pure
+topological layering over the graph's own edges — the fallback for any node
+with no stored placement, and the whole of "reset arrangement" (wired as a
+command palette verb in `apps/web/src/App.tsx`) when re-run over every node.
+Also landed as part of the same batch's Phase 3 polish: the additive canvas
+sync effect now reconciles live deletions — a node/edge another client
+deletes disappears from an already-open canvas (the Batch 1 finding),
+distinguishing a confirmed-then-removed id from an optimistic local-only one
+(`packages/ui/src/canvas/reconcile.ts`)._
 
 ### Epic 3.2 — Zoom, containers, and legibility (`canvas`) — _done (mechanics)_
 
@@ -516,12 +525,34 @@ directory-listing seam and no watch; and clone-from-a-PR-card is the same
 
 **Exit criteria:** run several sessions; inject content mid-flight and see it as a graph edge; answer a structured question from a bubble without opening a panel; stop at all three scopes.
 
-### Epic 5.1 — Conversation surface (`panels`, `sessions`)
+### Epic 5.1 — Conversation surface (`panels`, `sessions`) — _mechanics landed, Stage 1 of 2_
 
-- [ ] Conversation panel: streaming transcript, reasoning distinct from output, tool calls with I/O, message-level actions, export (§6.1, §11)
-- [ ] Bounded transcript with recoverable release: largest old tool outputs first, visible markers, reload, complete export (§6.1)
-- [ ] Drafts and prompt history persisted per session (§6.2)
-- [ ] Diff panel (read-only file tree + patches) (§11)
+- [x] Conversation panel: streaming transcript, reasoning distinct from output, tool calls with I/O, message-level actions, export (§6.1, §11)
+- [x] Bounded transcript with recoverable release: largest old tool outputs first, visible markers, reload, complete export (§6.1)
+- [x] Drafts and prompt history persisted per session (§6.2)
+- [x] Diff panel (read-only file tree + patches) (§11)
+
+_Stage 1 of 2 (Batch 2, Weeks 8–10): landed against `@plotroom/core`'s real
+session/transcript types, fixture-fed — no sessions server API exists yet
+(Track A, in parallel). `ConversationPanel` and `DiffPanel` are registered in
+the same `PanelRegistry`/`DockRail` Epic 3.4 established. Reasoning/output/
+tool-call partitioning and release-marker pairing are pure and unit-tested
+(`sessions/transcript-view.ts`); export reuses `@plotroom/core`'s
+`exportTranscript` over an async release-content loader
+(`sessions/export.ts`) so §6.1's completeness contract is untouched. Drafts
+and prompt history persist per session through a durable-store seam
+(`sessions/drafts.ts`) matching `placement/store.ts`'s pattern exactly
+(localStorage today, a server store later, no caller-visible change).
+`SessionDataSource` (`sessions/data-source.ts`) is the same seam pattern as
+`GraphDataSource`: `loadList`/`loadTranscript`/`loadReleasedContent` plus
+`subscribeList`/`subscribeTranscript`, full-entity and idempotent like every
+other event this codebase emits; the fixture implementation includes a
+scripted streaming playback for dev/tests. `WorkspaceDiff`
+(`diff/types.ts`) is this track's minimal shape for a server that doesn't
+exist yet. Composer send is a no-op hook against fixtures; message-level
+"wire as context" is a placeholder hook. Deferred to Stage 2: swapping the
+fixture `SessionDataSource` for a live one once Track A's sessions API
+lands, live transcript streaming, and the W10 Playwright milestone gate._
 
 ### Epic 5.2 — Injection, questions, broadcast (`sessions`)
 
