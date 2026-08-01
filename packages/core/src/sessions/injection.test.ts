@@ -1,14 +1,23 @@
 import { describe, expect, it } from "vitest";
 
+import type { Author } from "../author.js";
 import { humanAuthor, sessionAuthor } from "../author.js";
-import { newNodeId, newSessionId, type SessionId } from "../ids.js";
+import {
+  newEdgeId,
+  newNodeId,
+  newObjectId,
+  newSessionId,
+  type SessionId,
+} from "../ids.js";
 import type { LineageIndex } from "../lineage.js";
 import {
   EMPTY_INJECTIONS,
   checkInjection,
   deliveryDelay,
   injectionStatus,
+  injectionTitle,
   markDelivered,
+  planInjection,
   markRefused,
   queueInjection,
   queuedInjections,
@@ -17,6 +26,9 @@ import { endSession } from "./session.js";
 import { makeSession } from "./testing.js";
 
 const node = newNodeId();
+
+/** Nobody's chain: every session in these fixtures was started by a human. */
+const NO_LINEAGE: LineageIndex = { parentOf: () => null };
 
 function ledgerWithOne(sessionId: SessionId) {
   return queueInjection(EMPTY_INJECTIONS, {
@@ -140,5 +152,126 @@ describe("who may inject", () => {
     expect(
       checkInjection(index, sessionAuthor(newSessionId()), target),
     ).toEqual({ allowed: true });
+  });
+});
+
+describe("injection is authoring: the graph act (§6.5, principle 5)", () => {
+  const target = makeSession();
+  const targetNode = newNodeId();
+
+  function requestFrom(author: Author) {
+    return {
+      ids: {
+        injectionId: "inj-plan-1",
+        objectId: newObjectId(),
+        nodeId: newNodeId(),
+        edgeId: newEdgeId(),
+      },
+      targetNodeId: targetNode,
+      author,
+      text: "stop grepping; the answer is in docs/architecture.md\nsecond line",
+      ordinal: 3,
+      at: 4_000,
+    } as const;
+  }
+
+  it("leaves a content node and a context edge carrying its author", () => {
+    const request = requestFrom(humanAuthor);
+    const planned = planInjection(NO_LINEAGE, target, request);
+
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    expect(planned.plan.content).toMatchObject({
+      objectId: request.ids.objectId,
+      nodeId: request.ids.nodeId,
+      kind: "note",
+      scope: "local",
+      // Titled by its first line, so a graph of steering notes is readable.
+      title: "stop grepping; the answer is in docs/architecture.md",
+      body: request.text,
+    });
+    expect(planned.plan.edge).toEqual({
+      id: request.ids.edgeId,
+      kind: "context",
+      from: request.ids.nodeId,
+      to: targetNode,
+      author: humanAuthor,
+      ordinal: 3,
+      createdAt: 4_000,
+    });
+    expect(planned.plan.workstreamId).toBe(target.workstreamId);
+    expect(planned.plan.ledgerEntry).toEqual({
+      id: "inj-plan-1",
+      sessionId: target.id,
+      author: humanAuthor,
+      nodeId: request.ids.nodeId,
+      text: request.text,
+      queuedAt: 4_000,
+    });
+  });
+
+  it("is the same gesture for a session, with a session author", () => {
+    const peer = newSessionId();
+    const planned = planInjection(
+      NO_LINEAGE,
+      target,
+      requestFrom(sessionAuthor(peer)),
+    );
+
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    expect(planned.plan.edge.author).toEqual({
+      kind: "session",
+      sessionId: peer,
+    });
+    expect(planned.plan.ledgerEntry.author).toEqual({
+      kind: "session",
+      sessionId: peer,
+    });
+  });
+
+  it("refuses a session injecting into its own chain (principle 1)", () => {
+    const child = makeSession();
+    const index: LineageIndex = {
+      parentOf: (session) => (session === child.id ? target.id : null),
+    };
+
+    const planned = planInjection(
+      index,
+      child,
+      requestFrom(sessionAuthor(target.id)),
+    );
+
+    expect(planned.ok).toBe(false);
+    if (planned.ok) return;
+    expect(planned.refusal.reason).toBe("own_chain");
+  });
+
+  it("refuses an ended session before planning any content", () => {
+    const finished = endSession(makeSession(), {
+      kind: "completed",
+      at: 5_000,
+    });
+    const planned = planInjection(
+      NO_LINEAGE,
+      finished,
+      requestFrom(humanAuthor),
+    );
+
+    expect(planned.ok).toBe(false);
+    if (planned.ok) return;
+    expect(planned.refusal.reason).toBe("session_not_running");
+  });
+
+  it("titles an empty-ish injection honestly rather than blankly", () => {
+    expect(injectionTitle("   \n\n")).toBe("steering");
+    expect(injectionTitle(`${"x".repeat(200)}`)).toHaveLength(80);
+  });
+
+  it("replays to the same plan, so a retry writes the same rows (principle 9)", () => {
+    const request = requestFrom(humanAuthor);
+    expect(planInjection(NO_LINEAGE, target, request)).toEqual(
+      planInjection(NO_LINEAGE, target, request),
+    );
   });
 });

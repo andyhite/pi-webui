@@ -123,3 +123,52 @@ export function consumersDrift(
   if (!latest) return false;
   return consumedOrdinal < latest.ordinal;
 }
+
+/* ------------------------------------------------------ the gesture itself */
+
+/**
+ * The checkpoint **gesture** (§3.6, Epic 5.2), as opposed to the rule above.
+ *
+ * "Its consumers drift when the session ends or when someone — the session
+ * included — explicitly checkpoints it." Two surfaces make that gesture: the
+ * operator, from the conversation panel, and the session, through
+ * `session_checkpoint`. They are the same gesture with a different author, so
+ * they build the same event here rather than each constructing one — principle 8
+ * with nowhere for the two paths to diverge.
+ */
+export interface CheckpointGesture {
+  readonly by: Author;
+  readonly at: number;
+}
+
+export function checkpointEvent(gesture: CheckpointGesture): TranscriptEvent {
+  return { kind: "checkpoint", at: gesture.at, by: gesture.by };
+}
+
+/**
+ * What this gesture would do, before it is made. A checkpoint with nothing
+ * pending publishes nothing (the rule above), and a surface that offered it
+ * anyway would promise a version that never appears.
+ */
+export interface CheckpointPreview {
+  readonly publishes: boolean;
+  readonly pendingTurns: number;
+  readonly throughTurn: number;
+  readonly nextOrdinal: number;
+  readonly description: string;
+}
+
+export function previewCheckpoint(
+  state: TranscriptPublicationState,
+): CheckpointPreview {
+  const publishes = state.pendingTurns > 0;
+  return {
+    publishes,
+    pendingTurns: state.pendingTurns,
+    throughTurn: state.observedTurns,
+    nextOrdinal: state.publications.length + 1,
+    description: publishes
+      ? `publish turns through ${state.observedTurns} as version ${state.publications.length + 1}`
+      : "nothing new since the last publication; a checkpoint would publish nothing",
+  };
+}
