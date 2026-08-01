@@ -76,7 +76,7 @@ describe("createFixtureAttentionDataSource", () => {
       FIXTURE_ATTENTION_ITEMS,
       () => 0,
     );
-    await source.decideApproval("attn-approval-1", "approve", {
+    await source.decideApproval("attn-approval-1", "approve-once", {
       at: 0,
       by: humanAuthor,
     });

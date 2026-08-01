@@ -1,16 +1,27 @@
 /**
  * `AttentionDataSource` (§7): the one seam every attention surface reads
- * through. `createFixtureAttentionDataSource` is Stage 1's only
- * implementation — there is no `createApiAttentionDataSource` yet because
- * there is nothing server-side to call (Track A's Stage 2 job, see
- * `types.ts`'s doc comment for the handoff shape). The fixture carries
- * realistic scenarios, one per feed, so every surface in this package has
- * something concrete to render in dev/offline mode and in tests.
+ * through. `createApiAttentionDataSource` is the live implementation, over
+ * Track A's Stage 2 endpoints (`GET /api/attention`, the `attention` `/ws`
+ * entity, and the triage/answer routes — see `docs/attention-contract.md`).
+ * `createFixtureAttentionDataSource` stays for tests and `VITE_USE_FIXTURES`
+ * dev, behind the identical interface — the fixture carries realistic
+ * scenarios, one per feed, so every surface in this package has something
+ * concrete to render offline.
  */
 
-import { EMPTY_TRIAGE, humanAuthor, type TriageLedger } from "@plotroom/core";
+import {
+  EMPTY_TRIAGE,
+  humanAuthor,
+  type ApprovalDecision,
+  type DomainEvent,
+  type TriageLedger,
+} from "@plotroom/core";
 
+import type { HttpClient } from "../transport/http.js";
+import type { WebSocketFactory } from "../transport/ws.js";
+import { createReconnectingSocket } from "../transport/ws.js";
 import type { Unsubscribe } from "../data-source/types.js";
+import { parseWsMessage } from "../data-source/api.js";
 import {
   acknowledgeOnAnswer,
   applyQueueTriage,
@@ -217,7 +228,12 @@ export function createFixtureAttentionDataSource(
       return Promise.resolve();
     },
 
-    decideApproval(itemId, _decision, input: TriageActionInput): Promise<void> {
+    decideApproval(
+      itemId,
+      _decision,
+      input: TriageActionInput,
+      _reason?: string,
+    ): Promise<void> {
       ledger = acknowledgeOnAnswer(ledger, itemId, input);
       notify();
       return Promise.resolve();
@@ -228,4 +244,204 @@ export function createFixtureAttentionDataSource(
 /** Convenience for a caller that just wants an author-stamped "now". */
 export function humanTriageInput(at: number): TriageActionInput {
   return { at, by: humanAuthor };
+}
+
+/* ------------------------------------------------------------------- live */
+
+interface RawAttentionResponse {
+  readonly items: readonly AttentionItem[];
+}
+
+interface BufferState {
+  buffering: boolean;
+  events: DomainEvent[];
+}
+
+export interface ApiAttentionDataSourceOptions {
+  readonly http: HttpClient;
+  readonly createSocket: WebSocketFactory;
+}
+
+/**
+ * Live over `GET /api/attention` plus the `attention` `/ws` entity
+ * (`docs/attention-contract.md`). The server already hides what triage
+ * dismissed and already ranks the list, so this never re-derives, re-ranks,
+ * or re-filters anything — it only keeps a live map of ids to items current.
+ *
+ * The resync recipe is `createApiGraphDataSource`'s (connect, buffer,
+ * fetch one real snapshot, apply the rest, then deliver), adapted for an
+ * endpoint with no `seq` of its own: `GET /api/attention` is a point-in-time
+ * read with nothing to compare a buffered event's ordinal against, so every
+ * buffered event is simply replayed over the snapshot once it lands — each
+ * one is an idempotent upsert-or-delete by id, so replaying one already
+ * reflected in the snapshot changes nothing. What the recipe still buys
+ * here: a caller never sees a transient state older than what it already
+ * had, and (per `types.ts`'s NORMATIVE rule) never a bare `[]` mid-resync.
+ */
+export function createApiAttentionDataSource(
+  options: ApiAttentionDataSourceOptions,
+): AttentionDataSource {
+  const { http, createSocket } = options;
+
+  let itemsById = new Map<string, AttentionItem>();
+  let started = false;
+  let socket: ReturnType<typeof createReconnectingSocket> | null = null;
+  let currentBuffer: BufferState | null = null;
+  const listeners = new Set<(items: readonly AttentionItem[]) => void>();
+
+  function currentItems(): readonly AttentionItem[] {
+    return [...itemsById.values()];
+  }
+
+  function notify(): void {
+    const snapshot = currentItems();
+    for (const listener of listeners) listener(snapshot);
+  }
+
+  function applyEvent(event: DomainEvent): void {
+    if (event.entity !== "attention") return;
+    const next = new Map(itemsById);
+    if (event.verb === "deleted") {
+      next.delete(event.itemId);
+    } else {
+      next.set(event.item.id, event.item);
+    }
+    itemsById = next;
+  }
+
+  async function resync(buffer: BufferState): Promise<void> {
+    const raw = await http.get<RawAttentionResponse>("/api/attention");
+    // A newer (re)connect already moved on to its own buffer; this resync
+    // lost the race (same reasoning as the graph data source's own recipe).
+    if (currentBuffer !== buffer) return;
+
+    itemsById = new Map(raw.items.map((item) => [item.id, item]));
+    for (const event of buffer.events) applyEvent(event);
+    buffer.buffering = false;
+    buffer.events = [];
+    notify();
+  }
+
+  function ensureStarted(): void {
+    if (started) return;
+    started = true;
+
+    socket = createReconnectingSocket({
+      createSocket,
+      onStatusChange: (status) => {
+        if (status !== "open") return;
+        const buffer: BufferState = { buffering: true, events: [] };
+        currentBuffer = buffer;
+        void resync(buffer);
+      },
+      onMessage: (data) => {
+        const message = parseWsMessage(data);
+        if (!message || message.type !== "event" || !currentBuffer) return;
+        if (currentBuffer.buffering) {
+          currentBuffer.events.push(message.event);
+        } else {
+          applyEvent(message.event);
+          notify();
+        }
+      },
+    });
+  }
+
+  function stopIfIdle(): void {
+    if (listeners.size > 0) return;
+    socket?.close();
+    socket = null;
+    started = false;
+    currentBuffer = null;
+    itemsById = new Map();
+  }
+
+  return {
+    // Also seeds `itemsById`: a caller that reads once without subscribing
+    // (or subscribes later) can still `answerQuestion`/`decideApproval`
+    // immediately, since both resolve the real target id off this cache
+    // rather than off `AttentionItem.id`. Overwriting here is safe even
+    // mid-subscription — it is the same authoritative read `resync` uses.
+    list(): Promise<readonly AttentionItem[]> {
+      return http.get<RawAttentionResponse>("/api/attention").then((raw) => {
+        itemsById = new Map(raw.items.map((item) => [item.id, item]));
+        return raw.items;
+      });
+    },
+
+    subscribe(onChange): Unsubscribe {
+      listeners.add(onChange);
+      ensureStarted();
+      if (itemsById.size > 0) onChange(currentItems());
+
+      return () => {
+        listeners.delete(onChange);
+        stopIfIdle();
+      };
+    },
+
+    acknowledge(itemId): Promise<void> {
+      return http
+        .post(`/api/attention/${encodeURIComponent(itemId)}/acknowledge`, {})
+        .then(() => undefined);
+    },
+
+    snooze(itemId, input: SnoozeActionInput): Promise<void> {
+      return http
+        .post(`/api/attention/${encodeURIComponent(itemId)}/snooze`, {
+          snoozedUntil: input.snoozedUntil,
+        })
+        .then(() => undefined);
+    },
+
+    mute(itemId): Promise<void> {
+      return http
+        .post(`/api/attention/${encodeURIComponent(itemId)}/mute`, {})
+        .then(() => undefined);
+    },
+
+    /**
+     * The attention item id is not the question id: `payload.questionId`
+     * is the real target `POST /api/questions/:id/answer` needs. Answering
+     * also acknowledges by the contract, but that is the server's own
+     * doing (answering makes the row stop asking, so the next derivation
+     * omits it) — this never calls `acknowledge` itself, the same rule
+     * every other answer path in this package follows.
+     */
+    answerQuestion(itemId, optionId): Promise<void> {
+      const item = itemsById.get(itemId);
+      if (!item || item.payload.kind !== "question") {
+        return Promise.reject(
+          new Error(`${itemId} is not a question row (or is gone)`),
+        );
+      }
+      return http
+        .post(
+          `/api/questions/${encodeURIComponent(item.payload.questionId)}/answer`,
+          { optionId },
+        )
+        .then(() => undefined);
+    },
+
+    /** Same reasoning as `answerQuestion`: `payload.approvalId` is the real target. */
+    decideApproval(
+      itemId,
+      decision: ApprovalDecision,
+      _input,
+      reason?: string,
+    ): Promise<void> {
+      const item = itemsById.get(itemId);
+      if (!item || item.payload.kind !== "approval") {
+        return Promise.reject(
+          new Error(`${itemId} is not an approval row (or is gone)`),
+        );
+      }
+      return http
+        .post(
+          `/api/approvals/${encodeURIComponent(item.payload.approvalId)}/answer`,
+          { decision, ...(reason === undefined ? {} : { reason }) },
+        )
+        .then(() => undefined);
+    },
+  };
 }

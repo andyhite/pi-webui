@@ -7,15 +7,15 @@
  * "what needs attention" anywhere in this package; every surface is a pure
  * projection of the same ranked list.
  *
- * **This is Track A's Stage 2 handoff shape.** The derivation itself —
- * deciding what counts as idle, spinning, conflict-predicted, unanswered,
+ * **Track A's Stage 2 has landed** (`GET /api/attention` + the `attention`
+ * WS entity, `docs/attention-contract.md`'s own record of it). The
+ * derivation — idle, spinning, conflict-predicted, unanswered,
  * blocked-on-you (§7.2), and turning drift/questions/approvals/completions
- * into ranked items — lives server-side and does not exist yet. Everything
- * in this package is built against `createFixtureAttentionDataSource`
- * below, behind this same interface, so the live swap
- * (`createApiAttentionDataSource`, Stage 2) touches nothing downstream —
- * the exact seam `createApiQuestionDataSource` and `createApiGraphDataSource`
- * already established for their own feeds.
+ * into ranked items — lives server-side now; `createApiAttentionDataSource`
+ * (`data-source.ts`) is the live implementation, over the exact resync
+ * recipe `createApiQuestionDataSource`/`createApiGraphDataSource` already
+ * established. `createFixtureAttentionDataSource` stays for tests and
+ * `VITE_USE_FIXTURES` dev, behind the identical interface.
  *
  * Six feeds (§7.1, §6.5): `question`, `approval`, `drift`, `health`,
  * `completion`, `broadcast`. §6.5 is explicit that a session-originated
@@ -29,7 +29,7 @@
  * rather than six bespoke ones.
  */
 
-import type { Author } from "@plotroom/core";
+import type { ApprovalDecision, Author } from "@plotroom/core";
 
 import type { Unsubscribe } from "../data-source/types.js";
 
@@ -207,10 +207,21 @@ export interface AttentionDataSource {
     optionId: string,
     input: TriageActionInput,
   ): Promise<void>;
-  /** An `approval` row's inline decision (§6.6, §7.1) — also acknowledges. */
+  /**
+   * An `approval` row's inline decision (§6.6, §7.1) — also acknowledges.
+   * `decision` is `@plotroom/core`'s own `ApprovalDecision` (`"approve-
+   * once" | "deny"`, from `APPROVAL_ANSWER_OPTIONS`) rather than a
+   * synthetic `"approve"` this layer would have to translate — there is
+   * only ever one approve shape (§6.6 never offers a standing yes from
+   * this row; that is a pre-grant, a different gesture entirely).
+   * `reason` is required for `"deny"` and refused for anything else
+   * (`APPROVAL_ANSWER_OPTIONS`'s own `requiresReason` states which) —
+   * "declining is feedback the session acts on, never a bare refusal".
+   */
   decideApproval(
     itemId: string,
-    decision: "approve" | "deny",
+    decision: ApprovalDecision,
     input: TriageActionInput,
+    reason?: string,
   ): Promise<void>;
 }

@@ -24,7 +24,12 @@
  *     clicking its own button; the queue is a lens, §5)
  *   - `1`–`9` — on a highlighted `question` row, answer with the Nth
  *     option (1-indexed)
- *   - `a` / `d` — on a highlighted `approval` row, approve / deny
+ *   - `a` — on a highlighted `approval` row, approve once
+ *   - `d` — on a highlighted `approval` row, deny using whatever reason
+ *     is currently typed into its row (a deny with no reason is refused
+ *     server-side, §6.6 — "declining is feedback... never a bare
+ *     refusal" — so the binding is a no-op until one is typed, same as
+ *     the row's own deny button being disabled)
  *
  * A full shortcuts overlay (§11: "every binding appears in a shortcuts
  * overlay") does not exist anywhere in this codebase yet — a pre-existing
@@ -35,6 +40,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { APPROVAL_ANSWER_OPTIONS } from "@plotroom/core";
 
 import { moveQueueSelection, rankAttentionItems } from "./queue.js";
 import type {
@@ -79,6 +85,10 @@ export function QueuePanel({
 }: QueuePanelProps) {
   const [items, setItems] = useState<readonly AttentionItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // A deny needs a reason (§6.6: "declining is feedback... never a bare
+  // refusal") — typed per row, keyed by item id, so several approval rows
+  // never clobber each other's draft.
+  const [denyReasons, setDenyReasons] = useState<Record<string, string>>({});
 
   useEffect(() => {
     const unsubscribe = dataSource.subscribe((next) => {
@@ -153,14 +163,22 @@ export function QueuePanel({
         event.preventDefault();
         void dataSource.decideApproval(
           highlighted.id,
-          "approve",
+          "approve-once",
           triageInput(),
         );
         return;
       }
       if (event.key === "d") {
-        event.preventDefault();
-        void dataSource.decideApproval(highlighted.id, "deny", triageInput());
+        const reason = denyReasons[highlighted.id]?.trim();
+        if (reason) {
+          event.preventDefault();
+          void dataSource.decideApproval(
+            highlighted.id,
+            "deny",
+            triageInput(),
+            reason,
+          );
+        }
         return;
       }
     }
@@ -208,26 +226,51 @@ export function QueuePanel({
 
           {item.payload.kind === "approval" ? (
             <span>
-              <button
-                type="button"
-                onClick={() =>
-                  void dataSource.decideApproval(
-                    item.id,
-                    "approve",
-                    triageInput(),
-                  )
-                }
-              >
-                approve
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  void dataSource.decideApproval(item.id, "deny", triageInput())
-                }
-              >
-                deny
-              </button>
+              {APPROVAL_ANSWER_OPTIONS.map((option) =>
+                option.requiresReason ? (
+                  <span key={option.decision}>
+                    <input
+                      type="text"
+                      aria-label={`${option.label} reason for ${item.id}`}
+                      value={denyReasons[item.id] ?? ""}
+                      onChange={(event) =>
+                        setDenyReasons((current) => ({
+                          ...current,
+                          [item.id]: event.target.value,
+                        }))
+                      }
+                    />
+                    <button
+                      type="button"
+                      disabled={!denyReasons[item.id]?.trim()}
+                      onClick={() =>
+                        void dataSource.decideApproval(
+                          item.id,
+                          option.decision,
+                          triageInput(),
+                          denyReasons[item.id]?.trim(),
+                        )
+                      }
+                    >
+                      {option.label}
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    key={option.decision}
+                    type="button"
+                    onClick={() =>
+                      void dataSource.decideApproval(
+                        item.id,
+                        option.decision,
+                        triageInput(),
+                      )
+                    }
+                  >
+                    {option.label}
+                  </button>
+                ),
+              )}
             </span>
           ) : null}
 
