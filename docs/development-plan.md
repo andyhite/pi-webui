@@ -1659,11 +1659,18 @@ routing (§7.3, push/webhook) are explicitly out of this stage — both need
 Track A's Stage 2 backend (session health signals, a routes store) that does
 not exist yet; their in-app-surface halves (a `health` feed item and its
 rendering, an edge-triggered in-app system notification) are landed and
-waiting for real items to flow through them. The queue's j/k traversal, its
-answer-in-place per feed, `visibleAttentionItems`'s rank+triage filtering,
-the edge-triggered/batched notification decision, and the what-changed
-capped history with its honest tombstone are all pure and unit-tested
-(`attention/*.test.ts`, 47 tests)._
+waiting for real items to flow through them. Six feeds, not five: a
+`broadcast` row (§6.5's "a session-originated broadcast appears in the
+queue") was added in review, alongside a normative fix making
+hide-while-snoozed/muted explicitly the *data source's* job (never a
+surface re-filtering with its own ledger — `queue.ts#rankAttentionItems`
+is what a surface calls; `visibleAttentionItems` is what a conforming
+source calls over its own real ledger before it ever emits). The queue's
+j/k traversal (plus Enter to navigate the highlight, and 1–9/a/d to answer
+it in place), the edge-triggered/batched notification decision, and the
+what-changed capped history with its honest tombstone are all pure and
+unit-tested (`attention/*.test.ts`, 38 tests — `off-screen.test.ts`'s own 5
+predate this stage and are not counted here)._
 
 ### Epic 6.2 — Budgets and spend (`budgets`) — _the two UI panels landed (Track B, Batch 4); accounting/budgets/enforcement remain Track A's_
 
@@ -1684,11 +1691,16 @@ limit's configured *value* has no read endpoint anywhere (`apps/server/src/
 config.ts` resolves it at boot and never publishes it); `createApiFleetDataSource`
 takes it as a parameter defaulting to the shipped default, with a `TODO`
 in `fleet/types.ts`/`fleet/data-source.ts` naming exactly what a fleet
-aggregate endpoint should add. The Timeline panel
+aggregate endpoint should add. `queuedCount` counts only entries in the
+`queued` state (`@plotroom/core`'s own `isQueuedRunStartable` predicate) —
+`GET /api/run-queue`'s `queued` array also carries `starting`/`running`/
+`needs_reask`/`paused` entries, which hold a concurrency slot or are
+mid-flight rather than admitted-but-waiting, and an earlier version of this
+panel counted all of them (a review-caught over-count). The Timeline panel
 (`packages/ui/src/timeline/`) lays out turns and tool calls
 time-proportionally from `GET /api/sessions/:id/observations`, already live
-on main — no gap there. 24 new tests (fleet aggregation, timeline layout
-math)._
+on main — no gap there. 15 tests (`fleet/derive.test.ts`,
+`fleet/data-source.test.ts`, `timeline/layout.test.ts`)._
 
 ### Epic 6.3 — Approvals (`approvals`) — _domain landed; server and surfaces pending_
 

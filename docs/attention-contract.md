@@ -21,7 +21,7 @@ list for that property to hold end to end.
 
 ```ts
 export type AttentionFeed =
-  "question" | "approval" | "drift" | "health" | "completion";
+  "question" | "approval" | "drift" | "health" | "completion" | "broadcast";
 
 export interface AttentionTarget {
   readonly nodeId: string;
@@ -29,12 +29,18 @@ export interface AttentionTarget {
   readonly sessionId?: string;
 }
 
+/** Matches @plotroom/core's SessionQuestion.options shape (id + label). */
+export interface AttentionQuestionOption {
+  readonly id: string;
+  readonly label: string;
+}
+
 export type AttentionAnswerPayload =
   | {
       kind: "question";
       questionId: string;
       text: string;
-      options: readonly string[];
+      options: readonly AttentionQuestionOption[];
     }
   | { kind: "approval"; approvalId: string; capability: string }
   | { kind: "drift"; objectId: string; changedSummary: string }
@@ -47,9 +53,27 @@ export type AttentionAnswerPayload =
         | "unanswered"
         | "blocked-on-you";
     }
-  | { kind: "completion"; sessionId: string };
+  | { kind: "completion"; sessionId: string }
+  | {
+      // @plotroom/core's BroadcastAttention (sessions/broadcast.ts), on
+      // main already: §6.5 "a session-originated broadcast appears in the
+      // queue." No answer beyond triage — the operator is told, not asked.
+      kind: "broadcast";
+      broadcastId: string;
+      category: string;
+      recipientCount: number;
+    };
 
 export interface AttentionItem {
+  /**
+   * MUST be stable across a resync (REQUIRED). The notification
+   * edge-trigger and the queue's own selection both key on this id across
+   * separate `subscribe()` emissions — an id regenerated per read would
+   * make an already-seen item look new (spurious re-notification) and
+   * silently drop the queue's highlight. Derive it from the underlying
+   * fact (a question's own id, `driftItemKey` for drift, ...), never mint
+   * a fresh one per read.
+   */
   readonly id: string;
   readonly feed: AttentionFeed;
   readonly target: AttentionTarget;
@@ -59,10 +83,39 @@ export interface AttentionItem {
   readonly summary: string;
   readonly payload: AttentionAnswerPayload;
   readonly raisedAt: number;
-  /** Set by a prior snooze; the item keeps arriving (snoozed, not gone) until `now >= snoozeUntil`. */
+  /**
+   * Informational only, not something a surface filters on (see the
+   * NORMATIVE rule below). `null` whenever the item is not currently
+   * snoozed, including immediately after it returns — a stale non-null
+   * value here would be indistinguishable from "still hidden."
+   */
   readonly snoozeUntil: number | null;
 }
 ```
+
+### NORMATIVE: hiding is the source's job, not a surface's
+
+**This corrects a self-contradiction an earlier draft of this contract had**
+(caught in Batch 4 review): the source, not the queue or any other surface,
+MUST exclude every item a `mute` has permanently dismissed and every item a
+`snooze` has not yet released, _before_ `list()`/`subscribe()` ever emits it.
+`createFixtureAttentionDataSource` (`data-source.ts`) is the reference
+implementation — it filters its own real `TriageLedger` through
+`queue.ts#visibleAttentionItems` on every emission. A surface never holds a
+ledger of its own and never re-filters; it only ranks what it is given
+(`queue.ts#rankAttentionItems`, which `QueuePanel` calls — it used to call
+`visibleAttentionItems` against an always-empty ledger, which filtered
+nothing and only pretended to double-check triage state it had no real copy
+of; that call is gone now).
+
+**A live implementation must also never emit a transient empty snapshot
+during a resync.** Follow the same discipline `createApiQuestionDataSource`/
+`createApiGraphDataSource` already do: connect, buffer incoming events,
+apply one real snapshot, and only then start delivering — never a bare `[]`
+in between. Beyond staleness, a spurious empty emission here would make
+`notifications.ts`'s edge-trigger (`nextNotificationEdgeState` folds its
+state forward _by id_) treat every currently-open item as brand new on the
+very next real emission and re-fire a notification for all of them at once.
 
 Plus triage verbs and two feed-specific answer hooks — the full interface:
 
@@ -76,6 +129,10 @@ interface AttentionDataSource {
     input: { at: number; by: Author; snoozedUntil: number },
   ): Promise<void>;
   mute(itemId: string, input: { at: number; by: Author }): Promise<void>;
+  // optionId is the real id off the picked AttentionQuestionOption, never
+  // its label — the row always carries both, so there is no label→id
+  // resolution anywhere downstream of this call (a live source populates
+  // options from SessionQuestion.options directly, id and label both).
   answerQuestion(
     itemId: string,
     optionId: string,
@@ -91,29 +148,38 @@ interface AttentionDataSource {
 
 ## What the UI already assumes, load-bearing
 
-- **Muted items never appear again.** `mute` is permanent; the source should
-  simply stop emitting that id, not merely flag it (the fixture's own
-  `visibleAttentionItems` re-application on every `list()`/`subscribe()`
-  emission is the reference behavior — see `data-source.ts`).
-- **A snoozed item keeps arriving**, with `snoozeUntil` set, until the clock
-  passes it — that is what lets the queue and the fixture both derive
-  visibility from `@plotroom/core`'s `triageStatus` rather than the source
-  hiding it outright. If a live source _does_ hide it while snoozed, it must
-  resume emitting the item (with `snoozeUntil: null` again) once the time is
-  up — dropping it silently forever would be indistinguishable from a mute.
+- **Muted items never appear again, and hiding is the source's job** — see
+  the NORMATIVE section above; this is the corrected version of a rule an
+  earlier draft stated but did not actually implement consistently.
+- **A snoozed item stops arriving while hidden, and returns with
+  `snoozeUntil: null`** once the source's own clock says its time is up.
+  Dropping it silently forever would be indistinguishable from a mute;
+  reporting a stale `snoozeUntil` after it returns would be indistinguishable
+  from still being hidden.
 - **Answering also acknowledges.** `answerQuestion`/`decideApproval` are
   expected to behave as "the item leaves the queue" in the same gesture —
   the UI never calls `acknowledge` separately after answering.
-- **Triage is the one ledger.** All five feeds use the same three verbs
+- **Triage is the one ledger.** All six feeds use the same three verbs
   (§4.5). A live implementation is expected to key triage records by
   `AttentionItem.id`, exactly like `@plotroom/core`'s `TriageLedger` already
   does for drift (`driftItemKey`) — extended here to every feed rather than
   drift alone.
-- **`rank` is assigned upstream.** The queue (`attention/queue.ts`'s
-  `visibleAttentionItems`) only ever sorts by `rank` ascending, tie-broken by
+- **`rank` is assigned upstream.** A surface (`attention/queue.ts`'s
+  `rankAttentionItems`) only ever sorts by `rank` ascending, tie-broken by
   `raisedAt` ascending. Track A's derivation decides what "more urgent" means
   across feeds (an unanswered approval outranking a drift flag, say) — the UI
   has no opinion and never will.
+- **Question options carry real ids.** `AttentionQuestionOption` is
+  `{id, label}`, matching `SessionQuestion.options` (`bubbles/question-
+source.ts`) directly — a live source should populate it verbatim rather
+  than flattening to labels, which is what made the earlier `string[]`
+  shape a lie about what `answerQuestion`'s `optionId` parameter actually
+  needs.
+- **Ids are stable across resync**, and a resync never emits a transient
+  `[]` — both above, in the NORMATIVE section, because getting either wrong
+  breaks the notification edge-trigger and the queue's own selection
+  tracking in ways that only show up after the first reconnect, not in an
+  initial-load test.
 
 ## Gaps Track A's Stage 2 needs to close (not fixture-fakeable from here)
 
@@ -139,8 +205,9 @@ interface AttentionDataSource {
 
 ## What Track B already proved works against this shape
 
-- `visibleAttentionItems`, `moveQueueSelection`, `acknowledgeOnAnswer` —
-  ranking, clamped j/k traversal, and the answer-also-acknowledges rule
+- `rankAttentionItems`, `visibleAttentionItems`, `moveQueueSelection`,
+  `acknowledgeOnAnswer` — the surface/source ranking split above, clamped
+  j/k traversal, and the answer-also-acknowledges rule
   (`attention/queue.test.ts`).
 - `decideNotification` / `nextNotificationEdgeState` — edge-triggered,
   batched, and correctly re-fires once a snoozed item returns
@@ -156,6 +223,9 @@ badge.ts` (`applyBadgeCount`) wired through a minimal `contextBridge`
   (`apps/desktop/src/main.ts`); `apps/web` calls `window.plotroom?.
 setBadgeCount(...)`, feature-detected, no-op in a plain browser tab.
 
-47 tests across `packages/ui/src/attention/*.test.ts` exercise every pure
-function above; none of them need a live server to pass, and none of them
-should need to change once one exists.
+38 tests across `packages/ui/src/attention/*.test.ts` exercise every pure
+function above (`queue.test.ts`, `data-source.test.ts`, `notifications.
+test.ts`, `surfaces.test.ts`, `what-changed.test.ts` — `off-screen.test.ts`'s
+own 5 predate this stage and are not counted here); none of them need a
+live server to pass, and none of them should need to change once one
+exists.
