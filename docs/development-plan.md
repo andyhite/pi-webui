@@ -967,6 +967,61 @@ workspace/diff server endpoint had landed on `main` as of this rebase, so
 own doc comment states the exact swap point for `GET
 /api/workstreams/:id/diff`._
 
+_**Live steering wiring (Batch 3, Weeks 11–14, Stage 2 of this track's own
+two stages)**, once Track A's Epic 5.2/5.4 steering endpoints merged to
+`main`: the composer's send now calls `injectIntoSession` (`POST
+/sessions/:id/inject`) instead of rendering permanently disabled, with the
+ledger's queued/delivered state read live via a new `SessionDataSource.
+subscribeInjections` (the same refetch-on-relevant-event recipe
+`subscribeTranscript` already used, except delivery rides the session's own
+`updated` event rather than `session_observation` — the driver's
+`markDelivered` changes derived status, never the observation log).
+`DiffPanel` is live by default too: `createApiDiffDataSource` reads `GET
+/api/workstreams/:id/diff` (now merged), addressed by workstream id rather
+than workspace id, with `WorkspaceDiff`'s shape corrected to match the real
+response (`state`/`reason`/`base`, not just a flat file list) and every
+not-ready state rendered honestly instead of folding into "no changes".
+Resume-vs-fork (§6.3) is mechanics-complete: once a session has ended,
+`ConversationPanel` replaces its whole composer — not merely disables it —
+with exactly two choices, `resumeSession`/`forkSession` over Track A's
+`POST /sessions/:id/(resume|fork)`; there is no third path back to typing
+into an ended session. Handoff and continue-vs-fresh's own UI (a brief
+draft/review flow, a side-by-side cost preview) are deliberately deferred —
+not gate-tested, and the two gestures landed here already cover what §6.3's
+"never implicit on typing" needs proven._
+
+_**A real bug the W14 gate found, not a fixture:** every bubble subscription
+(session sayings, tool-in-flight, the injection ledger, structured
+questions) was keyed by a session's own id where it needed the canvas
+node's id — the two coincide in every fixture (`sessionCanvasNode` sets
+both to `session.id`), which is exactly what let this go unnoticed through
+an entire window of fixture-fed unit tests. Only a real server, whose node
+ids are generated separately from the session ids they stand for,
+disagreed. Fixed as `{ nodeId, sessionId }` pairs kept explicit rather than
+one list read two ways (`App.tsx`)._
+
+_**THE W14 MILESTONE GATE**: `apps/web/e2e/steering.spec.ts` (Playwright,
+same harness convention as W10, extended with a per-run `runtime.script`
+and a raised concurrency limit so five sessions start at once) proves,
+against the actually-served page: injecting mid-flight from the composer,
+delivered on both the injection list and the canvas bubble, with a real
+graph content node behind the ledger row; a structured question's bubble
+answered **inline from the bubble**, never the panel, after which the
+blocked act resumes; and stop at three scopes — one session, a workstream
+of two (no confirmation), then everything running (confirmed) — every
+stopped session proven via a direct API read to have ended `stopped`. Not
+asserted: a `queued` window on the injection ledger, because the scripted
+runtime's own `inject()` delivers immediately rather than modeling pi's
+real between-turn queueing (a genuine discovery, documented in the gate's
+own file, not an oversight); and an "ends itself as completed" claim, tried
+for the ask leg and refused server-side (an `open` lifecycle session has no
+outcome to prove `completed` against, §3.5 principle 3) — "resumes and
+completes" is proven instead as the post-answer turn actually playing on.
+Break-verified for the question-bubble leg (temporarily disabling
+`question-source.ts`'s `session_question` WS branch made the bubble
+genuinely time out; restored and reran clean); 5 consecutive clean runs
+recorded._
+
 ### Epic 5.2 — Injection, questions, broadcast (`sessions`) — _done_
 
 - [x] Injection as new turn + permanent graph content wired to the session (§6.5, principle 5); queued → delivered states for between-turn delivery — `planInjection` produces the content node, the authored context edge, and the ledger entry; the pi adapter's real between-turn delivery is verified against a live pi
@@ -1142,7 +1197,7 @@ preset yet. And a batch `archive` archives the member's **workstream**, which is
 where §6.8's archive verb lives; archiving one session out of several in a
 workstream has no representation, and that is worth a decision rather than a guess._
 
-### Epic 5.3 — Speech bubbles on canvas (`canvas`) — _mechanics landed Batch 3 (Weeks 11–14), fixture-fed where noted below_
+### Epic 5.3 — Speech bubbles on canvas (`canvas`) — _mechanics landed Batch 3 (Weeks 11–14); live by Stage 2 of the same window (see below)_
 
 - [x] Attributed bubbles per sender node; tool-in-flight chips (§5)
 - [x] Constraints: never obscure minimap/controls, width-capped, collapse to counts unfocused, global cap on simultaneous bubbles (§5)
@@ -1164,17 +1219,21 @@ real streams into that engine: a command's dispatched prompt from the live
 `GraphSnapshot.warningFacts` assembled-content already flowing to the
 canvas, and a session's latest saying / a distinct tool-in-flight chip from
 the live `SessionDataSource` (`subscribeTranscript`/`subscribeSession`,
-wired per session-role node in `apps/web/src/App.tsx`). Two sources stay
-fixture-fed, both for the same reason — no stream in the codebase carries
-them yet: structured questions (§6.4, `bubbles/question-source.ts`'s
-`QuestionDataSource`, answerable inline via `onAnswerQuestion` — no server
-endpoint exists, and `SessionStatus` exposes only the derived
-`waiting-input` phase, never the `RuntimeRequest` behind it) and injection
-queued/delivered states (§6.5, `bubbles/derive-sources.ts`'s
-`deriveInjectionBubbleSources` over core's real `InjectionLedger` shape,
-fed by a fixture ledger since Epic 5.2's injection endpoint has not landed).
-Both are ready to be joined by a live source without changing shape — the
-same swap `createApiSessionDataSource` already did for its own fixture._
+wired per session-role node in `apps/web/src/App.tsx`). Two sources stayed
+fixture-fed at first landing, both for the same reason — no stream in the
+codebase carried them yet: structured questions and injection queued/
+delivered states. **Both went live in the same window** (Batch 3's Stage 2,
+once Track A's steering endpoints merged): `createApiQuestionDataSource`
+(`bubbles/question-source.ts`) bootstraps every session's questions once
+and keeps current off the `/ws` `session_question` entity;
+`deriveInjectionBubbleSources` now reads each session's live ledger via the
+new `SessionDataSource.subscribeInjections`. Offline/fixture mode
+(`VITE_USE_FIXTURES=1`) still falls back to the fixtures — the same swap
+`createApiSessionDataSource` already did for its own fixture, now exercised
+rather than only promised. Proven end to end by the W14 gate (Epic 5.1's
+own landed-note), which also found and fixed a real bug this swap exposed:
+every bubble subscription was keyed by session id where it needed the
+canvas node id, invisible through fixtures where the two always coincide._
 
 _**Post-landing review fixes** (same window): a node inside a workstream
 container — the normal case for a session or command once a workstream
@@ -1224,7 +1283,7 @@ is closed now, where the first pass only closed it on paper._
 - [x] Handoff: source-written brief, human-edited before send (§6.3) — `draftHandoffBrief` → `reviewHandoffBrief` → `planHandoff`, where sending an unreviewed brief is a type error
 - [x] Continue-vs-fresh on re-run: side-by-side cost preview; window-fit gate; divergence forces fresh (§4.3) — `compareContinueVsFresh`, which describes the option it refused as well as the one it allows
 - [x] Stop at three scopes with counts and widest-scope confirm (§6.7) — `resolveStop`
-- [x] Endpoints for all of the above — Track A's stage 2; landed (see the server note below). _The UI is Track B's and still open._
+- [x] Endpoints for all of the above — Track A's stage 2; landed (see the server note below). _Track B's UI: resume-vs-fork and stop-at-three-scopes mechanics landed Batch 3 Weeks 11–14 (see Epic 5.1's own landed-note and the W14 gate); handoff's brief draft/review flow and continue-vs-fresh's side-by-side preview UI are deliberately deferred — not gate-tested, and neither has UI mechanics yet._
 
 _Landed as `continuation.ts`, `handoff.ts`, `outside-world.ts`, and additions to
 `fork.ts`, plus the pi adapter's real fork._
@@ -1775,10 +1834,16 @@ Phase 0 and Epic 1.1 are complete; week 1 starts from the current state of
 | Track | Work                                                                                                                                                                                                                                                                     |
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | A     | Epic 5.5 scoped runs, concurrency queue, preview-is-the-contract — _landed, with the Epic 4.4/4.5 server carry-overs (claims persistence + enforcement, delegation attribution), the workspace diff read, and stage 2's steering endpoints (Epic 5.2/5.4 server halves)_ |
-| B     | Epic 5.1 finished ahead of schedule (done at the W10 gate above); Epic 5.3 speech bubbles                                                                                                                                                                                |
+| B     | Epic 5.1 finished ahead of schedule (done at the W10 gate above); Epic 5.3 speech bubbles (mechanics, then live once A/C's steering endpoints merged); Stage 2 live steering wiring — inject, questions, diff, stop, run-queue admission, resume/fork — and the W14 gate |
 | C     | Epic 5.2 injection/questions/broadcast; Epic 5.4 resume/fork/handoff                                                                                                                                                                                                     |
 
-**🏁 Milestone (end W14):** the originating-problem demo — many sessions, inject mid-flight, answer a question from a bubble, stop at three scopes.
+**🏁 Milestone (end W14) — PASSED:** the originating-problem demo — many
+sessions, inject mid-flight, answer a question from a bubble, stop at three
+scopes. Proven by `apps/web/e2e/steering.spec.ts` (Playwright, same
+real-server/real-browser convention as W10) — run via `pnpm --filter
+@plotroom/web e2e`, deliberately not part of `pnpm verify`; 5 consecutive
+clean runs recorded, and the question-bubble leg break-verified (see Epic
+5.1's own landed-note for both).
 
 **Weeks 15–18 — Attention & money (Phase 6)**
 
