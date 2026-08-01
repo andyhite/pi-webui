@@ -26,7 +26,11 @@ import { useEffect, useState } from "react";
 import type { SessionId, Transcript, TranscriptExport } from "@plotroom/core";
 import { restoreReleased } from "@plotroom/core";
 
-import type { SessionDataSource, SessionDetail } from "./data-source.js";
+import type {
+  InjectionLedgerEntry,
+  SessionDataSource,
+  SessionDetail,
+} from "./data-source.js";
 import type { SessionDraftsStore } from "./drafts.js";
 import { exportIncompleteMessage, exportTranscriptAsync } from "./export.js";
 import { buildTranscriptView } from "./transcript-view.js";
@@ -121,6 +125,12 @@ export function ConversationPanel({
   const [loadedBack, setLoadedBack] = useState<ReadonlyMap<string, string>>(
     new Map(),
   );
+  // The injection ledger (§6.5): queued→delivered, live. A delivered entry
+  // also shows up as its own transcript entry once the runtime has taken
+  // it into a turn; this list is what makes "queued" visible before that.
+  const [injections, setInjections] = useState<readonly InjectionLedgerEntry[]>(
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -147,10 +157,18 @@ export function ConversationPanel({
         setTranscript(event.transcript);
       },
     );
+    const unsubscribeInjections = dataSource.subscribeInjections(
+      sessionId,
+      (event) => {
+        if (cancelled) return;
+        setInjections(event.injections);
+      },
+    );
     return () => {
       cancelled = true;
       unsubscribeSession();
       unsubscribeTranscript();
+      unsubscribeInjections();
     };
   }, [sessionId, dataSource, draftsStore]);
 
@@ -369,6 +387,30 @@ export function ConversationPanel({
         </button>
         {sendDisabledReason !== undefined ? (
           <div data-testid="send-disabled-reason">{sendDisabledReason}</div>
+        ) : null}
+        {injections.length > 0 ? (
+          <ul>
+            {injections.map((entry) => (
+              <li
+                key={entry.id}
+                data-testid={`injection-${entry.id}`}
+                data-injection-status={
+                  entry.refusedAt !== null
+                    ? "refused"
+                    : entry.deliveredAt === null
+                      ? "queued"
+                      : "delivered"
+                }
+              >
+                {entry.text} —{" "}
+                {entry.refusedAt !== null
+                  ? "refused"
+                  : entry.deliveredAt === null
+                    ? "queued"
+                    : "delivered"}
+              </li>
+            ))}
+          </ul>
         ) : null}
       </div>
     </div>
