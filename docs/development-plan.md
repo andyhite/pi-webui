@@ -338,45 +338,87 @@ while command definitions keep the existing bare-ticket one-gesture drop.
 get somewhere. `DockRail`'s panel state lives in the rail's own component
 state, not the panel's, which is what makes closing cheap: the Notes panel's
 `Note` itself is now panel-registry state, and reopening it after a close
-hands back the exact object, edits included. Deferred, honestly: content-
-budget warnings (a distinct, already-implemented mechanism —
-`checkContentBudget` in `@plotroom/core`, not one of the four named checks
-here); rendering-level component tests (this package has none yet for any
-component, canvas included — only pure-logic modules are unit-tested)._
+hands back the exact object, edits included. **Sync 2 update:** a fifth
+warning landed — content assembled beyond the model's window — using
+`@plotroom/core`'s own `checkContentBudget`/`estimateTokens` over a
+command's real, live-fetched context content; `GraphWarning` carries an
+honest `basis` string (chars ÷ 4, the one estimator assembly and the run
+preview will also use) rather than implying a real token count. Palette
+entries, warning facts, and context inputs now come from the live
+`GraphSnapshot` (`warningFacts`/`paletteEntries`/`contextEdges`), not
+fixture-only local state. Deferred, honestly: rendering-level component
+tests (this package has none yet for any component, canvas included — only
+pure-logic modules are unit-tested)._
 
 ### Epic 3.0 — Web + desktop shells (`web`, `desktop`) — _do first_
 
 _Moved ahead of 3.1–3.4: nothing in this phase is demoable without a host to
 run the renderer in._
 
-- [ ] `apps/web` renderer served by the server; single renderer for both targets (never forked per target) — _blocked on Track A: `apps/server` has no HTTP listener yet (Epic 2.1). The client is ready to be served from anywhere; there is nothing on the server side yet to serve it._
+- [x] `apps/web` renderer served by the server; single renderer for both targets (never forked per target) — _joint with Track A: `apps/server`'s `serveRenderer` (Epic 2.1) serves whatever `apps/web` builds to `dist/`, with SPA fallback, on the same port as `/api`/`/ws`; verified end to end (below), not just by inspection_
 - [x] **Single-origin rule:** the browser talks to exactly one origin — page, WS, and API on the same port; the client connects to same-origin paths (`/ws`) with no hardcoded host or port anywhere. In dev, the dev server serves the page and proxies WS/API to the server so dev is single-origin too. This is what makes local and tunnelled access identical (§12)
 - [x] Port/instance selection knob (one setting drives server port, dev port, state dir); dev HMR follows the browser's port with an override for asymmetric tunnels
-- [ ] Electron main: spawn-or-attach to server; packaging decision (electron-builder vs forge — record in AGENTS.md) — _spawn-or-attach mechanism is done (below); the packaging-tool decision is explicitly the operator's per AGENTS.md's open decisions, not made here_
+- [x] Electron main: spawn-or-attach to server (electron-builder vs forge packaging tooling still not chosen — the operator's call per AGENTS.md's open decisions, deliberately not made here)
 - [ ] Remote-backend connect/remember/switch (§12) — deferred to Phase 8, as the epic allows
 
-_Landed: `createHttpClient` (fetch wrapper) and `createReconnectingSocket` (WS
-with capped exponential backoff) in `packages/ui`, both structurally same-
-origin — the http client throws on an absolute URL rather than making a
-cross-origin request, and the socket URL is always built from `location`.
-`GraphDataSource` is the seam Stage 2 swaps: `createFixtureGraphDataSource`
-is the only implementation today; a live-API implementation over
-`createHttpClient` lands beside it without the app changing. `PLOTROOM_PORT`
-is the one instance knob: `apps/web/vite.config.ts` binds Vite's own dev
-port to it directly and derives the `/api`/`/ws` proxy target one port above
-(documented in-file; the exact offset convention needs Track A's
-acknowledgment once a real dev-mode server port exists to target), with
-`PLOTROOM_HMR_CLIENT_PORT` overriding HMR's reconnect port for asymmetric
-tunnels. The state-dir clause of that knob is not implemented here: state
-dir is server-owned, nothing in this epic passes one anywhere, and the knob
-will carry it once the server reads a state-dir setting — completed at
-Sync 2. `apps/desktop`'s `spawnOrAttach` (probe → attach, or spawn → poll
-→ throw on timeout) is pure and unit-tested with a mocked probe/spawn/wait;
-`main.ts` wires it to real Electron/`child_process`/`fetch` and spawns
-`apps/server`'s compiled entry point — which does not listen on a port yet
-(Epic 2.1), so today spawning it correctly fails to observe health and
-throws. That failure is expected at Stage 1: the mechanism is complete and
-will succeed unchanged once Track A's server has a listener and `/health`._
+_Landed: `createHttpClient` (fetch wrapper, now parsing the server's
+`ApiErrorBody` onto `HttpError.code`/`.reason`/`.isRefusal`) and
+`createReconnectingSocket` (WS with capped exponential backoff) in
+`packages/ui`, both structurally same-origin. **Sync 2:**
+`createApiGraphDataSource` is the live `GraphDataSource` — `load()` is a
+plain `GET /api/snapshot` read; `subscribe()` runs the documented resync
+recipe (`apps/server/src/routes/snapshot.ts`: connect `/ws` first, buffer,
+fetch a snapshot, drop buffered events already reflected, apply the rest)
+and redoes the whole recipe on every reconnect. `createApiActions` wraps
+every mutation the canvas already gestures — place, wire, create a
+workstream, instantiate a command, reorder context, write a note — over the
+same `/api` endpoints an agent tool will use; a 409 becomes a typed
+`{ok:false, refusal}` carrying the predicate's own reason, never swallowed
+and never treated as success. `apps/web/src/App.tsx` runs live by default
+(`createApiGraphDataSource`), falling back to the fixture source — the
+exact same `GraphSnapshot` shape — only for `VITE_USE_FIXTURES=1` (tests,
+offline dev). No session actor is ever set client-side: an omitted
+`X-PlotRoom-Actor` defaults to human server-side, exactly like a hand-typed
+`curl`.
+
+`PLOTROOM_PORT` is the one instance knob, meaning exactly what
+`apps/server/src/config.ts` gives it — the server's own port — fixed from
+an earlier, pre-real-server guess that had this backwards: the dev proxy
+target is `PLOTROOM_PORT` directly and Vite's own dev port is derived one
+above it (both default to matching the server's real default, 4600, so
+running everything with no env var set talks to the same instance).
+`PLOTROOM_HMR_CLIENT_PORT` overrides HMR's reconnect port for asymmetric
+tunnels. State dir is its own setting (`PLOTROOM_STATE_DIR`, now real —
+`apps/server/src/config.ts` reads it), not derived from the port knob;
+`apps/desktop`'s spawned server inherits it automatically (full
+`process.env` passthrough in `spawnServer`), so setting it once in the
+shell that launches Electron reaches the server it spawns with no separate
+plumbing needed.
+
+`apps/desktop`'s `spawnOrAttach` (probe → attach, or spawn → poll →
+re-probe once → attach-to-the-winner-or-throw) now also covers a
+concurrent-launch race, and is unit-tested with a mocked probe/spawn/wait;
+`main.ts` adds `app.requestSingleInstanceLock()` (a second launch quits
+rather than spawning a second server for this instance) and a child
+exit listener (the server we spawned crashing after we confirmed it
+healthy loads a plain crash page into the window, rather than an
+unresponsive one with no explanation). The health probe now hits the real
+`/api/health` route Track A shipped (was `/health`, a Stage 1 guess).
+Verified two ways: `spawn-or-attach.integration.test.ts` drives
+`spawnServer`/`healthProbe` against the real built server (ephemeral port,
+temp state dir) — the test-based fallback for a headless environment with
+no display; and once, manually, headlessly under `xvfb-run` against a
+built `apps/web` + `apps/server`, confirming the whole chain (spawn,
+health, page load, `/ws` upgrade, `/api/snapshot`) end to end outside a
+test harness too._
+
+**⛳ Sync 2 gate: passing.** `apps/web/src/data-source/live.integration.test.ts`
+spawns the real, built server and asserts `createApiGraphDataSource`
+(real fetch, real WebSocket, no mocks) reflects real mutations live —
+a placed node and a wired command edge both arrive over `/ws` with no
+manual refetch, and an illegal wire (content → content) is refused with
+the predicate's own reason and never reaches the live graph. Canvas state
+= live server state.
 
 ---
 
