@@ -1,9 +1,22 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import type { DomainEvent } from "@plotroom/core";
+import {
+  humanAuthor,
+  readinessProvisioned,
+  type DomainEvent,
+} from "@plotroom/core";
+import { openDatabase, WorkspaceStore, WorkstreamStore } from "@plotroom/db";
 import { loadServerConfig, type ServerConfigOverrides } from "../config.js";
 import { startServer } from "../index.js";
 
@@ -490,5 +503,172 @@ describe("compaction on demand (§15-3, Epic 2.3)", () => {
     const state = await harness.ok("/maintenance/state");
 
     expect(at(state, "compaction.intervalSeconds")).toBe(1_800);
+  });
+});
+
+const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" };
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd, env: GIT_ENV }).toString();
+}
+
+/**
+ * A real checkout with a real upstream: an origin repository with one commit,
+ * cloned to `path`. Real because the dirty check asks git, and because
+ * "unpushed" only means anything against an upstream that exists.
+ */
+function gitCheckoutAt(path: string): void {
+  const origin = `${path}-origin`;
+  mkdirSync(origin, { recursive: true });
+
+  git(origin, "init", "--initial-branch", "feat/thing");
+  git(origin, "config", "user.email", "test@plotroom.invalid");
+  git(origin, "config", "user.name", "PlotRoom Test");
+  writeFileSync(join(origin, "README.md"), "# fixture\n", "utf8");
+  git(origin, "add", ".");
+  git(origin, "commit", "-m", "initial");
+
+  mkdirSync(path, { recursive: true });
+  git(path, "clone", origin, ".");
+  git(path, "config", "user.email", "test@plotroom.invalid");
+  git(path, "config", "user.name", "PlotRoom Test");
+}
+
+/** A commit that exists only in this checkout — the scariest thing to delete. */
+function commitLocally(path: string, file: string): void {
+  writeFileSync(join(path, file), "local only\n", "utf8");
+  git(path, "add", file);
+  git(path, "commit", "-m", "not pushed");
+}
+
+/**
+ * A provisioned workspace record pointing at a real checkout, written directly.
+ * Provisioning through a run would need a runtime and prove nothing extra: what
+ * is under test is the *plan's* honesty about a checkout that already exists.
+ */
+function seedProvisionedWorkspace(stateDir: string, checkout: string): string {
+  gitCheckoutAt(checkout);
+
+  const state = openDatabase({ stateDir });
+  try {
+    const workstream = new WorkstreamStore(state).create({
+      author: humanAuthor,
+    });
+    const workspaces = new WorkspaceStore(state);
+    const workspace = workspaces.create({
+      workstreamId: workstream.id,
+      kind: "git",
+      config: { workspacePath: checkout, repositoryPath: checkout },
+      author: humanAuthor,
+    });
+
+    workspaces.recordProvisioned(workspace.id, {
+      roots: [
+        {
+          key: "root",
+          path: checkout,
+          branch: "feat/thing",
+          primaryCheckout: false,
+        },
+      ],
+      cost: {
+        elapsedMillis: 1,
+        bytesOnDisk: null,
+        sharedCache: "hit",
+        strategy: "worktree",
+      },
+      readiness: readinessProvisioned(workspace.readiness, null, 0),
+    });
+
+    return workspace.id;
+  } finally {
+    state.close();
+  }
+}
+
+describe("a reset plan names the work only a checkout holds (§12)", () => {
+  it("names uncommitted, untracked, and unpushed work per checkout", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-dirty-"));
+    scratch.push(stateDir);
+    const checkout = join(stateDir, "workspaces", "ws-under-test");
+    const workspaceId = seedProvisionedWorkspace(stateDir, checkout);
+
+    // Work that exists nowhere else: a local commit, an edit, and a new file.
+    commitLocally(checkout, "local.txt");
+    writeFileSync(join(checkout, "README.md"), "# edited\n", "utf8");
+    writeFileSync(join(checkout, "notes.txt"), "scratch\n", "utf8");
+
+    const harness = await boot({}, { stateDir });
+    const planned = await harness.ok("/reset/plan?scope=derived");
+
+    const dirty = list(planned, "plan.dirtyWorkspaces");
+    expect(dirty).toHaveLength(1);
+    expect(at(dirty[0], "workspaceId")).toBe(workspaceId);
+    expect(at(dirty[0], "path")).toBe(checkout);
+    expect(at(dirty[0], "branch")).toBe("feat/thing");
+    expect(list(dirty[0], "uncommitted")).toContain("README.md");
+    expect(list(dirty[0], "untracked")).toContain("notes.txt");
+    // The commit that exists only here, counted against the upstream it has.
+    expect(at(dirty[0], "ahead")).toBe(1);
+    expect(at(dirty[0], "unreadable")).toBeNull();
+    // Inside the workspaces directory, so the reset really does delete it.
+    expect(at(dirty[0], "filesDeleted")).toBe(true);
+
+    // And it is said in the plan's own words, above the general warning.
+    const removes = list(planned, "plan.removes").join(" | ");
+    expect(removes).toMatch(/1 uncommitted change/);
+    expect(removes).toMatch(/1 untracked file/);
+    expect(removes).toMatch(/1 unpushed commit/);
+    expect(removes).toMatch(/not committed and pushed is destroyed/);
+    expect(removes).toContain(checkout);
+
+    // `everything` deletes the same checkouts, so it says the same thing.
+    const all = await harness.ok("/reset/plan?scope=everything");
+    expect(list(all, "plan.dirtyWorkspaces")).toHaveLength(1);
+
+    // The arrangement scope deletes no checkout, so it claims nothing about one.
+    const arrangement = await harness.ok("/reset/plan?scope=arrangement");
+    expect(list(arrangement, "plan.dirtyWorkspaces")).toEqual([]);
+    expect(list(arrangement, "plan.removes").join(" ")).not.toMatch(
+      /destroyed/,
+    );
+  });
+
+  it("names nothing when a checkout is clean, and still warns in general", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-clean-"));
+    scratch.push(stateDir);
+    seedProvisionedWorkspace(stateDir, join(stateDir, "workspaces", "tidy"));
+
+    const harness = await boot({}, { stateDir });
+    const planned = await harness.ok("/reset/plan?scope=derived");
+
+    // Nothing is being lost from this one, and the plan does not invent a risk.
+    expect(list(planned, "plan.dirtyWorkspaces")).toEqual([]);
+    // The warning still stands, because the checkout is still deleted and the
+    // operator may have work in one the product cannot see yet.
+    expect(list(planned, "plan.removes").join(" ")).toMatch(
+      /not committed and pushed is destroyed/,
+    );
+  });
+
+  it("says it could not look, rather than that there is nothing there", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-unreadable-"));
+    scratch.push(stateDir);
+    const checkout = join(stateDir, "workspaces", "vanished");
+    seedProvisionedWorkspace(stateDir, checkout);
+
+    // The checkout is gone from under the record — the state a half-finished
+    // manual cleanup leaves.
+    rmSync(checkout, { recursive: true, force: true });
+
+    const harness = await boot({}, { stateDir });
+    const planned = await harness.ok("/reset/plan?scope=derived");
+
+    const dirty = list(planned, "plan.dirtyWorkspaces");
+    expect(dirty).toHaveLength(1);
+    expect(at(dirty[0], "unreadable")).not.toBeNull();
+    expect(list(planned, "plan.removes").join(" ")).toMatch(
+      /could not be read .* check it before confirming/,
+    );
   });
 });

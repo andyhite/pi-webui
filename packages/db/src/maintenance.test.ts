@@ -13,7 +13,7 @@ import { BlobStore } from "./blob-store.js";
 import { openDatabase, type PlotroomDatabase } from "./client.js";
 import { CommandStore } from "./command-store.js";
 import { GraphStore } from "./graph-store.js";
-import { Maintenance } from "./maintenance.js";
+import { Maintenance, WORKSPACE_DESTRUCTION_WARNING } from "./maintenance.js";
 import { ObjectStore } from "./object-store.js";
 import { RunStore } from "./run-store.js";
 import { WorkstreamStore } from "./workstream-store.js";
@@ -150,10 +150,28 @@ describe("reset states what it removes first (§12)", () => {
   it("plans derived state as re-provisionable, keeping the records", () => {
     const plan = maintenance.resetPlan("derived");
 
-    expect(plan.removes.join(" ")).toMatch(/re-provisioned at the next run/);
+    expect(plan.removes.join(" ")).toMatch(/provisioned again at the next run/);
     expect(plan.keeps.join(" ")).toMatch(/run history, sessions/);
     // Honest about what it will not touch and why (principle 12).
     expect(plan.keeps.join(" ")).toMatch(/no rebuild step yet/);
+  });
+
+  it("says plainly that deleting a checkout destroys what is only in it", () => {
+    // "Re-provisioned" is lossless only for what git has somewhere else, and a
+    // cleanup verb that reads as harmless is a data-loss bug with a friendly
+    // name (§12, principle 12). Both scopes that delete a checkout say it, in
+    // one wording.
+    for (const scope of ["derived", "everything"] as const) {
+      const removes = maintenance.resetPlan(scope).removes.join(" ");
+      expect(removes).toContain(WORKSPACE_DESTRUCTION_WARNING);
+      expect(removes).toMatch(/not committed and pushed is destroyed/);
+      expect(removes).toMatch(/commits that only exist locally/);
+    }
+
+    // The harmless one does not carry the warning, because it removes no files.
+    expect(
+      maintenance.resetPlan("arrangement").removes.join(" "),
+    ).not.toContain(WORKSPACE_DESTRUCTION_WARNING);
   });
 
   it("counts every row before emptying the store, and empties it", () => {

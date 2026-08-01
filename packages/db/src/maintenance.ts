@@ -2,6 +2,7 @@ import { and, isNotNull, isNull, sql } from "drizzle-orm";
 import {
   initialReadiness,
   systemClock,
+  type Workspace,
   DEFAULT_COMPACTION_POLICY,
   DEFAULT_RUN_RETENTION_POLICY,
   type Clock,
@@ -14,6 +15,7 @@ import { GraphStore } from "./graph-store.js";
 import { ObjectStore } from "./object-store.js";
 import { RunStore } from "./run-store.js";
 import { SCHEMA_VERSION } from "./client.js";
+import { toWorkspace } from "./workspace-store.js";
 import {
   blobRefs,
   blobs,
@@ -140,6 +142,14 @@ const CLEAR_ORDER = [
   ["blob_refs", blobRefs],
 ] as const;
 
+/**
+ * Said in both scopes that delete a checkout, in one wording so the two cannot
+ * drift apart. Git makes a workspace cheap to recreate, not lossless to delete:
+ * uncommitted work and unpushed commits exist nowhere else.
+ */
+export const WORKSPACE_DESTRUCTION_WARNING =
+  "anything inside those checkouts that is not committed and pushed is destroyed with them — uncommitted changes, untracked files, and commits that only exist locally";
+
 export class Maintenance {
   private readonly blobStore: BlobStore;
   private readonly graph: GraphStore;
@@ -213,7 +223,13 @@ export class Maintenance {
         return {
           scope,
           removes: [
-            `${provisioned} provisioned ${provisioned === 1 ? "workspace" : "workspaces"} — the checkouts on disk, re-provisioned at the next run`,
+            `${provisioned} provisioned ${provisioned === 1 ? "workspace" : "workspaces"} — the checkouts on disk are deleted and provisioned again at the next run`,
+            // "Re-provisioned" is only lossless for what git already has
+            // somewhere else. Anything uncommitted, or committed but never
+            // pushed, is inside that checkout and goes with it — said plainly,
+            // because a cleanup verb that reads as harmless is a data-loss bug
+            // with a friendly name (§12, principle 12).
+            WORKSPACE_DESTRUCTION_WARNING,
             "the shared git mirror cache, which makes the next provisioning slower but not different",
           ],
           keeps: [
@@ -245,7 +261,8 @@ export class Maintenance {
               : []),
             `every row in the store: ${total} in total, including ${counts["runs"]} runs, ${counts["sessions"]} sessions, ${counts["objects"]} objects, and ${counts["workstreams"]} workstreams`,
             `${counts["blobs"]} stored blobs, inline and external alike — the content itself`,
-            "every provisioned workspace and the shared git cache",
+            "every provisioned workspace's checkout and the shared git cache",
+            WORKSPACE_DESTRUCTION_WARNING,
           ],
           keeps: [
             "the schema: the store is emptied, not deleted, so the app starts clean rather than broken",
@@ -346,6 +363,26 @@ export class Maintenance {
       .where(and(isNotNull(nodes.x), isNotNull(nodes.y)))
       .get();
     return row?.count ?? 0;
+  }
+
+  /**
+   * The workspace records whose mechanism exists on disk — what a `derived` or
+   * `everything` reset would delete or forget.
+   *
+   * Public because the *plan* needs them: whether a checkout is holding
+   * uncommitted work is a question only the workspace kind can answer, and the
+   * kind registry is the server's (§10.1). This hands over the records; nothing
+   * here asks git anything.
+   */
+  provisionedWorkspaceRecords(): Workspace[] {
+    return this.state.db
+      .select()
+      .from(workspaces)
+      .where(
+        and(isNull(workspaces.removedAt), isNotNull(workspaces.provisionedAt)),
+      )
+      .all()
+      .map((row) => toWorkspace(row));
   }
 
   /** Sessions with no end recorded — work a reset would delete out from under. */

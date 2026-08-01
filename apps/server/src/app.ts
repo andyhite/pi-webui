@@ -82,9 +82,17 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
 
   const stores = createStores(db, bus);
 
+  // One workspace-kind registry for the whole app: the run path provisions
+  // through it, and the reset plan asks it whether a checkout is holding work
+  // nothing else has (§3.4, §12).
+  const workspaceKinds = createWorkspaceKinds({
+    scratchDirectory: config.stateDir,
+  });
+
   // Durability (Epic 2.3): the sweep runs on a schedule the operator configures
   // and is reachable on demand. The rule it applies is §15-3's predicate; this
   // only decides when to ask.
+
   const compaction = startCompactionJob({
     maintenance: stores.maintenance,
     logger,
@@ -101,7 +109,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     bus,
     logger,
     runtimes: createRuntimeRegistry(config, logger),
-    workspaceKinds: createWorkspaceKinds({ scratchDirectory: config.stateDir }),
+    workspaceKinds,
     conditions: createConditionChecks(nodeCommandExec()),
     hub,
   });
@@ -114,7 +122,10 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", commandRoutes(stores));
   app.route("/api", runRoutes(stores, runs));
   app.route("/api", sessionRoutes(stores, runs));
-  app.route("/api", maintenanceRoutes(stores, config, compaction, logger));
+  app.route(
+    "/api",
+    maintenanceRoutes(stores, config, compaction, workspaceKinds, logger),
+  );
   app.route("/api", restorableRoutes(stores));
   app.route("/api", snapshotRoutes(stores));
 

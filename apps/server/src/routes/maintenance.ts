@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import type { WorkspaceKindRegistry } from "@plotroom/core";
 import { RESET_SCOPES, type ResetScope } from "@plotroom/db";
 import type { ServerConfig } from "../config.js";
 import { badRequest } from "../http/errors.js";
@@ -35,6 +36,7 @@ export function maintenanceRoutes(
   stores: ApiStores,
   config: ServerConfig,
   compaction: CompactionSchedule,
+  workspaceKinds: WorkspaceKindRegistry,
   logger: Logger,
 ): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
@@ -75,8 +77,12 @@ export function maintenanceRoutes(
     });
   });
 
-  /** What a reset would remove, without removing it (§12). */
-  app.get("/reset/plan", (c) => {
+  /**
+   * What a reset would remove, without removing it (§12). Asking the checkouts
+   * whether they hold unsaved work means talking to git, which is why this read
+   * is not instant — and why it is worth waiting for.
+   */
+  app.get("/reset/plan", async (c) => {
     const scope = c.req.query("scope");
     if (!isScope(scope)) {
       throw badRequest(
@@ -84,7 +90,9 @@ export function maintenanceRoutes(
       );
     }
 
-    return c.json({ plan: planReset(stores.maintenance, config, scope) });
+    return c.json({
+      plan: await planReset(stores.maintenance, workspaceKinds, config, scope),
+    });
   });
 
   /**
@@ -92,9 +100,14 @@ export function maintenanceRoutes(
    * the same body, the same shape, no removal — so a client can show the plan
    * and then repeat the call with a confirmation.
    */
-  app.post("/reset", validateJsonBody(resetBody), (c) => {
+  app.post("/reset", validateJsonBody(resetBody), async (c) => {
     const input = c.get("body") as z.infer<typeof resetBody>;
-    const plan = planReset(stores.maintenance, config, input.scope);
+    const plan = await planReset(
+      stores.maintenance,
+      workspaceKinds,
+      config,
+      input.scope,
+    );
 
     if (input.confirm !== true) {
       return c.json({ confirmed: false, plan, removed: null }, 200);
