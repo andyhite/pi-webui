@@ -66,7 +66,7 @@ describe("deriveSessionBubbleSources", () => {
       nodeId: "s1",
       transcript: t,
       phase: { kind: "responding" },
-      now: 100,
+      nowSeconds: 100,
     });
     expect(sources).toEqual([
       {
@@ -100,7 +100,7 @@ describe("deriveSessionBubbleSources", () => {
       nodeId: "s1",
       transcript: t,
       phase: { kind: "tool-running", toolName: "grep" },
-      now: 100,
+      nowSeconds: 100,
     });
 
     const saying = sources.find((s) => s.kind === "session-output");
@@ -112,7 +112,7 @@ describe("deriveSessionBubbleSources", () => {
       nodeId: "s1",
       transcript: transcript([]),
       phase: { kind: "tool-running", toolName: "grep" },
-      now: 100,
+      nowSeconds: 100,
     });
     expect(sources).toEqual([
       {
@@ -131,7 +131,7 @@ describe("deriveSessionBubbleSources", () => {
       nodeId: "s1",
       transcript: transcript([]),
       phase: { kind: "idle" },
-      now: 100,
+      nowSeconds: 100,
     });
     expect(sources).toEqual([]);
   });

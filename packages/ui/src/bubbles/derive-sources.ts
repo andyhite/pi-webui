@@ -23,6 +23,7 @@ export interface CommandBubbleInput {
   readonly nodeId: string;
   /** A command node's assembled context (`WarningFacts.assembledContent`) — the dispatched prompt. */
   readonly assembledContent: string;
+  /** Epoch seconds — see `BubbleSource.updatedAt`'s doc comment for the one-unit-throughout rule. */
   readonly updatedAt: number;
 }
 
@@ -60,8 +61,16 @@ export interface SessionBubbleInput {
   readonly nodeId: string;
   readonly transcript: Transcript;
   readonly phase: SessionPhase;
-  /** Falls back to this when the transcript itself carries no timestamp to read (an empty session). */
-  readonly now: number;
+  /**
+   * Epoch **seconds** (`BubbleSource.updatedAt`'s doc comment states the
+   * one-unit-throughout rule this is part of) — falls back to this when the
+   * transcript itself carries no timestamp to read (an empty session), and
+   * is always what a `tool-in-flight` chip's `updatedAt` uses (a running
+   * tool has no turn timestamp of its own yet). Callers passing
+   * `Date.now()` must convert it first; passing milliseconds here breaks
+   * the global cap's recency ordering against every seconds-based source.
+   */
+  readonly nowSeconds: number;
 }
 
 /**
@@ -82,7 +91,7 @@ export function deriveSessionBubbleSources(
       nodeId: input.nodeId,
       kind: "session-output",
       text: saying,
-      updatedAt: lastTurn?.startedAt ?? input.now,
+      updatedAt: lastTurn?.startedAt ?? input.nowSeconds,
       wantsAttention: false,
     });
   }
@@ -93,7 +102,7 @@ export function deriveSessionBubbleSources(
       nodeId: input.nodeId,
       kind: "tool-in-flight",
       text: input.phase.toolName,
-      updatedAt: input.now,
+      updatedAt: input.nowSeconds,
       wantsAttention: false,
     });
   }

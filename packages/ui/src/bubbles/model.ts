@@ -29,7 +29,16 @@ export interface BubbleSource {
   readonly nodeId: string;
   readonly kind: BubbleKind;
   readonly text: string;
-  /** Epoch ms; the global cap's recency tie-break reads this (§5). */
+  /**
+   * Epoch **seconds** — the same unit as every other timestamp in this
+   * codebase ("PlotRoom's own records are Unix seconds", AGENTS.md;
+   * `TranscriptTurn.startedAt`, `InjectionEntry.queuedAt`/`deliveredAt`,
+   * `OpenQuestion.raisedAt` are all seconds already). The global cap's
+   * recency tie-break (§5) compares this field across every bubble kind at
+   * once, so a producer that passes milliseconds (`Date.now()`, unconverted)
+   * silently wins or loses every tie-break it should not — there is no
+   * second field to catch the mismatch. Convert at the seam, not here.
+   */
   readonly updatedAt: number;
   /** Drives global-cap priority (§5) — a question or a failure wants attention. */
   readonly wantsAttention: boolean;
