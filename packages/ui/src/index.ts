@@ -17,6 +17,8 @@ export * from "./attention/off-screen.js";
 export * from "./legality/create-menu.js";
 export * from "./undo/stack.js";
 export * from "./context-order/reorder.js";
+export * from "./context-order/ContextInputList.js";
 export * from "./notes/model.js";
+export * from "./notes/NotePanel.js";
 export * from "./gestures/one-gesture.js";
 export * from "./canvas/PlotCanvas.js";

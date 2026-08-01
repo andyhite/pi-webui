@@ -1,22 +1,29 @@
 /**
  * The canvas (spec §5), mechanics only — no visual design until the design
  * package lands (fleet rule 5). xyflow is the base; rigid-body push, durable
- * placement, and mid-drag connection refusal are built on top of it. Nodes
- * are DOM-based so plugin card renderers and keyboard access work later.
+ * placement, mid-drag connection refusal, zoom-level renderers, collapsing
+ * containers, multi-select, off-screen attention, and the drag-to-empty
+ * create menu are built on top of it. Nodes are DOM-based so plugin card
+ * renderers and keyboard access work later.
  */
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   Connection,
   Edge,
+  FinalConnectionState,
   IsValidConnection,
   Node,
   NodeProps,
   NodeTypes,
   OnNodeDrag,
+  OnNodesDelete,
+  OnEdgesDelete,
+  OnSelectionChangeFunc,
 } from "@xyflow/react";
 import {
   Handle,
+  MiniMap,
   Position,
   ReactFlow,
   ReactFlowProvider,
@@ -24,6 +31,7 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
+  useViewport,
 } from "@xyflow/react";
 import type { GraphNode, NodeId, NodeRole } from "@plotroom/core";
 import { checkConnection } from "@plotroom/core";
@@ -36,6 +44,20 @@ import "@xyflow/react/dist/style.css";
 import type { NodeExtent, Point } from "../solver/push.js";
 import { solvePush } from "../solver/push.js";
 import type { Placements } from "../placement/store.js";
+import { zoomLevelForScale } from "../zoom/level.js";
+import type { ZoomLevel, ZoomThresholds } from "../zoom/level.js";
+import { remapEdgesForCollapse } from "../containers/collapse.js";
+import type { ParentOf } from "../containers/collapse.js";
+import { actionsForSelection } from "../selection/multi-select.js";
+import type { SelectionActionId } from "../selection/multi-select.js";
+import { clusterOffScreenAttention } from "../attention/off-screen.js";
+import type { OffScreenMarker } from "../attention/off-screen.js";
+import {
+  CREATE_MENU_OPTIONS,
+  legalCreateMenuOptions,
+} from "../legality/create-menu.js";
+import type { CreateMenuOption } from "../legality/create-menu.js";
+import { createUndoStack } from "../undo/stack.js";
 
 export interface CanvasNodeInput {
   readonly id: string;
@@ -44,6 +66,19 @@ export interface CanvasNodeInput {
   /** Sessions only: whether the session is still running (accepts context). */
   readonly running?: boolean;
   /** Position used when no durable placement exists for this node yet. */
+  readonly defaultPosition: Point;
+  /** The workstream container this node lives inside, if any (§3.3). */
+  readonly containerId?: string;
+  /**
+   * A bare (containerless) ticket accepts a dropped command definition,
+   * which creates a workstream in one gesture (§3.5, §3.3).
+   */
+  readonly acceptsDefinitionDrop?: boolean;
+}
+
+export interface CanvasContainerInput {
+  readonly id: string;
+  readonly label: string;
   readonly defaultPosition: Point;
 }
 
@@ -56,6 +91,11 @@ export interface CanvasEdgeInput {
 export interface PlotCanvasProps {
   readonly nodes: readonly CanvasNodeInput[];
   readonly edges: readonly CanvasEdgeInput[];
+  /** Workstream containers (spec §3.3): collapse and expand as one frame. */
+  readonly containers?: readonly CanvasContainerInput[];
+  /** Ids of containers currently collapsed; edges into them draw to the frame. */
+  readonly collapsedContainerIds?: ReadonlySet<string>;
+  readonly onToggleContainer?: (containerId: string) => void;
   /** Durable placements, loaded by the host through a PlacementStore. */
   readonly placements: Placements;
   /** Called with every node's position whenever an arrangement settles. */
@@ -63,39 +103,149 @@ export interface PlotCanvasProps {
   readonly selectedNodeId: string | null;
   /** The one navigation primitive; null clears the selection. */
   readonly onSelectNode: (nodeId: string | null) => void;
+  /** Ids of nodes off-screen attention markers should track (spec §5, §7). */
+  readonly attentionNodeIds?: readonly string[];
+  /** Zoom thresholds for the workstream/inner/detail renderer switch. */
+  readonly zoomThresholds?: ZoomThresholds;
+  /** A batch action chosen from the contextual action bar over a multi-selection. */
+  readonly onBatchAction?: (
+    action: SelectionActionId,
+    selectedNodeIds: readonly string[],
+  ) => void;
+  /** The create-menu option chosen after dragging an edge to empty canvas. */
+  readonly onCreateFromDrag?: (
+    sourceNodeId: string,
+    option: CreateMenuOption,
+    position: Point,
+  ) => void;
+  readonly createMenuOptions?: readonly CreateMenuOption[];
+  /**
+   * A command definition was dropped onto a bare ticket (§3.5): dropping a
+   * definition onto a bare ticket creates a workstream in one gesture. The
+   * host decides what "definition" was dragged (out of band, via its own
+   * drag source) and what to do with the result.
+   */
+  readonly onDropDefinitionOnTicket?: (ticketNodeId: string) => void;
 }
+
+/** The drag payload a command-definition drag source sets (host's palette). */
+export const COMMAND_DEFINITION_DRAG_TYPE =
+  "application/x-plotroom-command-definition";
 
 type BoxNodeData = {
   label: string;
   role: NodeRole;
   running: boolean;
+  zoomLevel: ZoomLevel;
+  /** Selection-as-route (§5): this node is the one the address points at. */
+  routeSelected: boolean;
+  /** Set when this is a bare ticket that accepts a dropped definition. */
+  acceptsDefinitionDrop: boolean;
+  onDropDefinition?: () => void;
 };
 
 type BoxNode = Node<BoxNodeData, "box">;
 
+type ContainerNodeData = {
+  label: string;
+  collapsed: boolean;
+  onToggle: () => void;
+};
+
+type ContainerNode = Node<ContainerNodeData, "container">;
+
+type CanvasNode = BoxNode | ContainerNode;
+
 /** Fallbacks for the first frame, before xyflow has measured the DOM. */
 const FALLBACK_WIDTH = 140;
 const FALLBACK_HEIGHT = 40;
+const CONTAINER_WIDTH = 420;
+const CONTAINER_HEIGHT = 280;
 
-function BoxNodeView({ data, selected }: NodeProps<BoxNode>) {
+function BoxNodeView({ data, id, selected }: NodeProps<BoxNode>) {
   // Unstyled by design (fleet rule 5): a visible rectangle with a label is
-  // the bare minimum for the mechanics to be exercised.
+  // the bare minimum for the mechanics to be exercised. Content varies by
+  // zoom level (spec §5): workstream level shows identity only, inner level
+  // adds the id, detail level adds role and running state.
+  //
+  // Two independent selection concepts share this border: `routeSelected`
+  // (§5 "selection is the route", one node, drives navigation) and
+  // `selected` (xyflow's own multi-select state, driven by marquee/modified
+  // click, drives the contextual action bar). They can disagree and both
+  // render, deliberately — they answer different questions.
+  const border = data.routeSelected
+    ? selected
+      ? "3px solid black"
+      : "2px solid black"
+    : selected
+      ? "2px dotted black"
+      : "1px solid black";
   return (
     <div
       style={{
-        border: selected ? "2px solid black" : "1px solid black",
+        border,
         background: "white",
         padding: "6px 10px",
       }}
+      // One-gesture flow (spec §3.5): dropping a command definition onto a
+      // bare ticket creates a workstream. Only nodes flagged as accepting a
+      // drop wire up the handlers at all.
+      {...(data.acceptsDefinitionDrop
+        ? {
+            onDragOver: (event: React.DragEvent) => event.preventDefault(),
+            onDrop: (event: React.DragEvent) => {
+              event.preventDefault();
+              if (
+                event.dataTransfer.types.includes(COMMAND_DEFINITION_DRAG_TYPE)
+              ) {
+                data.onDropDefinition?.();
+              }
+            },
+          }
+        : {})}
     >
       <Handle type="target" position={Position.Left} />
-      {data.label}
+      <div>{data.label}</div>
+      {data.acceptsDefinitionDrop ? (
+        <div>(drop a command definition here)</div>
+      ) : null}
+      {data.zoomLevel !== "workstream" ? <div>id: {id}</div> : null}
+      {data.zoomLevel === "detail" ? (
+        <div>
+          role: {data.role}
+          {data.role === "session" ? `, running: ${String(data.running)}` : ""}
+        </div>
+      ) : null}
       <Handle type="source" position={Position.Right} />
     </div>
   );
 }
 
-const nodeTypes: NodeTypes = { box: BoxNodeView };
+function ContainerNodeView({ data }: NodeProps<ContainerNode>) {
+  // Collapsed: one card (identity only). Expanded: a frame around its
+  // children, drawn behind them via xyflow's parent/child z-ordering.
+  return (
+    <div
+      style={{
+        border: "2px dashed black",
+        width: "100%",
+        height: "100%",
+        boxSizing: "border-box",
+        padding: "4px 8px",
+      }}
+    >
+      <button type="button" onClick={data.onToggle}>
+        {data.collapsed ? "expand" : "collapse"}
+      </button>{" "}
+      {data.label}
+    </div>
+  );
+}
+
+const nodeTypes: NodeTypes = {
+  box: BoxNodeView,
+  container: ContainerNodeView,
+};
 
 function toGraphNode(input: CanvasNodeInput): GraphNode {
   return {
@@ -107,30 +257,247 @@ function toGraphNode(input: CanvasNodeInput): GraphNode {
   };
 }
 
+/** Legend + live counts (spec §5): unstyled, mechanics only. */
+function CanvasLegend({ nodes }: { nodes: readonly CanvasNodeInput[] }) {
+  const counts = useMemo(() => {
+    const byRole = new Map<NodeRole, number>();
+    for (const node of nodes) {
+      byRole.set(node.role, (byRole.get(node.role) ?? 0) + 1);
+    }
+    return byRole;
+  }, [nodes]);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 8,
+        left: 8,
+        zIndex: 5,
+        background: "white",
+      }}
+    >
+      <ul>
+        {[...counts.entries()].map(([role, count]) => (
+          <li key={role}>
+            {role}: {count}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Contextual action bar over a multi-selection (spec §5). */
+function ActionBar({
+  selectedIds,
+  actions,
+  onAction,
+}: {
+  selectedIds: readonly string[];
+  actions: readonly SelectionActionId[];
+  onAction: (action: SelectionActionId) => void;
+}) {
+  if (selectedIds.length < 2 || actions.length === 0) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 8,
+        right: 8,
+        zIndex: 5,
+        background: "white",
+      }}
+    >
+      <span>{selectedIds.length} selected</span>
+      {actions.map((action) => (
+        <button key={action} type="button" onClick={() => onAction(action)}>
+          {action}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const SECTOR_STYLE: Record<OffScreenMarker["sector"], React.CSSProperties> = {
+  n: { top: 4, left: "50%" },
+  s: { bottom: 4, left: "50%" },
+  e: { top: "50%", right: 4 },
+  w: { top: "50%", left: 4 },
+  ne: { top: 4, right: 4 },
+  nw: { top: 4, left: 4 },
+  se: { bottom: 4, right: 4 },
+  sw: { bottom: 4, left: 4 },
+};
+
+/** Off-screen attention markers, clustered by sector (spec §5, §7). */
+function AttentionMarkers({
+  markers,
+}: {
+  markers: readonly OffScreenMarker[];
+}) {
+  return (
+    <>
+      {markers.map((marker) => (
+        <div
+          key={marker.sector}
+          style={{
+            position: "absolute",
+            zIndex: 5,
+            background: "white",
+            border: "1px solid black",
+            ...SECTOR_STYLE[marker.sector],
+          }}
+        >
+          {marker.count}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** Drag-to-empty-canvas create menu, filtered to legal targets (spec §5). */
+function CreateMenu({
+  position,
+  options,
+  onPick,
+  onDismiss,
+}: {
+  position: Point;
+  options: readonly CreateMenuOption[];
+  onPick: (option: CreateMenuOption) => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        zIndex: 10,
+        top: position.y,
+        left: position.x,
+        background: "white",
+        border: "1px solid black",
+      }}
+    >
+      {options.length === 0 ? (
+        <div>nothing here can legally receive that</div>
+      ) : (
+        <ul>
+          {options.map((option) => (
+            <li key={option.kind}>
+              <button type="button" onClick={() => onPick(option)}>
+                {option.kind}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <button type="button" onClick={onDismiss}>
+        cancel
+      </button>
+    </div>
+  );
+}
+
+function toBoxNode(
+  input: CanvasNodeInput,
+  ctx: {
+    readonly zoomLevel: ZoomLevel;
+    readonly selectedNodeId: string | null;
+    readonly placements: Placements;
+    readonly collapsedContainerIds: ReadonlySet<string>;
+    readonly onDropDefinitionOnTicket?: (ticketNodeId: string) => void;
+  },
+): BoxNode {
+  return {
+    id: input.id,
+    type: "box" as const,
+    position: ctx.placements[input.id] ?? input.defaultPosition,
+    ...(input.containerId
+      ? { parentId: input.containerId, extent: "parent" as const }
+      : {}),
+    hidden: input.containerId
+      ? ctx.collapsedContainerIds.has(input.containerId)
+      : false,
+    data: {
+      label: input.label,
+      role: input.role,
+      running: input.running ?? false,
+      zoomLevel: ctx.zoomLevel,
+      routeSelected: input.id === ctx.selectedNodeId,
+      acceptsDefinitionDrop: input.acceptsDefinitionDrop ?? false,
+      ...(ctx.onDropDefinitionOnTicket
+        ? { onDropDefinition: () => ctx.onDropDefinitionOnTicket?.(input.id) }
+        : {}),
+    },
+  };
+}
+
 function CanvasInner({
   nodes: nodeInputs,
   edges: edgeInputs,
+  containers = [],
+  collapsedContainerIds = new Set<string>(),
+  onToggleContainer,
   placements,
   onPlacementsChange,
   selectedNodeId,
   onSelectNode,
+  attentionNodeIds = [],
+  zoomThresholds,
+  onBatchAction,
+  onCreateFromDrag,
+  createMenuOptions = CREATE_MENU_OPTIONS,
+  onDropDefinitionOnTicket,
 }: PlotCanvasProps) {
-  const initialNodes = useMemo<BoxNode[]>(
-    () =>
-      nodeInputs.map((input) => ({
-        id: input.id,
-        type: "box" as const,
-        position: placements[input.id] ?? input.defaultPosition,
-        data: {
-          label: input.label,
-          role: input.role,
-          running: input.running ?? false,
-        },
-      })),
-    // Placements seed the initial arrangement only; later changes flow
-    // through drag, not through re-seeding — hence not a dependency.
-    [nodeInputs],
-  );
+  const { zoom } = useViewport();
+  const zoomLevel = zoomLevelForScale(zoom, zoomThresholds);
+
+  const parentOf: ParentOf = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const node of nodeInputs) {
+      if (node.containerId) map.set(node.id, node.containerId);
+    }
+    return map;
+  }, [nodeInputs]);
+
+  const buildNodes = useCallback((): CanvasNode[] => {
+    const containerNodes: ContainerNode[] = containers.map((container) => ({
+      id: container.id,
+      type: "container" as const,
+      position: placements[container.id] ?? container.defaultPosition,
+      style: { width: CONTAINER_WIDTH, height: CONTAINER_HEIGHT },
+      data: {
+        label: container.label,
+        collapsed: collapsedContainerIds.has(container.id),
+        onToggle: () => onToggleContainer?.(container.id),
+      },
+    }));
+
+    const boxNodes: BoxNode[] = nodeInputs.map((input) =>
+      toBoxNode(input, {
+        zoomLevel,
+        selectedNodeId,
+        placements,
+        collapsedContainerIds,
+        ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
+      }),
+    );
+
+    // Parents must precede children in xyflow's node array.
+    return [...containerNodes, ...boxNodes];
+  }, [
+    containers,
+    nodeInputs,
+    placements,
+    collapsedContainerIds,
+    onToggleContainer,
+    onDropDefinitionOnTicket,
+    zoomLevel,
+    selectedNodeId,
+  ]);
+
+  const initialNodes = useMemo(buildNodes, [buildNodes]);
 
   const initialEdges = useMemo<Edge[]>(
     () =>
@@ -142,18 +509,120 @@ function CanvasInner({
     [edgeInputs],
   );
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [nodes, setNodes, onNodesChange] =
+    useNodesState<CanvasNode>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
-  const { getNodes } = useReactFlow<BoxNode>();
+  const { getNodes } = useReactFlow<CanvasNode>();
 
-  // Selection is the route: the address decides which node renders selected.
+  // `nodes`/`edges` seed the canvas once; drag positions and undo live only
+  // in this internal state afterward. A one-gesture flow (creating a
+  // workstream by drop, for example) still needs its result to show up on
+  // the running canvas, so new ids in `nodeInputs`/`containers`/`edgeInputs`
+  // are appended here — additively only, never touching an id already
+  // present, so an in-progress arrangement is never disturbed.
+  useEffect(() => {
+    setNodes((current) => {
+      const present = new Set(current.map((node) => node.id));
+      const newContainers: ContainerNode[] = containers
+        .filter((container) => !present.has(container.id))
+        .map((container) => ({
+          id: container.id,
+          type: "container" as const,
+          position: placements[container.id] ?? container.defaultPosition,
+          style: { width: CONTAINER_WIDTH, height: CONTAINER_HEIGHT },
+          data: {
+            label: container.label,
+            collapsed: collapsedContainerIds.has(container.id),
+            onToggle: () => onToggleContainer?.(container.id),
+          },
+        }));
+      const newBoxNodes: BoxNode[] = nodeInputs
+        .filter((input) => !present.has(input.id))
+        .map((input) =>
+          toBoxNode(input, {
+            zoomLevel,
+            selectedNodeId,
+            placements,
+            collapsedContainerIds,
+            ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
+          }),
+        );
+      if (newContainers.length === 0 && newBoxNodes.length === 0)
+        return current;
+      // Parents must precede children in xyflow's node array.
+      return [...current, ...newContainers, ...newBoxNodes];
+    });
+  }, [
+    containers,
+    nodeInputs,
+    placements,
+    collapsedContainerIds,
+    onToggleContainer,
+    onDropDefinitionOnTicket,
+    zoomLevel,
+    selectedNodeId,
+    setNodes,
+  ]);
+
+  useEffect(() => {
+    setEdges((current) => {
+      const present = new Set(current.map((edge) => edge.id));
+      const additions = edgeInputs
+        .filter((input) => !present.has(input.id))
+        .map((input) => ({
+          id: input.id,
+          source: input.source,
+          target: input.target,
+        }));
+      return additions.length === 0 ? current : [...current, ...additions];
+    });
+  }, [edgeInputs, setEdges]);
+
+  // Collapsing containers (§3.3): hide inner nodes and remap their zoom-level
+  // data/hidden flag, and edges crossing into a collapsed container draw to
+  // its frame (spec §5) rather than to a hidden node.
   useEffect(() => {
     setNodes((current) =>
-      current.map((node) =>
-        node.selected === (node.id === selectedNodeId)
-          ? node
-          : { ...node, selected: node.id === selectedNodeId },
-      ),
+      current.map((node) => {
+        if (node.type !== "box") {
+          if (node.type === "container") {
+            const collapsed = collapsedContainerIds.has(node.id);
+            if (node.data.collapsed === collapsed) return node;
+            return { ...node, data: { ...node.data, collapsed } };
+          }
+          return node;
+        }
+        const parent = parentOf.get(node.id);
+        const hidden =
+          parent !== undefined && collapsedContainerIds.has(parent);
+        if (node.hidden === hidden && node.data.zoomLevel === zoomLevel)
+          return node;
+        return { ...node, hidden, data: { ...node.data, zoomLevel } };
+      }),
+    );
+  }, [collapsedContainerIds, parentOf, zoomLevel, setNodes]);
+
+  // Node visibility inside a collapsed container is carried on `hidden`
+  // (set in buildNodes/the collapse effect above); edges are remapped to
+  // the container's frame here so they never point at a hidden node.
+  const visibleEdges = useMemo(
+    () => remapEdgesForCollapse(edges, collapsedContainerIds, parentOf),
+    [edges, collapsedContainerIds, parentOf],
+  );
+
+  // Selection is the route (§5): the address decides which node renders as
+  // route-selected. This is deliberately separate from xyflow's own
+  // `node.selected`, which the multi-select mechanics below own — a marquee
+  // or shift-click multi-selection must not overwrite which node the URL
+  // points at, and navigating must not clear a multi-selection mid-batch.
+  useEffect(() => {
+    setNodes((current) =>
+      current.map((node) => {
+        if (node.type !== "box") return node;
+        const routeSelected = node.id === selectedNodeId;
+        if (node.data.routeSelected === routeSelected) return node;
+        return { ...node, data: { ...node.data, routeSelected } };
+      }),
     );
   }, [selectedNodeId, setNodes]);
 
@@ -187,17 +656,58 @@ function CanvasInner({
     [graphNodes, setEdges],
   );
 
+  // Drag-to-empty-canvas create menu (§5): filtered to what the dragged
+  // edge's source could legally connect to, via the same core predicate.
+  const [createMenu, setCreateMenu] = useState<{
+    sourceId: string;
+    position: Point;
+    options: CreateMenuOption[];
+  } | null>(null);
+
+  const onConnectEnd = useCallback(
+    (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
+      if (connectionState.isValid || connectionState.toNode) return;
+      const sourceId = connectionState.fromNode?.id;
+      if (!sourceId) return;
+      const source = graphNodes.get(sourceId);
+      if (!source) return;
+
+      const clientPoint =
+        "changedTouches" in event
+          ? event.changedTouches[0]
+          : (event as MouseEvent);
+      if (!clientPoint) return;
+
+      setCreateMenu({
+        sourceId,
+        position: { x: clientPoint.clientX, y: clientPoint.clientY },
+        options: legalCreateMenuOptions(source, createMenuOptions),
+      });
+    },
+    [graphNodes, createMenuOptions],
+  );
+
   // Rigid-body push: on every drag frame, displace exactly the nodes the
-  // chain reaches; the dragged node itself stays under the cursor.
-  const onNodeDrag: OnNodeDrag<BoxNode> = useCallback(
+  // chain reaches; the dragged node itself stays under the cursor. Push
+  // operates at the top level (containers and un-contained box nodes) —
+  // pushing a node inside an expanded container against its siblings is a
+  // follow-on refinement (containers are new in this epic; xyflow already
+  // clamps a child's position to its parent's extent).
+  const onNodeDrag: OnNodeDrag<CanvasNode> = useCallback(
     (_event, dragged) => {
+      if (dragged.parentId) return;
       setNodes((current) => {
-        const extents: NodeExtent[] = current.map((node) => ({
+        const topLevel = current.filter((node) => !node.parentId);
+        const extents: NodeExtent[] = topLevel.map((node) => ({
           id: node.id,
           x: node.id === dragged.id ? dragged.position.x : node.position.x,
           y: node.id === dragged.id ? dragged.position.y : node.position.y,
-          width: node.measured?.width ?? FALLBACK_WIDTH,
-          height: node.measured?.height ?? FALLBACK_HEIGHT,
+          width:
+            node.measured?.width ??
+            (node.type === "container" ? CONTAINER_WIDTH : FALLBACK_WIDTH),
+          height:
+            node.measured?.height ??
+            (node.type === "container" ? CONTAINER_HEIGHT : FALLBACK_HEIGHT),
         }));
         const displaced = solvePush(extents, dragged.id);
         if (displaced.size === 0) return current;
@@ -212,7 +722,7 @@ function CanvasInner({
 
   // Durable placement: the settled arrangement — dragged node and everything
   // it pushed — is persisted when the drag ends.
-  const onNodeDragStop: OnNodeDrag<BoxNode> = useCallback(() => {
+  const onNodeDragStop: OnNodeDrag<CanvasNode> = useCallback(() => {
     const settled: Record<string, Point> = {};
     for (const node of getNodes()) {
       settled[node.id] = { x: node.position.x, y: node.position.y };
@@ -220,21 +730,148 @@ function CanvasInner({
     onPlacementsChange(settled);
   }, [getNodes, onPlacementsChange]);
 
+  // Multi-select (§5): xyflow's own marquee/modified-click drives node
+  // selection; this only tracks which ids and roles are selected for the
+  // contextual action bar.
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const onSelectionChange = useCallback<OnSelectionChangeFunc>(
+    ({ nodes: selected }) => {
+      setSelectedIds(selected.map((n) => n.id));
+    },
+    [],
+  );
+
+  const selectedRoles = useMemo(
+    () =>
+      selectedIds
+        .map((id) => graphNodes.get(id)?.role)
+        .filter((role): role is NodeRole => role !== undefined),
+    [selectedIds, graphNodes],
+  );
+  const batchActions = useMemo(
+    () => actionsForSelection(selectedRoles),
+    [selectedRoles],
+  );
+
+  // Off-screen attention markers (§5, §7): clustered against the current
+  // viewport in flow coordinates; a node withdraws the instant it scrolls
+  // into view because it simply stops appearing in the cluster result.
+  const viewport = useViewport();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const attentionMarkers = useMemo(() => {
+    const box = containerRef.current?.getBoundingClientRect();
+    const width = box?.width ?? 0;
+    const height = box?.height ?? 0;
+    if (width === 0 || height === 0) return [];
+    const viewportRect = {
+      x: -viewport.x / viewport.zoom,
+      y: -viewport.y / viewport.zoom,
+      width: width / viewport.zoom,
+      height: height / viewport.zoom,
+    };
+    const attending = attentionNodeIds
+      .map((id) => nodes.find((n) => n.id === id))
+      .filter((n): n is CanvasNode => n !== undefined)
+      .map((n) => ({ id: n.id, x: n.position.x, y: n.position.y }));
+    return clusterOffScreenAttention(attending, viewportRect);
+  }, [attentionNodeIds, nodes, viewport]);
+
+  // Undo for destructive canvas operations (§5, principle 10): delete
+  // node/edge (a workstream container is deleted the same way; a marquee
+  // delete of many nodes is "clear region"). Each deletion pushes its own
+  // inverse onto a generic undo stack.
+  const undoStack = useRef(createUndoStack<null>(50));
+
+  const onNodesDelete = useCallback<OnNodesDelete<CanvasNode>>(
+    (deleted) => {
+      undoStack.current.do(null, {
+        label: `delete ${deleted.length} node(s)`,
+        apply: (s) => s,
+        invert: (s) => {
+          setNodes((current) => [...current, ...deleted]);
+          return s;
+        },
+      });
+    },
+    [setNodes],
+  );
+
+  const onEdgesDelete = useCallback<OnEdgesDelete>(
+    (deleted) => {
+      undoStack.current.do(null, {
+        label: `delete ${deleted.length} edge(s)`,
+        apply: (s) => s,
+        invert: (s) => {
+          setEdges((current) => [...current, ...deleted]);
+          return s;
+        },
+      });
+    },
+    [setEdges],
+  );
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isUndo =
+        (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z";
+      if (!isUndo) return;
+      event.preventDefault();
+      undoStack.current.undo(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   return (
-    <ReactFlow
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      onConnect={onConnect}
-      isValidConnection={isValidConnection}
-      onNodeDrag={onNodeDrag}
-      onNodeDragStop={onNodeDragStop}
-      onNodeClick={(_event, node) => onSelectNode(node.id)}
-      onPaneClick={() => onSelectNode(null)}
-      fitView
-    />
+    <div
+      ref={containerRef}
+      style={{ width: "100%", height: "100%", position: "relative" }}
+    >
+      <ReactFlow
+        nodes={nodes}
+        edges={visibleEdges}
+        nodeTypes={nodeTypes}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        onConnectEnd={onConnectEnd}
+        isValidConnection={isValidConnection}
+        onNodeDrag={onNodeDrag}
+        onNodeDragStop={onNodeDragStop}
+        onNodeClick={(_event, node) => onSelectNode(node.id)}
+        onPaneClick={() => onSelectNode(null)}
+        onSelectionChange={onSelectionChange}
+        onNodesDelete={onNodesDelete}
+        onEdgesDelete={onEdgesDelete}
+        selectionOnDrag
+        multiSelectionKeyCode="Shift"
+        fitView
+      >
+        <MiniMap />
+      </ReactFlow>
+      <CanvasLegend nodes={nodeInputs} />
+      <ActionBar
+        selectedIds={selectedIds}
+        actions={batchActions}
+        onAction={(action) => onBatchAction?.(action, selectedIds)}
+      />
+      <AttentionMarkers markers={attentionMarkers} />
+      {createMenu ? (
+        <CreateMenu
+          position={createMenu.position}
+          options={createMenu.options}
+          onPick={(option) => {
+            onCreateFromDrag?.(
+              createMenu.sourceId,
+              option,
+              createMenu.position,
+            );
+            setCreateMenu(null);
+          }}
+          onDismiss={() => setCreateMenu(null)}
+        />
+      ) : null}
+    </div>
   );
 }
 
