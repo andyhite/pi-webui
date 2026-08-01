@@ -712,6 +712,12 @@ export const sessionInjections = sqliteTable(
     authorSession: text("author_session"),
     nodeId: text("node_id").references(() => nodes.id),
     text: text("text").notNull(),
+    /**
+     * The declared conditions behind a `condition-feedback` entry, named so the
+     * transcript can render them structurally (§3.5, §6.1). Null for steering,
+     * which proves nothing and so fails nothing.
+     */
+    failedConditionIdsJson: text("failed_condition_ids_json"),
     queuedAt: integer("queued_at").notNull(),
     deliveredAt: integer("delivered_at"),
     refusedAt: integer("refused_at"),

@@ -120,6 +120,12 @@ export interface QueueInjectionInput {
   readonly author?: Author;
   readonly nodeId?: string;
   readonly text: string;
+  /**
+   * The declared conditions behind world-condition feedback (§3.5), named so the
+   * transcript entry can render them rather than the reader parsing the sentence
+   * back apart. Steering fails no conditions: it proves nothing.
+   */
+  readonly failedConditionIds?: readonly string[];
   readonly queuedAt: number;
 }
 
@@ -131,6 +137,7 @@ export interface StoredInjection {
   readonly author: Author | null;
   readonly nodeId: NodeId | null;
   readonly text: string;
+  readonly failedConditionIds: readonly string[];
   readonly queuedAt: number;
   readonly deliveredAt: number | null;
   readonly refusedAt: number | null;
@@ -423,12 +430,20 @@ export class SessionStore {
     readonly transcript: Transcript;
     readonly completedTurns: number;
   } {
+    // Everything delivered, steering and PlotRoom's own feedback alike: the
+    // projection decides which entry kind each becomes, because that is a
+    // rendering question and `@plotroom/core` states the answer (§3.5, §6.1).
     const delivered = new Map(
       this.injections(sessionId)
-        .filter((entry) => entry.author !== null && entry.deliveredAt !== null)
+        .filter((entry) => entry.deliveredAt !== null)
         .map((entry) => [
           entry.id as string,
-          { author: entry.author as Author, text: entry.text },
+          {
+            origin: entry.origin,
+            author: entry.author,
+            text: entry.text,
+            failedConditionIds: entry.failedConditionIds,
+          },
         ]),
     );
 
@@ -566,6 +581,10 @@ export class SessionStore {
           input.author?.kind === "session" ? input.author.sessionId : null,
         nodeId: input.nodeId ?? null,
         text: input.text,
+        failedConditionIdsJson:
+          input.failedConditionIds === undefined
+            ? null
+            : JSON.stringify(input.failedConditionIds),
         queuedAt: input.queuedAt,
       })
       .onConflictDoNothing()
@@ -772,6 +791,10 @@ function toStoredInjection(row: SessionInjectionRow): StoredInjection {
           : { kind: "human" },
     nodeId: (row.nodeId ?? null) as NodeId | null,
     text: row.text,
+    failedConditionIds:
+      row.failedConditionIdsJson === null
+        ? []
+        : (JSON.parse(row.failedConditionIdsJson) as readonly string[]),
     queuedAt: row.queuedAt,
     deliveredAt: row.deliveredAt,
     refusedAt: row.refusedAt,

@@ -804,4 +804,19 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX runs_retention_idx ON runs (pinned, started_at);
     `,
   },
+  {
+    id: 10,
+    name: "feedback_conditions",
+    sql: `
+      -- §3.5's loop hands a failing condition back to the session, and the
+      -- transcript entry for it names the conditions "rather than paraphrased"
+      -- (§6.1's \`feedback\` entry kind). The feedback text is a sentence; these
+      -- are the ids behind it, kept so the record can be read structurally
+      -- instead of parsed back out of prose.
+      --
+      -- NULL for a steering injection, which fails no conditions because it
+      -- proves nothing — it is somebody's intent (§6.5).
+      ALTER TABLE session_injections ADD COLUMN failed_condition_ids_json TEXT;
+    `,
+  },
 ];

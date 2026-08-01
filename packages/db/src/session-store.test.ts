@@ -398,14 +398,14 @@ describe("the injection ledger", () => {
       sessionId: session.id,
       origin: "condition-feedback",
       text: "checks_green: the checks are red",
+      failedConditionIds: ["checks_green"],
       queuedAt: clock.now(),
     });
 
     expect(feedback.author).toBeNull();
     expect(feedback.nodeId).toBeNull();
+    expect(feedback.failedConditionIds).toEqual(["checks_green"]);
 
-    // Authored steering becomes a transcript entry; feedback has no author to
-    // attribute, so it is recorded on the run instead of forged into one.
     sessions.markDelivered("inj-fb", clock.now());
     sessions.appendObservation(session.id, {
       kind: "injection-delivered",
@@ -413,7 +413,62 @@ describe("the injection ledger", () => {
       at: millis(),
     });
 
+    // Its own entry kind, not an injection with an invented author: the loop
+    // §3.5 describes is visible in the transcript, and the conditions that were
+    // false are named rather than left inside the sentence (§6.1).
     const { transcript } = sessions.transcript(session.id as SessionId);
-    expect(transcript.turns.flatMap((turn) => turn.entries)).toHaveLength(0);
+    expect(transcript.turns.flatMap((turn) => turn.entries)).toEqual([
+      {
+        kind: "feedback",
+        source: "world-condition",
+        text: "checks_green: the checks are red",
+        failedConditionIds: ["checks_green"],
+      },
+    ]);
+  });
+
+  it("renders steering as an authored injection, feedback as neither", () => {
+    const { session } = startSession();
+    const node = graph.place({
+      role: "content",
+      refId: "obj-steering",
+      workstreamId,
+    });
+
+    sessions.queueInjection({
+      id: "inj-steer" as never,
+      sessionId: session.id,
+      origin: "steering",
+      author: humanAuthor,
+      nodeId: node.id,
+      text: "look at this too",
+      queuedAt: clock.now(),
+    });
+    sessions.queueInjection({
+      id: "inj-fb" as never,
+      sessionId: session.id,
+      origin: "condition-feedback",
+      text: "output_written: out.txt does not exist",
+      failedConditionIds: ["output_written"],
+      queuedAt: clock.now(),
+    });
+
+    for (const id of ["inj-steer", "inj-fb"]) {
+      sessions.markDelivered(id, clock.now());
+      sessions.appendObservation(session.id, {
+        kind: "injection-delivered",
+        injectionId: id as never,
+        at: millis(),
+      });
+    }
+
+    const { transcript } = sessions.transcript(session.id as SessionId);
+    const kinds = transcript.turns
+      .flatMap((turn) => turn.entries)
+      .map((entry) => entry.kind);
+
+    // Two things delivered the same way, recorded as the two different things
+    // they are: intent, and proof.
+    expect(kinds).toEqual(["injection", "feedback"]);
   });
 });

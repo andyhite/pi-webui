@@ -459,7 +459,11 @@ export class RunService {
     if (!result.accepted) {
       // The failing condition goes back to the session, which continues within
       // its budget (§3.5). Nothing about the run changes: it is still running.
-      await this.deliverFeedback(input.sessionId, result.feedback);
+      await this.deliverFeedback(
+        input.sessionId,
+        result.feedback,
+        result.failed.map((evaluation) => evaluation.conditionId),
+      );
       return {
         accepted: false,
         feedback: result.feedback,
@@ -794,14 +798,18 @@ export class RunService {
   }
 
   /**
-   * Hand a failing condition back to the session as a new turn (§3.5). It is
-   * recorded in the injection ledger as the product's own feedback: it authors
-   * no context and leaves no node, because PlotRoom is answering a submission
-   * rather than steering (§6.5).
+   * Hand a failing condition back to the session as a new turn (§3.5).
+   *
+   * The ledger records it as the product's own feedback — it authors no context
+   * and leaves no node, because PlotRoom is answering a submission rather than
+   * steering (§6.5) — and `origin` is what tells the transcript to render it as
+   * `@plotroom/core`'s `feedback` entry rather than as an injection nobody
+   * authored.
    */
   private async deliverFeedback(
     sessionId: string,
     feedback: string,
+    failedConditionIds: readonly string[],
   ): Promise<void> {
     const { stores } = this.deps;
     const id = `inj_${randomUUID()}`;
@@ -812,6 +820,9 @@ export class RunService {
       sessionId,
       origin: "condition-feedback",
       text: feedback,
+      // Named, so the transcript's `feedback` entry can say which conditions
+      // were false rather than leaving the sentence to be parsed (§3.5, §6.1).
+      failedConditionIds,
       queuedAt: at,
     });
 

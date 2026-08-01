@@ -23,10 +23,22 @@ import {
  * and are called, never restated.
  */
 
-/** What a delivered injection said, looked up from the ledger (§6.5). */
+/**
+ * What was delivered into a session, looked up from the ledger (§6.5).
+ *
+ * `origin` is what decides the entry kind: authored steering is somebody's
+ * intent and renders as an `injection` with its author; PlotRoom's own report on
+ * a failed submission is proof, not intent, and renders as `feedback` — the
+ * distinction `@plotroom/core`'s entry kinds already draw, and the reason an
+ * unauthored injection needs no invented author to appear at all.
+ */
 export interface DeliveredInjection {
-  readonly author: Author;
+  readonly origin: "steering" | "condition-feedback";
+  /** Present for steering; null for feedback, which nobody authored. */
+  readonly author: Author | null;
   readonly text: string;
+  /** The declared conditions a piece of feedback is about (§3.5). */
+  readonly failedConditionIds: readonly string[];
 }
 
 export interface TranscriptFromObservations {
@@ -116,11 +128,25 @@ export function transcriptFromObservations(
         });
         break;
       case "injection-delivered": {
-        // Only authored steering becomes a transcript entry: an injection entry
-        // carries an author, and PlotRoom's own world-condition feedback has
-        // none to claim (§3.5's loop is recorded on the run instead).
         const injected = injections.get(observation.injectionId);
         if (!injected) break;
+
+        // Feedback is its own entry kind, so the loop §3.5 describes is visible
+        // in the transcript: the session kept going *because* PlotRoom told it
+        // which declared conditions were false. Rendering it as an injection
+        // would have needed an author it does not have.
+        if (injected.origin === "condition-feedback") {
+          append(observation.at, {
+            kind: "feedback",
+            source: "world-condition",
+            text: injected.text,
+            failedConditionIds: injected.failedConditionIds,
+          });
+          break;
+        }
+
+        if (injected.author === null) break;
+
         append(observation.at, {
           kind: "injection",
           injectionId: observation.injectionId,

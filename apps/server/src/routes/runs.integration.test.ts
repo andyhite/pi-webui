@@ -941,6 +941,24 @@ describe("the producing completion loop (§3.5, principle 3)", () => {
     expect(at(injections[0], "origin")).toBe("condition-feedback");
     expect(at(injections[0], "author")).toBeNull();
     expect(at(injections[0], "deliveredAt")).not.toBeNull();
+    expect(list(injections[0], "failedConditionIds")).toEqual([
+      "output_written",
+    ]);
+
+    // And it is in the transcript as core's own `feedback` entry, naming the
+    // condition — which is what makes the loop legible: the session kept going
+    // because PlotRoom told it what was false (§3.5, §6.1).
+    const transcript = await harness.ok(
+      `/sessions/${str(started, "session.id")}/transcript`,
+    );
+    const feedback = list(transcript, "turns")
+      .flatMap((turn) => list(turn, "entries"))
+      .filter((entry) => at(entry, "kind") === "feedback");
+
+    expect(feedback).toHaveLength(1);
+    expect(at(feedback[0], "source")).toBe("world-condition");
+    expect(list(feedback[0], "failedConditionIds")).toEqual(["output_written"]);
+    expect(str(feedback[0], "text")).toMatch(/out\.txt does not exist/);
   });
 
   it("binds the produced output to the run that produced it (§15-4)", async () => {
