@@ -20,3 +20,4 @@ export * from "./runtime.js";
 export * from "./session.js";
 export * from "./transcript.js";
 export * from "./triage.js";
+export * from "./adapters/pi/index.js";
