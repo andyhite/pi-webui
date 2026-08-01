@@ -76,6 +76,34 @@ import {
  *   one: pacing is a property of the double, not of PlotRoom, and nothing
  *   downstream of the seam knows a delay happened — it observes the same stream,
  *   more slowly.
+ *
+ * ## Accruing cost, for budget enforcement (§8)
+ *
+ * A script spends money by **reporting usage on a turn**, exactly as a real
+ * runtime does — there is no separate "spend" step, because inventing one would
+ * mean the scripted path accrued cost by a route no real adapter takes:
+ *
+ * ```jsonc
+ * { "observation": { "kind": "turn-started", "turn": 1 } },
+ * { "observation": { "kind": "turn-ended", "turn": 1,
+ *                    "usage": { "inputTokens": 100, "outputTokens": 50,
+ *                               "costUsd": 4 } } },
+ * // A pause, so PlotRoom's enforcement lands between turns rather than after the
+ * // whole script has already been buffered.
+ * { "delay": { "ms": 50 } },
+ * { "observation": { "kind": "turn-started", "turn": 2 } },
+ * // ... which is the turn a budget stop cuts off.
+ * ```
+ *
+ * `costUsd` is what the runtime reports, so the accounting basis is
+ * `runtime-reported` and the attribution row says `reported`. Omit it and PlotRoom
+ * prices from tokens only if a pricing table is configured; a script that reports
+ * neither is a session that contributes no evidence about money, which is the
+ * honest default (§4.1).
+ *
+ * `session-ended` with `out-of-budget` remains **not expressible** — PlotRoom
+ * initiates budget stops, so a script that could declare one would let the rule be
+ * broken in a fixture (§3.6, §8).
  */
 export const SCRIPTED_ADAPTER_ID = "scripted";
 

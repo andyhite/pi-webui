@@ -1403,4 +1403,143 @@ export const migrations: readonly Migration[] = [
       ALTER TABLE run_initiations ADD COLUMN subject_id TEXT;
     `,
   },
+  {
+    id: 20,
+    name: "budgets",
+    sql: `
+      -- Budgets at workstream and global scope (§8, principle 2).
+      --
+      -- §8 names three scopes; only two are rows. **A run or batch's cap is the
+      -- number accepted at its preview**, and it is already recorded where it
+      -- belongs — runs.spend_cap_micros and run_batches.spend_cap_micros (§4.1) —
+      -- so it is not represented twice here. A second copy of a cap is a second
+      -- source of truth waiting to disagree about what the operator agreed to.
+      --
+      -- \`limit_micros\` is NOT NULL and removing a budget deletes the row: "a real
+      -- number the operator can raise or remove" is two verbs (PUT and DELETE),
+      -- not a nullable column that also means removed.
+      CREATE TABLE budgets (
+        id            TEXT PRIMARY KEY,
+        scope         TEXT NOT NULL CHECK (scope IN ('workstream', 'global')),
+        -- NULL exactly for the global ceiling, which binds everything and belongs
+        -- to nothing.
+        workstream_id TEXT REFERENCES workstreams (id) ON DELETE CASCADE,
+        limit_micros  INTEGER NOT NULL CHECK (limit_micros >= 0),
+        -- A window over the attribution ledger, evaluated at check time. There is
+        -- no timer behind 'day': nothing in the product wakes up because a budget
+        -- did (principle 2).
+        period        TEXT NOT NULL CHECK (period IN ('day', 'total')),
+        warn_fraction REAL NOT NULL CHECK (warn_fraction > 0 AND warn_fraction <= 1),
+        -- The shipped default ceiling is the product's own number; an operator who
+        -- raised it should be able to tell their number from ours.
+        origin        TEXT NOT NULL CHECK (origin IN ('shipped-default', 'authored')),
+        created_at    INTEGER NOT NULL,
+        updated_at    INTEGER NOT NULL,
+        CHECK (
+          (scope = 'global'     AND workstream_id IS NULL) OR
+          (scope = 'workstream' AND workstream_id IS NOT NULL)
+        )
+      );
+
+      -- One ceiling and one budget per workstream: "the tightest budget that binds
+      -- wins" is a rule about scopes, and two rows at one scope would make it a
+      -- rule about rows as well.
+      CREATE UNIQUE INDEX budgets_global_idx ON budgets (scope) WHERE scope = 'global';
+      CREATE UNIQUE INDEX budgets_workstream_idx ON budgets (workstream_id)
+        WHERE workstream_id IS NOT NULL;
+
+      -- **The shipped default global ceiling** (§8): "a real number the operator can
+      -- raise or remove, not an empty field with a recommendation — because with
+      -- agent fan-out, one gesture can otherwise authorize unbounded spend."
+      --
+      -- Seeded here rather than resolved at read time, so it is a row the operator
+      -- can see, raise, and delete like any other — and so removing it stays
+      -- removed across restarts. $25 per day; the reasoning is recorded beside the
+      -- constant in @plotroom/core's budgets.ts and in AGENTS.md.
+      INSERT INTO budgets (
+        id, scope, workstream_id, limit_micros, period, warn_fraction, origin,
+        created_at, updated_at
+      ) VALUES (
+        'budget_global_default', 'global', NULL, 25000000, 'day', 0.9,
+        'shipped-default', unixepoch(), unixepoch()
+      );
+
+      -- The near-cap warning, as rows (§8's "the defined behavior is to stop
+      -- cleanly").
+      --
+      -- A row rather than a counter for the same reason the broadcast rate window
+      -- is rows: a restart between the warning and the cap must not warn the
+      -- session twice, and "have I already told it?" cannot be answered by
+      -- something held in memory. One row per (session, binding), because a
+      -- session near its run cap and later near the global ceiling has been told
+      -- two different things.
+      CREATE TABLE budget_notices (
+        id             TEXT PRIMARY KEY,
+        session_id     TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        -- 'run' | 'batch' | 'workstream' | 'global', with the id of the thing that
+        -- bound it. Not a foreign key: the four kinds live in four tables.
+        binding_kind   TEXT NOT NULL CHECK (binding_kind IN ('run', 'batch', 'workstream', 'global')),
+        binding_id     TEXT NOT NULL,
+        kind           TEXT NOT NULL CHECK (kind IN ('near-cap', 'stopped')),
+        remaining_micros INTEGER NOT NULL,
+        at             INTEGER NOT NULL
+      );
+
+      CREATE UNIQUE INDEX budget_notices_once_idx
+        ON budget_notices (session_id, binding_kind, binding_id, kind);
+    `,
+  },
+  {
+    id: 21,
+    name: "budget_feedback_injections",
+    // The CHECK on session_injections.origin has to change, and SQLite cannot
+    // alter one in place — see `Migration.rebuildsTable`.
+    rebuildsTable: true,
+    sql: `
+      -- PlotRoom telling a session what remains of its budget is the same shape as
+      -- telling it which world condition failed: the product answering, not
+      -- somebody authoring context. So it is an injection with no author and no
+      -- node, and 'budget-notice' is what the schema calls it — recording it as
+      -- 'condition-feedback' would have made every near-cap warning look like a
+      -- rejected submission in the one record that explains why a session stopped.
+      CREATE TABLE session_injections_new (
+        id             TEXT PRIMARY KEY,
+        session_id     TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        origin         TEXT NOT NULL CHECK (origin IN ('steering', 'condition-feedback', 'budget-notice')),
+        author_kind    TEXT CHECK (author_kind IN ('human', 'session')),
+        author_session TEXT,
+        node_id        TEXT REFERENCES nodes (id),
+        text           TEXT NOT NULL,
+        failed_condition_ids_json TEXT,
+        queued_at      INTEGER NOT NULL,
+        delivered_at   INTEGER,
+        refused_at     INTEGER,
+        refused_reason TEXT,
+        CHECK (
+          (origin = 'steering' AND author_kind IS NOT NULL AND node_id IS NOT NULL) OR
+          (origin <> 'steering' AND author_kind IS NULL AND node_id IS NULL)
+        ),
+        CHECK (delivered_at IS NULL OR refused_at IS NULL),
+        CHECK (
+          (author_kind = 'session' AND author_session IS NOT NULL) OR
+          (author_kind IS NOT 'session' AND author_session IS NULL)
+        )
+      );
+
+      INSERT INTO session_injections_new (
+        id, session_id, origin, author_kind, author_session, node_id, text,
+        failed_condition_ids_json, queued_at, delivered_at, refused_at, refused_reason
+      )
+      SELECT
+        id, session_id, origin, author_kind, author_session, node_id, text,
+        failed_condition_ids_json, queued_at, delivered_at, refused_at, refused_reason
+      FROM session_injections;
+
+      DROP TABLE session_injections;
+      ALTER TABLE session_injections_new RENAME TO session_injections;
+
+      CREATE INDEX session_injections_session_idx
+        ON session_injections (session_id, queued_at);
+    `,
+  },
 ];

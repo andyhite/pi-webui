@@ -33,7 +33,7 @@ import {
  * unauthored injection needs no invented author to appear at all.
  */
 export interface DeliveredInjection {
-  readonly origin: "steering" | "condition-feedback";
+  readonly origin: "steering" | "condition-feedback" | "budget-notice";
   /** Present for steering; null for feedback, which nobody authored. */
   readonly author: Author | null;
   readonly text: string;
@@ -135,10 +135,13 @@ export function transcriptFromObservations(
         // in the transcript: the session kept going *because* PlotRoom told it
         // which declared conditions were false. Rendering it as an injection
         // would have needed an author it does not have.
-        if (injected.origin === "condition-feedback") {
+        if (injected.origin !== "steering") {
           append(observation.at, {
             kind: "feedback",
-            source: "world-condition",
+            source:
+              injected.origin === "budget-notice"
+                ? "budget"
+                : "world-condition",
             text: injected.text,
             failedConditionIds: injected.failedConditionIds,
           });

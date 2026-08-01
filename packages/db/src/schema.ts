@@ -711,7 +711,7 @@ export const sessionInjections = sqliteTable(
       .notNull()
       .references(() => sessions.id, { onDelete: "cascade" }),
     origin: text("origin", {
-      enum: ["steering", "condition-feedback"],
+      enum: ["steering", "condition-feedback", "budget-notice"],
     }).notNull(),
     authorKind: text("author_kind", { enum: ["human", "session"] }),
     authorSession: text("author_session"),
@@ -964,6 +964,69 @@ export const spendAttributions = sqliteTable(
     uniqueIndex("spend_attributions_pair_idx").on(
       table.sessionId,
       table.sourceSessionId,
+    ),
+  ],
+);
+
+/**
+ * Budgets at workstream and global scope (§8, migration 20).
+ *
+ * The run/batch scope is deliberately absent: a run's cap is what was accepted at
+ * its preview and lives on the run (§4.1). `limitMicros` is NOT NULL because
+ * removing a budget deletes the row — "raise or remove" is two verbs, not a
+ * nullable number that also means removed.
+ */
+export const budgets = sqliteTable(
+  "budgets",
+  {
+    id: text("id").primaryKey(),
+    scope: text("scope", { enum: ["workstream", "global"] }).notNull(),
+    workstreamId: text("workstream_id").references(() => workstreams.id, {
+      onDelete: "cascade",
+    }),
+    limitMicros: integer("limit_micros").notNull(),
+    period: text("period", { enum: ["day", "total"] }).notNull(),
+    warnFraction: real("warn_fraction").notNull(),
+    origin: text("origin", {
+      enum: ["shipped-default", "authored"],
+    }).notNull(),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("budgets_global_idx").on(table.scope),
+    uniqueIndex("budgets_workstream_idx").on(table.workstreamId),
+  ],
+);
+
+/**
+ * What a session has already been told about a budget (§8, migration 20).
+ *
+ * Rows rather than a counter, for the reason the broadcast rate window is rows: a
+ * restart between the warning and the cap must not warn the session twice, and
+ * "have I already told it?" cannot be answered from memory.
+ */
+export const budgetNotices = sqliteTable(
+  "budget_notices",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    bindingKind: text("binding_kind", {
+      enum: ["run", "batch", "workstream", "global"],
+    }).notNull(),
+    bindingId: text("binding_id").notNull(),
+    kind: text("kind", { enum: ["near-cap", "stopped"] }).notNull(),
+    remainingMicros: integer("remaining_micros").notNull(),
+    at: integer("at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("budget_notices_once_idx").on(
+      table.sessionId,
+      table.bindingKind,
+      table.bindingId,
+      table.kind,
     ),
   ],
 );
@@ -1223,6 +1286,8 @@ export type ClaimPolicyRow = typeof claimPolicies.$inferSelect;
 export type PathWriteRow = typeof pathWrites.$inferSelect;
 export type PathReadRow = typeof pathReads.$inferSelect;
 export type SpendAttributionRow = typeof spendAttributions.$inferSelect;
+export type BudgetRow = typeof budgets.$inferSelect;
+export type BudgetNoticeRow = typeof budgetNotices.$inferSelect;
 export type RunBatchRow = typeof runBatches.$inferSelect;
 export type RunQueueRow = typeof runQueue.$inferSelect;
 export type SessionQuestionRow = typeof sessionQuestions.$inferSelect;

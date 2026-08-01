@@ -67,7 +67,11 @@ export function runRoutes(
    * instead, so this is also the endpoint that answers "why can't I run this".
    */
   app.get("/commands/:id/preview", (c) =>
-    c.json(service.preview(param(c, "id"))),
+    // The caller's own actor, so a session previewing a delegation is measured
+    // against the caps that would actually bind it (§8) — a preview scoped to the
+    // human would say "ready" where the run refuses, which is the one thing this
+    // endpoint exists not to do.
+    c.json(service.preview(param(c, "id"), actorOf(c))),
   );
 
   /**

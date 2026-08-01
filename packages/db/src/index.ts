@@ -29,6 +29,7 @@ export * from "./claim-store.js";
 export * from "./question-store.js";
 export * from "./broadcast-store.js";
 export * from "./spend-store.js";
+export * from "./budget-store.js";
 export * from "./workspace-store.js";
 export * from "./session-transcript.js";
 export * from "./session-store.js";

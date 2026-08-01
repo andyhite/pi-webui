@@ -15,8 +15,10 @@ import {
 } from "./http/middleware.js";
 import type { Logger } from "./logging/logger.js";
 import type { CompactionSchedule } from "./maintenance/compaction.js";
+import { BudgetService } from "./budgets/service.js";
 import { ClaimService } from "./claims/service.js";
 import { createStores } from "./routes/api.js";
+import { budgetRoutes } from "./routes/budgets.js";
 import { claimRoutes } from "./routes/claims.js";
 import { commandRoutes } from "./routes/commands.js";
 import { continuationRoutes } from "./routes/continuation.js";
@@ -137,11 +139,18 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     logger,
   });
 
+  // Budgets (§8, Epic 6.2). Constructed before the run service because the run
+  // path is what acts on its answers: which caps bind a session, and what remains
+  // of them, is one resolution shared by the pre-run refusal, the session-facing
+  // read, and the mid-session enforcement (principle 8).
+  const budgets = new BudgetService({ stores, bus, logger });
+
   const runs = new RunService({
     config,
     stores,
     bus,
     logger,
+    budgets,
     runtimes: createRuntimeRegistry(config, logger),
     workspaceKinds,
     conditions: createConditionChecks(nodeCommandExec()),
@@ -207,7 +216,8 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", runQueueRoutes(queue));
   app.route("/api", sessionRoutes(stores, runs, claims));
   app.route("/api", claimRoutes(claims));
-  app.route("/api", spendRoutes(stores));
+  app.route("/api", spendRoutes(stores, budgets, config.concurrencyLimit));
+  app.route("/api", budgetRoutes(stores, budgets));
   app.route("/api", steeringRoutes(stores, steering));
   app.route("/api", continuationRoutes(stores, continuation));
   app.route(

@@ -148,6 +148,14 @@ const OPERATOR_ONLY_ROUTES: readonly {
     why: '§4.4: pinning is "the human\'s word for never compact this". A run kept forever because an agent asked would be the retention rule answering to the thing it is meant to bound.',
   },
   {
+    path: "/api/budgets",
+    why: 'principle 1: a session "cannot wire its own inputs, grant itself capabilities, [or] raise its own budget". Setting a cap is the operator\'s statement about what may be spent — and lowering one is not a gesture the spec asks a session for either — so the write has no tool at all, while the reads (session_budget_read, budgets_read) are §8\'s "a session can see what remains".',
+  },
+  {
+    path: "/api/budgets/:id",
+    why: "removing a ceiling is the same operator decision as setting one, from the other side (§8). An agent deleting the budget that bounds it is the exact hole principle 2's transitive guarantee exists to close.",
+  },
+  {
     path: "/api/nodes/:id/position",
     why: "the arrangement is the operator's authored spatial work (§5): an agent rearranging the canvas somebody else is reading is not a wanted gesture, and nothing an agent does depends on where a node sits.",
   },

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
-import { formatMicros } from "@plotroom/core";
+import { dayStartSeconds, formatMicros } from "@plotroom/core";
+import type { BudgetService } from "../budgets/service.js";
 import { param, type ApiEnv, type ApiStores } from "./api.js";
 
 /**
@@ -16,7 +17,11 @@ import { param, type ApiEnv, type ApiStores } from "./api.js";
  * than instead of it: a surface that had to parse "$0.02" back into a number is a
  * surface that will get it wrong.
  */
-export function spendRoutes(stores: ApiStores): Hono<ApiEnv> {
+export function spendRoutes(
+  stores: ApiStores,
+  budgets: BudgetService,
+  limit: number,
+): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
 
   /**
@@ -58,14 +63,86 @@ export function spendRoutes(stores: ApiStores): Hono<ApiEnv> {
     });
   });
 
-  /** The fleet's total (§8's fleet panel: "today's total, biggest spender"). */
+  /**
+   * The fleet's total (§8). Everything ever spent, and today's separately — both,
+   * because "totals do not reset when sessions end" and "today's total" are two
+   * different numbers and a panel showing one labelled as the other would be
+   * wrong twice a day.
+   */
   app.get("/spend", (c) => {
     const total = stores.spend.fleetTotal();
+    const today = stores.spend.todayTotal();
 
     return c.json({
       spentMicros: total.amountMicros,
       spent: formatMicros(total.amountMicros),
       sessions: total.sources,
+      today: {
+        spentMicros: today.amountMicros,
+        spent: formatMicros(today.amountMicros),
+        sessions: today.sources,
+      },
+    });
+  });
+
+  /**
+   * **The fleet view** (§8, §11): "today's total, the biggest spender, and running
+   * sessions against the concurrency limit."
+   *
+   * The data behind §11's Fleet panel, which is Track B's to render. Everything
+   * here is a read over records that already exist — the spend ledger, the session
+   * store, and the configured limit — so it works for a fleet that has finished
+   * exactly as well as for one that is running (§8's post-mortem requirement
+   * applied to the fleet rather than to one session).
+   */
+  app.get("/fleet", (c) => {
+    const today = stores.spend.todayTotal();
+    const total = stores.spend.fleetTotal();
+    const todayBySession = stores.spend.bySession({
+      since: dayStartSeconds(stores.clock()),
+    });
+    const biggest = todayBySession[0] ?? null;
+
+    const sessions = stores.sessions.list();
+    const running = sessions.filter(
+      (stored) => stored.session.end === null,
+    ).length;
+
+    return c.json({
+      today: {
+        spentMicros: today.amountMicros,
+        spent: formatMicros(today.amountMicros),
+        sessions: today.sources,
+      },
+      allTime: {
+        spentMicros: total.amountMicros,
+        spent: formatMicros(total.amountMicros),
+      },
+      // Null rather than a zero-spend placeholder: nothing has spent anything
+      // today, and naming an arbitrary session as the biggest spender of $0 would
+      // be a number that looks like evidence (principle 7).
+      biggestSpender:
+        biggest === null
+          ? null
+          : {
+              sessionId: biggest.sessionId,
+              workstreamId: biggest.workstreamId,
+              spentMicros: biggest.amountMicros,
+              spent: formatMicros(biggest.amountMicros),
+            },
+      concurrency: {
+        running,
+        limit,
+        // The queue's own count, not a guess from the difference: work waiting is
+        // admitted work, and it is visible (§4.1).
+        queued: stores.queue.waiting().length,
+      },
+      budgets: budgets.budgets().map((entry) => ({
+        budget: entry.budget,
+        spentMicros: entry.spentMicros,
+        remainingMicros: entry.remainingMicros,
+        remaining: formatMicros(entry.remainingMicros),
+      })),
     });
   });
 

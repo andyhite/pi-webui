@@ -155,9 +155,15 @@ describe("a session actor makes a run a delegation (§3.6)", () => {
     // Recorded in micros, formatted beside it rather than instead of it.
     expect(at(parentSpend, "attributed")).toMatch(/^\$/);
 
-    // The fleet total counts each spender once, not once per ancestor.
+    // The fleet total counts each spender once, not once per ancestor: the child's
+    // $0.01 plus the parent's own $0.004, and nothing twice. The parent is still
+    // running and its spend counts anyway — §8's "today's total" is about money
+    // already spent, and waiting for a session to end before admitting it cost
+    // anything would make the fleet view wrong for exactly as long as work is in
+    // flight, which is when it gets read.
     const fleet = await harness.ok("/spend");
-    expect(at(fleet, "spentMicros")).toBe(10_000);
+    expect(at(fleet, "spentMicros")).toBe(14_000);
+    expect(at(fleet, "today.spentMicros")).toBe(14_000);
   });
 
   it("charges a doubled attribution once (principle 9, applied to money)", async () => {

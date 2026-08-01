@@ -882,6 +882,13 @@ const runTools: readonly AgentTool[] = [
     "/api/command-definitions/:id/outcomes",
     { id: ID },
   ),
+  read(
+    "workstream_budget_read",
+    "Read what binds a workstream's spend: its own budget and the global ceiling, with what is left (§8).",
+    "the spend rollup on a workstream card (§3.3, §8)",
+    "/api/workstreams/:id/budget",
+    { id: ID },
+  ),
   // A tool rather than operator-only: previewing before spending is exactly the
   // gesture principle 8 says both surfaces get, and it is a pure read — it
   // provisions nothing, starts nothing, and records nothing (§4.1).
@@ -1072,6 +1079,23 @@ const sessionTools: readonly AgentTool[] = [
     "Read what a session's budgets are charged: its own work plus everything it delegated (§3.6, principle 2).",
     "the accounting on a session card (§8)",
     "/api/sessions/:id/spend",
+    { id: ID },
+  ),
+  // §8's own sentence: "a session can see what remains of every budget that binds
+  // it and plan accordingly." A read, deliberately — seeing a cap is not raising
+  // one, and principle 1 forbids only the raising.
+  read(
+    "session_budget_read",
+    "Read what remains of every budget that binds this session — its run's cap, every ancestor's, its workstream's, and the global ceiling — with the tightest one named (§8). Near a cap, wrap up cleanly; racing the budget is a failure mode, not a saving.",
+    "the remaining-budget line on a session card (§8)",
+    "/api/sessions/:id/budget",
+    { id: ID },
+  ),
+  read(
+    "session_timeline_read",
+    "Read where a session's time and money went: turns and tool calls in order, for a finished session as much as a running one (§8).",
+    "the session timeline panel (§11)",
+    "/api/sessions/:id/timeline",
     { id: ID },
   ),
   read(
@@ -1579,6 +1603,18 @@ const boardTools: readonly AgentTool[] = [
     "Read the fleet's total spend — what everything running and finished has cost (§8).",
     "the fleet panel's today's-total line (§11)",
     "/api/spend",
+  ),
+  read(
+    "fleet_read",
+    "Read the fleet view: today's total, the biggest spender, running sessions against the concurrency limit, and every budget with what is left (§8).",
+    "the fleet panel (§11)",
+    "/api/fleet",
+  ),
+  read(
+    "budgets_read",
+    "Read every budget — workstream and the global ceiling — with what has been spent against each (§8).",
+    "the budgets section of settings (§8)",
+    "/api/budgets",
   ),
   read(
     "health_read",

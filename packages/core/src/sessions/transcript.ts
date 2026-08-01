@@ -66,7 +66,14 @@ export type TranscriptEntry =
        * lie in the one record that explains why the session kept going.
        */
       readonly kind: "feedback";
-      readonly source: "world-condition";
+      /**
+       * Which of PlotRoom's own reports this is. `world-condition` is a rejected
+       * submission (§3.5); `budget` is the near-cap instruction to wrap up cleanly
+       * or the notice that a budget in this chain ran out (§8). Named rather than
+       * left to the wording, because the two are read differently: one says try
+       * again, the other says there is no more money to try with.
+       */
+      readonly source: "world-condition" | "budget";
       readonly text: string;
       /** The declared conditions that failed, named rather than paraphrased (§3.5). */
       readonly failedConditionIds: readonly string[];

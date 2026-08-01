@@ -5,6 +5,7 @@ import {
   endedBy,
   endStateFacts,
   exportTranscript,
+  sessionTimeline,
   systemMillisClock,
   transcriptRenderings,
   type SessionId,
@@ -103,6 +104,31 @@ export function sessionRoutes(
       observations: stores.sessions
         .observationRecords(id)
         .filter((record) => record.seq > (Number.isFinite(since) ? since : 0)),
+    });
+  });
+
+  /**
+   * **The session timeline** (§8, §11): "where the time and money went, as a
+   * temporal view of turns and tool calls — including for finished sessions, so it
+   * is the post-mortem for something that failed overnight."
+   *
+   * The data behind §11's timeline panel, which is Track B's to render. A
+   * projection of the observation log like the transcript, which is exactly why it
+   * works for a finished session: nothing is asked of a runtime that is gone
+   * (principle 7). The accounting snapshot travels with it, so one read gives both
+   * the totals and the shape of how they were reached.
+   */
+  app.get("/sessions/:id/timeline", (c) => {
+    const id = param(c, "id");
+    const stored = stores.sessions.get(id);
+    const { accounting } = stores.sessions.observationState(id);
+
+    return c.json({
+      sessionId: id,
+      timeline: sessionTimeline(stores.sessions.observations(id)),
+      accounting,
+      end:
+        stored.session.end === null ? null : endStateFacts(stored.session.end),
     });
   });
 

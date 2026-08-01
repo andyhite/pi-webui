@@ -1,6 +1,7 @@
 import { systemClock, type Author, type Clock } from "@plotroom/core";
 import {
   BroadcastStore,
+  BudgetStore,
   ClaimStore,
   CommandStore,
   GraphStore,
@@ -49,6 +50,8 @@ export interface ApiStores {
   readonly broadcasts: BroadcastStore;
   /** Spend attributed up the initiating chain (§3.6, principle 2). */
   readonly spend: SpendStore;
+  /** Budgets at workstream and global scope (§8); a run's cap lives on the run. */
+  readonly budgets: BudgetStore;
   readonly workspaces: WorkspaceStore;
   /** Durability, cleanup, and the compaction sweep (§12, Epic 2.3). */
   readonly maintenance: Maintenance;
@@ -74,6 +77,7 @@ export function createStores(
     questions: new QuestionStore(db, clock),
     broadcasts: new BroadcastStore(db, clock),
     spend: new SpendStore(db, clock),
+    budgets: new BudgetStore(db, clock),
     // The workspace record's own vocabulary is milliseconds (§3.4), so its
     // clock is the same instant at a different resolution, never a second
     // source of time.

@@ -67,6 +67,21 @@ export interface SessionDriverHooks {
     readonly requestId: RuntimeRequestId;
     readonly request: Extract<RuntimeRequest, { kind: "question" }>;
   }): void;
+  /**
+   * The session's accounting moved: it spent money (§8).
+   *
+   * Called from the pump rather than on a timer, because there is no timer
+   * anywhere in this product (principle 2) and because spending is observable:
+   * the moment a turn reports usage is the moment a budget can be exhausted. The
+   * hook attributes the spend up the chain and decides whether anything binds it
+   * — the driver knows neither rule and asks.
+   *
+   * Optional only so a test can drive the pump without budgets wired.
+   */
+  onAccounting?(input: {
+    readonly sessionId: string;
+    readonly costUsd: number;
+  }): Promise<void>;
   /** A session's stream ended. The run must stop being "running" too. */
   onEnded(input: {
     readonly sessionId: string;
@@ -129,6 +144,9 @@ export function driveSession(
   return (async () => {
     const initial = sessions.get(sessionId);
     let state = initialObservationState(initial.session.startedAt * 1000);
+    // What the fold had already counted when this pump started, so a resumed pump
+    // does not re-announce spend that was already attributed.
+    let spent = state.accounting.costUsd;
 
     try {
       for await (const observation of input.handle.observations()) {
@@ -152,6 +170,14 @@ export function driveSession(
           author,
         });
         publishSession(bus, stored, status, author);
+
+        // Money first, before the observation is acted on: a turn that finished
+        // by exhausting a budget is a session PlotRoom stops now rather than
+        // after whatever it does next (§8).
+        if (state.accounting.costUsd > spent) {
+          spent = state.accounting.costUsd;
+          await hooks.onAccounting?.({ sessionId, costUsd: spent });
+        }
 
         switch (observation.kind) {
           case "injection-delivered":

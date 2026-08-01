@@ -33,6 +33,7 @@ import type {
   CommandNode,
   CommandOutput,
 } from "./commands.js";
+import type { Budget } from "./budgets.js";
 import type { Edge, PlacedNode } from "./edges.js";
 import type {
   CommandDefinitionId,
@@ -92,6 +93,13 @@ export const EVENT_ENTITIES = [
   "run_queue_entry",
   /** Spend attributed up an initiating chain (§3.6, principle 2). */
   "session_spend",
+  /**
+   * A budget at workstream or global scope (§8). Its own entity because a cap is
+   * not a property of the thing it binds: the global ceiling binds everything and
+   * belongs to nothing, and a surface showing "what may still be spent" has to
+   * hear about it changing without refetching the whole board.
+   */
+  "budget",
   /**
    * A structured question and its answer (§6.4). Its own entity rather than a
    * session update, because a question outlives the tool call it blocks and the
@@ -365,6 +373,27 @@ export type DomainEventBody =
    * `verb` is "created" for a raise and "updated" for an answer; there is no
    * "deleted", because a question that was asked stays asked.
    */
+  /**
+   * A budget set, raised, lowered, or removed (§8). The whole record travels, so
+   * a surface can render the new remaining figure without asking; `verb` is
+   * "deleted" for the operator removing a ceiling, which is how §8's "a real
+   * number the operator can raise or remove" is spelled.
+   */
+  | {
+      readonly entity: "budget";
+      readonly verb: "created" | "updated";
+      readonly budget: Budget;
+      /** What the scope has spent against it, so the event is readable alone. */
+      readonly spentMicros: number;
+    }
+  | {
+      readonly entity: "budget";
+      readonly verb: "deleted";
+      readonly budgetId: string;
+      readonly scope: Budget["scope"];
+      readonly workstreamId: WorkstreamId | null;
+      readonly reason: string;
+    }
   | {
       readonly entity: "session_question";
       readonly verb: "created" | "updated";

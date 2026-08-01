@@ -115,15 +115,24 @@ export interface StoredObservation {
   readonly observation: RuntimeObservation;
 }
 
+/**
+ * Who put content into a session: somebody authoring it, or PlotRoom answering.
+ * The two unauthored origins are kept apart because they are read differently —
+ * one says try again, the other says there is no more money to try with.
+ */
+export type InjectionOrigin =
+  "steering" | "condition-feedback" | "budget-notice";
+
 export interface QueueInjectionInput {
   readonly id: InjectionId;
   readonly sessionId: string;
   /**
    * Authored steering leaves a permanent content node on the graph (§6.5);
-   * PlotRoom's own world-condition feedback authors nothing, so it carries
-   * neither an author nor a node and is recorded as `condition-feedback`.
+   * PlotRoom's own reports author nothing, so they carry neither an author nor a
+   * node: `condition-feedback` for a rejected submission (§3.5) and
+   * `budget-notice` for what remains of a budget that binds it (§8).
    */
-  readonly origin: "steering" | "condition-feedback";
+  readonly origin: InjectionOrigin;
   readonly author?: Author;
   readonly nodeId?: string;
   readonly text: string;
@@ -140,7 +149,7 @@ export interface QueueInjectionInput {
 export interface StoredInjection {
   readonly id: InjectionId;
   readonly sessionId: SessionId;
-  readonly origin: "steering" | "condition-feedback";
+  readonly origin: InjectionOrigin;
   readonly author: Author | null;
   readonly nodeId: NodeId | null;
   readonly text: string;

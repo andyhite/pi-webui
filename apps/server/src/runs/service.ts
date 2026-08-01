@@ -18,6 +18,7 @@ import {
   type BudgetScope,
   type CompletionEvidence,
   type CompletionProof,
+  type EffectiveBudget,
   type ConditionEvaluation,
   type Run,
   type RunCost,
@@ -36,7 +37,7 @@ import {
   type WorkspaceKindRegistry,
   type WorkstreamId,
 } from "@plotroom/core";
-import type { RunPreview, StoredSession } from "@plotroom/db";
+import type { RunPreview, RunRefusal, StoredSession } from "@plotroom/db";
 import type { ServerConfig } from "../config.js";
 import type { ConditionCheckRegistry } from "../conditions/registry.js";
 import type { EventBus } from "../events/bus.js";
@@ -48,6 +49,7 @@ import { driveSession } from "../sessions/driver.js";
 import type { SessionHub } from "../sessions/hub.js";
 import type { ApiStores } from "../routes/api.js";
 import { toCommandNode, toEdge, toPlacedNode } from "../routes/mappers.js";
+import type { BudgetService } from "../budgets/service.js";
 import type { ClaimService } from "../claims/service.js";
 import type { SessionGate } from "../sessions/gate.js";
 import {
@@ -117,6 +119,8 @@ export interface RunPreviewResult {
     /** Always null here: accepting one is the run request's business. */
     readonly accepted: number | null;
   };
+  /** What already binds this work, whatever cap is accepted (§8). */
+  readonly budget: EffectiveBudget;
 }
 
 export interface RunOneResult {
@@ -178,6 +182,11 @@ export interface RunServiceDeps {
   readonly claims: ClaimService;
   /** Where a session's writes meet its claims, per call (§3.4, C6). */
   readonly gate: SessionGate;
+  /**
+   * Budgets (§8). Which caps bind a session and what remains of them; the run path
+   * is what acts on the answer, because ending a session is its verb.
+   */
+  readonly budgets: BudgetService;
 }
 
 export class RunService {
@@ -220,11 +229,29 @@ export class RunService {
    * therefore reported from the record — what state it is in, and whether the
    * first run will have to provision one — rather than by touching a mechanism.
    */
-  preview(commandId: string): RunPreviewResult {
+  preview(
+    commandId: string,
+    actor: Author = { kind: "human" },
+  ): RunPreviewResult {
     const { stores, config } = this.deps;
-    const preview = stores.runs.preview(commandId);
+    const planned = stores.runs.preview(commandId);
     const command = stores.commands.command(commandId);
     const workspace = stores.workspaces.forWorkstream(command.workstreamId);
+
+    // An exhausted budget is a blocker on the plan, not a footnote beside it: a
+    // preview that said "ready" while the run refused for want of money would be
+    // the one thing this preview exists not to do (§4.1). Collected here rather
+    // than in the store because a budget is a property of the workstream and the
+    // caller, which a command-scoped plan cannot see.
+    const budgetBlocker = this.budgetBlocker(command.workstreamId, actor);
+    const preview = {
+      ...planned,
+      blockers:
+        budgetBlocker === null
+          ? planned.blockers
+          : [...planned.blockers, budgetBlocker],
+      runnable: planned.runnable && budgetBlocker === null,
+    };
 
     const readiness =
       workspace === null
@@ -256,6 +283,13 @@ export class RunService {
         basis: preview.estimate.basis,
         accepted: null,
       },
+      // What already binds this work before a cap is accepted (§8), so the
+      // operator sees what the run will be measured against rather than only what
+      // it might cost.
+      budget:
+        actor.kind === "session"
+          ? this.deps.budgets.forSession(actor.sessionId)
+          : this.deps.budgets.forWorkstream(command.workstreamId),
     };
   }
 
@@ -311,6 +345,12 @@ export class RunService {
     // human actor passes through untouched — they are the authority the chain
     // terminates at (principle 1).
     checkDelegation(stores, { actor: input.actor, commandId: input.commandId });
+
+    // §8's cap, enforced before anything is provisioned or recorded: a run with no
+    // money to spend is refused with the reason, never started and immediately
+    // stopped — that would leave history claiming an attempt nothing happened in.
+    const budgetBlocker = this.budgetBlocker(command.workstreamId, input.actor);
+    if (budgetBlocker !== null) throw refused(budgetBlocker);
 
     // Workspaces are provisioned at first run, and readiness is what blocks
     // (§3.4). Before this line nothing has been recorded, so a not-ready
@@ -1215,6 +1255,13 @@ export class RunService {
             });
           },
           completionEvidence: (id) => this.completionEvidence(id),
+          // §8, at the only honest moment: the session just spent something, so a
+          // budget it is bound by may now be exhausted. Attribution and
+          // enforcement both happen here — not on a schedule, because nothing in
+          // this product runs on one (principle 2).
+          onAccounting: async ({ sessionId: id }) => {
+            await this.enforceBudget(id);
+          },
           onQuestion: (question) => {
             if (this.#onQuestion === null) {
               this.deps.logger.error(
@@ -1360,6 +1407,7 @@ export class RunService {
     sessionId: string,
     feedback: string,
     failedConditionIds: readonly string[],
+    origin: "condition-feedback" | "budget-notice" = "condition-feedback",
   ): Promise<void> {
     const { stores } = this.deps;
     const id = `inj_${randomUUID()}`;
@@ -1368,7 +1416,7 @@ export class RunService {
     stores.sessions.queueInjection({
       id,
       sessionId,
-      origin: "condition-feedback",
+      origin,
       text: feedback,
       // Named, so the transcript's `feedback` entry can say which conditions
       // were false rather than leaving the sentence to be parsed (§3.5, §6.1).
@@ -1569,6 +1617,96 @@ export class RunService {
       baseRef: config.workspace.baseRef,
       remoteName: "origin",
       cacheDir: join(config.stateDir, "git-cache"),
+    };
+  }
+
+  /**
+   * Budget enforcement, at the one moment it can happen: the session just spent
+   * something (§8, principle 2).
+   *
+   * The order is the whole of it. The spend is attributed up the chain **first**,
+   * because an ancestor's cap counts what its descendants spent and a check
+   * against a stale ledger would let a delegated dollar past every cap above it.
+   * Then the tightest binding decides, and only two things can follow:
+   *
+   * - **at the cap** — PlotRoom stops the session, and the outcome recorded is
+   *   `out-of-budget`: its own end state, distinct from failure, which a retry
+   *   must not blindly re-run (§3.6). The chain that paid for it is told, so a
+   *   parent learns why its child stopped rather than reading it as a failure;
+   * - **near the cap** — the session is told once, with what remains and the
+   *   instruction to wrap up cleanly (§8). Once, from a ledger row, so a restart
+   *   between the warning and the cap cannot say it twice.
+   *
+   * Nothing here decides *whether* a cap exists or which one is tightest — that is
+   * `@plotroom/core`'s rule reached through `BudgetService`, so the session-facing
+   * read and this enforcement cannot disagree (principle 8).
+   */
+  private async enforceBudget(sessionId: string): Promise<void> {
+    const { stores, budgets } = this.deps;
+    const session = stores.sessions.get(sessionId);
+    // Already ended: an observation buffered behind the stop is not a reason to
+    // stop it again, and the first outcome is the one that stands (principle 9).
+    if (session.session.end !== null) return;
+
+    this.attributeSpend(session);
+    const effective = budgets.forSession(sessionId);
+
+    if (effective.state === "at-cap" && effective.tightest !== null) {
+      const tightest = effective.tightest;
+      this.deps.logger.warn("stopping a session out of budget", {
+        sessionId,
+        binding: `${tightest.kind}:${tightest.id}`,
+        limitMicros: tightest.limitMicros,
+        spentMicros: tightest.spentMicros,
+      });
+
+      await this.stopSession({
+        sessionId,
+        mode: "graceful",
+        cause: "budget",
+        scope: tightest.scope,
+      });
+
+      // "Report" (§8), to the chain that was charged for it. A stop notice is not
+      // steering and authors nothing: it is PlotRoom saying what it did.
+      for (const ancestor of budgets.ancestorsOf(sessionId)) {
+        const notice = budgets.claimStopNotice(sessionId, ancestor, tightest);
+        if (notice === null) continue;
+        await this.deliverFeedback(ancestor, notice, [], "budget-notice");
+      }
+      return;
+    }
+
+    if (effective.state !== "near-cap") return;
+
+    const warning = budgets.claimWarning(sessionId, effective);
+    if (warning === null) return;
+    await this.deliverFeedback(sessionId, warning, [], "budget-notice");
+  }
+
+  /**
+   * The refusal before anything is recorded: a run that has no money to spend does
+   * not start (§8).
+   *
+   * Reported as a refusal rather than started and immediately stopped, because a
+   * run whose first turn is cut off leaves history saying work was attempted when
+   * nothing was. For a delegated run the caller's whole chain is checked, not just
+   * the target workstream — a child cannot spend a cap its parent has exhausted.
+   */
+  private budgetBlocker(
+    workstreamId: string,
+    actor: Author,
+  ): RunRefusal | null {
+    const effective =
+      actor.kind === "session"
+        ? this.deps.budgets.forSession(actor.sessionId)
+        : this.deps.budgets.forWorkstream(workstreamId);
+
+    if (effective.state !== "at-cap") return null;
+
+    return {
+      reason: "out_of_budget",
+      message: `${effective.description}; raise or remove the cap before running this (§8)`,
     };
   }
 
