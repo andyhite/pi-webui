@@ -178,14 +178,37 @@ out-of-budget session; and pi has been renamed to `@earendil-works/pi-coding-age
 
 **Exit criteria:** every Phase 1 operation reachable over HTTP; WS pushes state changes; the renderer (Phase 3) and agent tools (Phase 4) build on this API with no side channels.
 
-### Epic 2.1 — HTTP + WS backbone (`server`)
+### Epic 2.1 — HTTP + WS backbone (`server`) — _done_
 
-- [ ] Hono app, route structure, error shape, request validation
-- [ ] WebSocket state-change stream: one event vocabulary for everything the canvas and queue render live
-- [ ] Operator credential: optional shared secret locally; auth required for non-local binding (§12)
-- [ ] Loopback-only bind by default — never `0.0.0.0` without explicit opt-in plus the credential requirement (§12)
-- [ ] Origin/Host validation on WebSocket upgrades and state-changing requests: loopback names always trusted, anything else requires explicit allow-listing — DNS-rebinding and drive-by-page protection that also makes SSH-tunnel access (`ssh -L`, browser at `http://localhost:<port>`) work with zero config (§12)
-- [ ] Structured logs: consistent shape, runtime-adjustable level, redaction (§8)
+- [x] Hono app, route structure, error shape, request validation
+- [x] WebSocket state-change stream: one event vocabulary for everything the canvas and queue render live
+- [x] Operator credential: optional shared secret locally; auth required for non-local binding (§12)
+- [x] Loopback-only bind by default — never `0.0.0.0` without explicit opt-in plus the credential requirement (§12)
+- [x] Origin/Host validation on WebSocket upgrades and state-changing requests: loopback names always trusted, anything else requires explicit allow-listing — DNS-rebinding and drive-by-page protection that also makes SSH-tunnel access (`ssh -L`, browser at `http://localhost:<port>`) work with zero config (§12)
+- [x] Structured logs: consistent shape, runtime-adjustable level, redaction (§8)
+
+_The event vocabulary (`DomainEvent`) lives in `@plotroom/core` — created/
+updated carry the full entity, deleted carries only the id — so the seam Epic
+2.2's mutations publish through predates the mutations themselves; a server-
+side `EventBus` assigns id/seq/occurredAt and fans out to `/ws` subscribers.
+Origin/Host validation (`checkOrigin`) and the operator credential
+(`checkCredential`) gate both `/api/*` and `/ws` identically, checking
+`Origin` first and falling back to `Host` only when `Origin` is absent, so a
+rebinding page's real origin is what gets checked, never the header an
+attacker controls; loopback (`localhost`, `127.0.0.0/8`, `::1`, any port) is
+always trusted, anything else needs `PLOTROOM_TRUSTED_ORIGINS`.
+`checkBindPolicy` refuses to start non-loopback without both
+`PLOTROOM_ALLOW_NON_LOOPBACK_BIND=1` and a configured credential.
+`serveRenderer` single-origin-serves whatever `apps/web` builds (SPA fallback
+to `index.html`, path-traversal-safe) on the same port as `/api` and `/ws`;
+until Epic 3.0 lands a build, it reports 503 with a clear reason instead of a
+silent 404, and API/WS still work. All of it is covered by unit tests on the
+pure predicates plus a real-server, real-`ws`-client integration suite (43
+tests total). Deferred: settings-backed configuration (env vars are the only
+source until Epic 8.3; `loadServerConfig` takes explicit overrides as that
+store's seam); WS reconnect replay (a client resyncs via a REST snapshot plus
+the `hello` message's `nextSeq`, once Epic 2.2 has a snapshot endpoint to
+offer); a persisted structured-log sink (today: stdout JSON lines only)._
 
 ### Epic 2.2 — Graph and workstream API (`server`, `graph`)
 
