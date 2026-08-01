@@ -176,9 +176,32 @@ request's actor rather than by the tool catalog's flag. Every runtime write pass
 (charged session, spender), replaced rather than accumulated, because the accounting
 total is folded from the observation log and the same spend observed twice must be
 charged once. `own` rows only for a workstream or fleet total, or a delegated dollar
-would be counted once per ancestor. Enforcement is Phase 6's; the data starts at the
-first delegation because attribution that starts later cannot answer what an earlier
-chain cost.
+would be counted once per ancestor. Attribution happens **whenever the accounting
+fold moves**, not at session end, because a fleet view that admitted a running
+session's cost only once it stopped would be wrong for exactly as long as work was in
+flight. Nothing ever zeroes these rows: "today's total" is a **window** over `at`
+taken at read time (UTC day), never a reset, and no timer is involved (principle 2).
+The data starts at the first delegation because attribution that starts later cannot
+answer what an earlier chain cost.
+
+**Budgets** live in `budgets` and `budget_notices` (migrations 20 and 21). Two scopes
+are rows — workstream and global — and the **run/batch scope deliberately is not**: a
+run's cap is what was accepted at its preview and already lives on the run
+(`runs.spend_cap_micros`, §4.1), and a second copy of a cap is a second source of
+truth about what the operator agreed to. `limit_micros` is NOT NULL and _removing_ a
+budget deletes the row, so "raise or remove" is two verbs rather than a nullable
+number that also means removed. Which caps bind a session, and which is tightest, is
+`@plotroom/core`'s `resolveEffectiveBudget` and nothing else's — the pre-run refusal,
+the session-facing read, and the mid-session enforcement all call it, so they cannot
+disagree (principle 8). Binding is **transitive**: a session is bound by every
+ancestor's run and batch caps as well as its own, because an ancestor's cap counts
+that ancestor's attributed total, which already includes what its chain delegated.
+`budget_notices` is rows for the same reason the broadcast rate window is: a restart
+between the near-cap warning and the cap must not warn the session twice, and "have I
+already told it?" cannot be answered from memory. The warning and the stop notice
+reach a session as an injection with `origin = 'budget-notice'` — PlotRoom answering,
+authoring nothing, rendered as the transcript's `feedback` entry sourced to `budget`
+(migration 21 widened that CHECK by rebuild).
 
 **Scoped runs and the queue** live in `run_batches` / `run_queue` (migrations 13, 14
 and 15). One batch is one gesture over a scope; one entry is one command, admitted
@@ -479,3 +502,4 @@ Decided (recorded as they were made):
   Decided in Epic 5.5 (Batch 3), because an unbounded second entry point would make
   the limit documentation rather than enforcement.
 - **Compaction interval default: 6 hours** (`PLOTROOM_COMPACTION_INTERVAL_SECONDS`), first sweep after one interval rather than at startup, and `0` disables the schedule while leaving `POST /api/maintenance/compact` available. Decided in Epic 2.3: often enough that the store does not grow unbounded between restarts, rare enough that the sweep is never what the operator notices, and a restart loop must not be able to sweep on every boot.
+- **The shipped default global ceiling: $25 per day** (`DEFAULT_GLOBAL_CEILING_MICROS`, seeded as a `budgets` row by migration 20, warn threshold 0.9). §8 requires "a real number the operator can raise or remove, not an empty field with a recommendation"; this is that number, and four things about it are the decision. **Per day rather than in total**, because a lifetime global ceiling is an expiry date rather than a safety net — a number that bricks the product in its second week is a number every operator deletes on day one, which is the same as shipping none — and because "today's total" is the grain §8's fleet view already speaks in, so the ceiling and the figure beside it measure the same day (UTC; a configurable accounting timezone is Epic 8.3's). **$25**, chosen to be survivable rather than generous: an ordinary day of a few sessions never touches it, and a fan-out bug is caught while it is still an anecdote. **A seeded row, not a constant resolved when no row exists**, so the operator can see it, raise it (`POST /api/budgets`), and remove it (`DELETE /api/budgets/:id`) — and removal stays removed across restarts, which a fallback constant could never allow. **Budget writes are the operator's alone** and have no agent tool at all: principle 1 forbids a session raising the budget that binds it, and lowering one is not a gesture the spec asks for either — so the two write routes are declared operator-only in the catalog while the reads (`session_budget_read`, `budgets_read`, `workstream_budget_read`, `fleet_read`) are §8's "a session can see what remains". Decided in Epic 6.2.

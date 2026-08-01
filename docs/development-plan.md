@@ -1672,15 +1672,65 @@ what-changed capped history with its honest tombstone are all pure and
 unit-tested (`attention/*.test.ts`, 38 tests — `off-screen.test.ts`'s own 5
 predate this stage and are not counted here)._
 
-### Epic 6.2 — Budgets and spend (`budgets`) — _the two UI panels landed (Track B, Batch 4); accounting/budgets/enforcement remain Track A's_
+### Epic 6.2 — Budgets and spend (`budgets`) — _done: enforcement and data (Track A) + the two panels (Track B, Stage 1)_
 
-- [ ] Persistent spend accounting per session / workstream / fleet; totals outlive sessions (§8)
-- [ ] Budgets at run/batch, workstream, global scope; **shipped default global ceiling** (§8, principle 2)
-- [ ] Sessions can read remaining budget that binds them; near-cap defined behavior: stop cleanly, wrap up, report (§8)
-- [ ] Out-of-budget as its own end state everywhere it renders; retries never blindly re-run it (§3.6, §8)
-- [ ] Broadcast-induced and delegated spend charged up the initiating chain (§6.5, §3.6)
-- [x] Fleet panel: today's total, biggest spender, running vs concurrency limit (§8, §11)
-- [x] Session timeline panel: temporal turns/tool-calls view, works for finished sessions (§8, §11)
+- [x] Persistent spend accounting per session / workstream / fleet; totals outlive sessions (§8)
+- [x] Budgets at run/batch, workstream, global scope; **shipped default global ceiling** (§8, principle 2)
+- [x] Sessions can read remaining budget that binds them; near-cap defined behavior: stop cleanly, wrap up, report (§8)
+- [x] Out-of-budget as its own end state everywhere it renders; retries never blindly re-run it (§3.6, §8)
+- [x] Broadcast-induced and delegated spend charged up the initiating chain (§6.5, §3.6)
+- [x] Fleet panel: today's total, biggest spender, running vs concurrency limit (§8, §11) — _the **data** is `GET /api/fleet`; the panel landed with Track B's Stage 1_
+- [x] Session timeline panel: temporal turns/tool-calls view, works for finished sessions (§8, §11) — _the **data** is `GET /api/sessions/:id/timeline`; the panel landed with Track B's Stage 1_
+
+_Landed (Batch 4, stage 1 — Track A). **The tightest budget that binds wins, and it
+binds transitively.** `resolveEffectiveBudget` in `@plotroom/core` is the whole rule
+and the only place it is stated: the pre-run refusal, the session-facing read, and the
+mid-session enforcement all call it (principle 8). What binds a session is its own
+run's cap, **every ancestor's** run and batch caps, each of those sessions'
+workstream budgets, and the global ceiling — an ancestor's cap counts that ancestor's
+attributed total, which already includes what its chain delegated, so a child cannot
+spend a cap it never accepted. Nothing throws: reaching a cap is `at-cap` with the
+tripped binding named, and the caller records **out-of-budget**, which is its own end
+state (§3.6) — a live test delegates, lets the child accrue scripted cost against the
+parent's cap, and asserts the **child** ends out-of-budget with `failed: false`,
+`safeToRetryBlindly: false`, the run recorded as `out_of_budget`, and the parent told
+why in words that say it did not fail.
+
+**Enforcement happens where spending is observable**, not on a schedule: the pump calls
+`onAccounting` when the fold's cost moves, which attributes the spend up the chain and
+then asks. There is no timer anywhere in it (principle 2), and a daily period is a
+**window over the ledger** taken at check time — spend rows are never zeroed, which is
+what makes §8's "totals do not reset" true of a `day` budget as well. One consequence
+is worth stating: attribution now happens while a session runs rather than only when it
+ends, so a running session's cost appears in the fleet total — previously it did not,
+and a fleet view is read precisely while work is in flight.
+
+**The shipped default global ceiling is $25/day**, seeded as a row by migration 20 so
+it is visible, raisable, and removable-for-good (recorded in AGENTS.md with the
+reasoning). **Budget writes have no agent tool at all** — principle 1 forbids a session
+raising the budget that binds it, and lowering one is not a gesture the spec asks for —
+so `POST /api/budgets` and `DELETE /api/budgets/:id` are declared operator-only, while
+`session_budget_read`, `workstream_budget_read`, `budgets_read`, and `fleet_read` are
+§8's "a session can see what remains". Near a cap the session is **told once** — from a
+`budget_notices` row, so a restart cannot repeat it — with the remaining figure, the
+instruction to wrap up cleanly, and §8's own words that racing the budget is a failure
+mode rather than a saving.
+
+The scripted runtime needed no new step: a script accrues cost by reporting
+`turn-ended.usage.costUsd`, exactly as a real adapter does, with a `delay` between
+turns so enforcement lands where a runtime accepts input. That recipe is documented in
+`apps/server/src/runtime/scripted.ts`. `out-of-budget` remains **not expressible** in a
+script: PlotRoom initiates budget stops.
+
+Deferred, and honest about it: the **two §11 panels are Track B's** — this landed the
+data endpoints they read (`GET /api/fleet`, `GET /api/sessions/:id/timeline`) and
+nothing that renders. A queue entry's `state` still records an out-of-budget run as
+`failed` with `detail: "out-of-budget"`; the distinction is kept in the batch's pause
+reason, the entry's detail, the session record, and the events (all asserted), and
+widening `run_queue.state`'s CHECK is a migration deliberately not taken here. The
+UTC day boundary is stated rather than configurable (Epic 8.3's settings). Broadcast-
+induced spend is charged by Epic 5.2's existing attribution path, which these budgets
+now enforce against; nothing about that path changed._
 
 _The Fleet panel (`packages/ui/src/fleet/`) aggregates real data from what
 exists on main today — `GET /api/sessions` (running vs total) and each
@@ -1854,11 +1904,38 @@ run", which §6.6 lists among the things a session may request, has no ask build
 yet: the run path's own lineage and budget checks (§4.1) are what refuse it today,
 and routing it through here is Epic 6.2's boundary rather than this one's._
 
-### Epic 6.4 — Run comparison and cross-run outcomes (`runs`)
+### Epic 6.4 — Run comparison and cross-run outcomes (`runs`) — _done (endpoints; no UI)_
 
-- [ ] Pin/unpin runs; downstream follows newest by default, pinnable to `output@n` (§4.4)
-- [ ] Compare two runs: inputs, outputs, model, cost (§4.4) — pays off §15-1
-- [ ] Cross-run aggregates per definition: attempts, typical failures, cost (§4.4)
+- [x] Pin/unpin runs; downstream follows newest by default, pinnable to `output@n` (§4.4)
+- [x] Compare two runs: inputs, outputs, model, cost (§4.4) — pays off §15-1
+- [x] Cross-run aggregates per definition: attempts, typical failures, cost (§4.4)
+
+_Landed (Batch 4, stage 1 — Track A). **The comparison reads what each run recorded and
+nothing else**, which is §15-1 being spent: `compareRuns` in `@plotroom/core` takes two
+recorded runs and pairs their inputs by position (naming `same` / `content` /
+`replaced` / `added` / `removed` from the version and hash each run stored), their
+outputs by name, their configurations field by field — "which model" plus everything
+else that explains a difference — and their costs. **Runs of different definitions are
+refused with the reason**, because a side-by-side of two recipes invites reading a
+difference in instruction as a difference in outcome; two runs of the same definition in
+different command nodes are comparable, which is the grain retention and cost estimation
+already use. The assembled bodies are **addressed rather than inlined**
+(`/api/runs/:id/assembled` for both), so a diff is derivable without the comparison
+carrying two whole contexts. `GET /api/runs/:id/compare?with=<runId>`.
+
+`GET /api/command-definitions/:id/outcomes` is the cross-run aggregate: attempts, the
+end-state histogram, how many attempts a completion typically takes, submission
+attempts per run, and cost — **through the same `estimateRunCost` the run preview
+shows**, so a cross-run cost and a pre-run estimate cannot disagree. The histogram
+keeps `out_of_budget` and `interrupted` as their own rows: folding either into `failed`
+is what would make "is delegating this kind of work actually working?" answer wrong.
+With no retained runs it says nothing has been observed rather than reporting zeroes.
+
+Pin/unpin already reached everything a run references (§15-3's tests cover it); what
+landed is that it **publishes** a `run` event, because pinning changes what a run's
+future is — "pinning is how a run becomes comparable forever" (§3.7) is not a state to
+discover on a refetch. It stays operator-only. Deferred: nothing renders any of this
+(Track B), and there is no stored diff — by design._
 
 ---
 
@@ -2059,7 +2136,7 @@ clean runs recorded, and the question-bubble leg break-verified (see Epic
 
 | Track | Work                                                                                                        |
 | ----- | ----------------------------------------------------------------------------------------------------------- |
-| A     | Epic 6.2 budgets/spend/fleet panel; Epic 6.4 run comparison                                                 |
+| A     | Epic 6.2 budgets/spend + fleet and timeline **data** (the panels are B's); Epic 6.4 run comparison          |
 | B     | Epic 6.1 queue + health alerts + outbound routing surfaces                                                  |
 | C     | Epic 6.3 approvals/pre-grants/irreversibility; begin finalizing the 7.1 plugin contract (shapes now stable) |
 
