@@ -17,7 +17,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests"
   }
