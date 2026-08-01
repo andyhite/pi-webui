@@ -1569,4 +1569,157 @@ export const migrations: readonly Migration[] = [
         ON spend_attributions (session_id, source_session_id, cause);
     `,
   },
+  {
+    id: 23,
+    name: "approvals_attention_and_routes",
+    sql: `
+      -- Approvals (§6.6), at rest.
+      --
+      -- The record **outlives the call it blocks**, which is the whole reason it is
+      -- a table rather than a field on whatever the runtime is holding: a surface
+      -- that asked the runtime what it wanted permission for would have nothing to
+      -- show the moment the call settled, and "answerable without opening the
+      -- session" needs the ask remembered rather than proxied.
+      --
+      -- Two answers only, and the CHECKs say so: approve **once**, or deny **with a
+      -- reason**. There is no durable grant here — that is a pre_grants row, the
+      -- operator's own gesture — because folding one into an answer would be a back
+      -- door through §6.6's piercing rule.
+      CREATE TABLE approvals (
+        id              TEXT PRIMARY KEY,
+        session_id      TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        workstream_id   TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        kind            TEXT NOT NULL CHECK (kind IN ('tool-permission', 'claim', 'destruction', 'integration-write')),
+        -- The ask whole, as core built it: the tool, the redacted one-line summary,
+        -- the write extent, the declared paths, the world declaration, the target.
+        -- Stored as one value rather than shredded into columns because it is one
+        -- value to every reader, and a half-parsed ask would be a row nobody could
+        -- answer from.
+        ask_json        TEXT NOT NULL,
+        request_id      TEXT,
+        call_id         TEXT,
+        pierced_json    TEXT,
+        raised_at       INTEGER NOT NULL,
+        answer_decision TEXT CHECK (answer_decision IN ('approve-once', 'deny')),
+        answer_reason   TEXT,
+        -- Human-only by §6.6, and the column cannot say otherwise: a session
+        -- answering an approval would be granting itself capability (principle 1).
+        answer_by_kind  TEXT CHECK (answer_by_kind = 'human'),
+        answered_at     INTEGER,
+        CHECK ((answer_decision IS NULL) = (answered_at IS NULL)),
+        CHECK ((answer_decision IS NULL) = (answer_by_kind IS NULL)),
+        -- A denial carries a reason: deny is feedback the session acts on, and a
+        -- bare refusal is indistinguishable from the tool being broken (§6.6).
+        CHECK (answer_decision IS NOT 'deny' OR answer_reason IS NOT NULL)
+      );
+
+      CREATE INDEX approvals_session_idx ON approvals (session_id, raised_at);
+      CREATE INDEX approvals_open_idx ON approvals (raised_at) WHERE answered_at IS NULL;
+
+      -- One raise per blocked call. A runtime that re-raises the same call id must
+      -- find the approval it already has waiting rather than stack a second row the
+      -- operator would have to answer twice (principle 9).
+      CREATE UNIQUE INDEX approvals_call_idx ON approvals (session_id, call_id)
+        WHERE call_id IS NOT NULL;
+
+      -- Pre-grants (§6.6): "a human decision about capability made in advance, which
+      -- is different in kind from a timer that spends."
+      --
+      -- Note the absences, each of them load-bearing. **No expiry column**: a
+      -- pre-grant that lapsed on a clock would be the system changing what an agent
+      -- may do with nobody behind it (principle 2). **No path column**: paths are
+      -- claims' business (§3.4), and a second path authority is a second thing to
+      -- keep in agreement. **Withdrawn, never deleted**, like a claim row, so
+      -- "revoked yesterday" and "never granted" stay different facts.
+      CREATE TABLE pre_grants (
+        id            TEXT PRIMARY KEY,
+        scope         TEXT NOT NULL CHECK (scope IN ('session', 'workstream')),
+        session_id    TEXT REFERENCES sessions (id) ON DELETE CASCADE,
+        workstream_id TEXT REFERENCES workstreams (id) ON DELETE CASCADE,
+        effect        TEXT NOT NULL CHECK (effect IN ('allow', 'deny')),
+        kinds_json    TEXT NOT NULL,
+        tool_pattern  TEXT NOT NULL,
+        extents_json  TEXT NOT NULL,
+        granted_by    TEXT NOT NULL CHECK (granted_by = 'human'),
+        granted_at    INTEGER NOT NULL,
+        withdrawn_at  INTEGER,
+        CHECK (
+          (scope = 'session'    AND session_id IS NOT NULL AND workstream_id IS NULL) OR
+          (scope = 'workstream' AND workstream_id IS NOT NULL AND session_id IS NULL)
+        )
+      );
+
+      CREATE INDEX pre_grants_session_idx ON pre_grants (session_id)
+        WHERE session_id IS NOT NULL;
+      CREATE INDEX pre_grants_workstream_idx ON pre_grants (workstream_id)
+        WHERE workstream_id IS NOT NULL;
+
+      -- Triage (§4.5), for every feed rather than for drift alone.
+      --
+      -- Keyed by the attention item's own stable id, which is what makes the ledger
+      -- one ledger: \`driftItemKey\` already keyed drift this way, and questions,
+      -- approvals, health alerts, completions and broadcasts join it here instead of
+      -- growing five near-identical tables. \`consumer\` is who triaged — the operator
+      -- today, a per-consumer baseline tomorrow — because acknowledging is the
+      -- consumer's baseline advancing (§4.5) and a shared row would advance
+      -- everyone's.
+      CREATE TABLE attention_triage (
+        item_id             TEXT NOT NULL,
+        consumer            TEXT NOT NULL,
+        verb                TEXT NOT NULL CHECK (verb IN ('acknowledge', 'snooze', 'mute')),
+        at                  INTEGER NOT NULL,
+        by_kind             TEXT NOT NULL CHECK (by_kind IN ('human', 'session')),
+        by_session          TEXT,
+        -- Acknowledge advances the consumer's baseline to the version it was shown;
+        -- the next change past this one drifts again, this one does not.
+        baseline_version_id TEXT,
+        -- Snooze only: when it comes back. A snooze with no return time would be a
+        -- mute wearing a different word.
+        snoozed_until       INTEGER,
+        PRIMARY KEY (item_id, consumer),
+        CHECK (verb IS NOT 'snooze' OR snoozed_until IS NOT NULL),
+        CHECK ((by_kind = 'session') = (by_session IS NOT NULL))
+      );
+
+      -- Outbound notification routing (§7.3).
+      --
+      -- **A route attaches to a state, never to a node** — that is the column
+      -- \`state\`, and there is deliberately no node_id, session_id, or workstream_id
+      -- beside it: "a route attaches to a state ('anything blocked,' 'anything
+      -- failed'), not to a node, so everything is covered without drawing anything."
+      --
+      -- Delivery health lives on the row because a revoked webhook must be visible
+      -- as a broken route rather than as silence — and because it must never be able
+      -- to stop the derivation: a failure is recorded here, not thrown.
+      CREATE TABLE notification_routes (
+        id                   TEXT PRIMARY KEY,
+        name                 TEXT NOT NULL,
+        state                TEXT NOT NULL CHECK (state IN ('blocked', 'failed', 'wants-decision', 'anything')),
+        destination_kind     TEXT NOT NULL CHECK (destination_kind = 'webhook'),
+        destination_url      TEXT NOT NULL,
+        enabled              INTEGER NOT NULL DEFAULT 1,
+        created_at           INTEGER NOT NULL,
+        updated_at           INTEGER NOT NULL,
+        last_attempt_at      INTEGER,
+        last_success_at      INTEGER,
+        last_failure_at      INTEGER,
+        last_failure_reason  TEXT,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0
+      );
+
+      -- What each route has already sent, so the edge trigger survives a restart.
+      --
+      -- Rows for the same reason the broadcast rate window is rows: "have I already
+      -- told them?" cannot be answered from memory, and a restart that re-fired every
+      -- open item would be the notification storm §7.3's edge-triggered discipline
+      -- exists to prevent. A row is removed when its item leaves the visible set,
+      -- which is what lets a genuinely new occurrence notify again.
+      CREATE TABLE notification_route_fires (
+        route_id TEXT NOT NULL REFERENCES notification_routes (id) ON DELETE CASCADE,
+        item_id  TEXT NOT NULL,
+        fired_at INTEGER NOT NULL,
+        PRIMARY KEY (route_id, item_id)
+      );
+    `,
+  },
 ];

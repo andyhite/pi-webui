@@ -1273,6 +1273,143 @@ export const handoffBriefs = sqliteTable(
   ],
 );
 
+/**
+ * Approvals (§6.6). The record outlives the call it blocks, which is why it is a
+ * row: a surface that asked the runtime what it wanted permission for would have
+ * nothing to show once the call settled.
+ */
+export const approvals = sqliteTable(
+  "approvals",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    workstreamId: text("workstream_id")
+      .notNull()
+      .references(() => workstreams.id, { onDelete: "cascade" }),
+    kind: text("kind", {
+      enum: ["tool-permission", "claim", "destruction", "integration-write"],
+    }).notNull(),
+    /** The ask whole, as core built it — one value to every reader. */
+    askJson: text("ask_json").notNull(),
+    /** The blocked runtime request, when one is behind this ask. */
+    requestId: text("request_id"),
+    /** The adapter's call id, which is what the gate matches against. */
+    callId: text("call_id"),
+    /** The pre-grant irreversibility pierced, so the operator is told which rule. */
+    piercedJson: text("pierced_json"),
+    raisedAt: integer("raised_at").notNull(),
+    answerDecision: text("answer_decision", {
+      enum: ["approve-once", "deny"],
+    }),
+    answerReason: text("answer_reason"),
+    answerByKind: text("answer_by_kind", { enum: ["human"] }),
+    answeredAt: integer("answered_at"),
+  },
+  (table) => [
+    index("approvals_session_idx").on(table.sessionId, table.raisedAt),
+    uniqueIndex("approvals_call_idx")
+      .on(table.sessionId, table.callId)
+      .where(sql`${table.callId} IS NOT NULL`),
+  ],
+);
+
+/** Capability granted (or refused) in advance, by a human (§6.6). */
+export const preGrants = sqliteTable(
+  "pre_grants",
+  {
+    id: text("id").primaryKey(),
+    scope: text("scope", { enum: ["session", "workstream"] }).notNull(),
+    sessionId: text("session_id").references(() => sessions.id, {
+      onDelete: "cascade",
+    }),
+    workstreamId: text("workstream_id").references(() => workstreams.id, {
+      onDelete: "cascade",
+    }),
+    effect: text("effect", { enum: ["allow", "deny"] }).notNull(),
+    kindsJson: text("kinds_json").notNull(),
+    toolPattern: text("tool_pattern").notNull(),
+    extentsJson: text("extents_json").notNull(),
+    grantedBy: text("granted_by", { enum: ["human"] }).notNull(),
+    grantedAt: integer("granted_at").notNull(),
+    /** Withdrawn, never deleted: "revoked" and "never granted" differ. */
+    withdrawnAt: integer("withdrawn_at"),
+  },
+  (table) => [
+    index("pre_grants_session_idx")
+      .on(table.sessionId)
+      .where(sql`${table.sessionId} IS NOT NULL`),
+    index("pre_grants_workstream_idx")
+      .on(table.workstreamId)
+      .where(sql`${table.workstreamId} IS NOT NULL`),
+  ],
+);
+
+/**
+ * Triage for every attention feed (§4.5), keyed by the item's own stable id —
+ * one ledger, extended from drift rather than duplicated per feed.
+ */
+export const attentionTriage = sqliteTable(
+  "attention_triage",
+  {
+    itemId: text("item_id").notNull(),
+    /** Whose baseline this advances; the operator today (§4.5). */
+    consumer: text("consumer").notNull(),
+    verb: text("verb", {
+      enum: ["acknowledge", "snooze", "mute"],
+    }).notNull(),
+    at: integer("at").notNull(),
+    byKind: text("by_kind", { enum: ["human", "session"] }).notNull(),
+    bySession: text("by_session"),
+    baselineVersionId: text("baseline_version_id"),
+    snoozedUntil: integer("snoozed_until"),
+  },
+  (table) => [primaryKey({ columns: [table.itemId, table.consumer] })],
+);
+
+/**
+ * An outbound notification route (§7.3). It attaches to a **state**; there is
+ * deliberately no node, session, or workstream column beside `state`.
+ */
+export const notificationRoutes = sqliteTable("notification_routes", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  state: text("state", {
+    enum: ["blocked", "failed", "wants-decision", "anything"],
+  }).notNull(),
+  destinationKind: text("destination_kind", { enum: ["webhook"] }).notNull(),
+  destinationUrl: text("destination_url").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+  /** Route health: a broken destination is reported, never thrown (§7.3). */
+  lastAttemptAt: integer("last_attempt_at"),
+  lastSuccessAt: integer("last_success_at"),
+  lastFailureAt: integer("last_failure_at"),
+  lastFailureReason: text("last_failure_reason"),
+  consecutiveFailures: integer("consecutive_failures").notNull(),
+});
+
+/** What each route already sent, so the edge trigger survives a restart. */
+export const notificationRouteFires = sqliteTable(
+  "notification_route_fires",
+  {
+    routeId: text("route_id")
+      .notNull()
+      .references(() => notificationRoutes.id, { onDelete: "cascade" }),
+    itemId: text("item_id").notNull(),
+    firedAt: integer("fired_at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.routeId, table.itemId] })],
+);
+
+export type ApprovalRow = typeof approvals.$inferSelect;
+export type PreGrantRow = typeof preGrants.$inferSelect;
+export type AttentionTriageRow = typeof attentionTriage.$inferSelect;
+export type NotificationRouteRow = typeof notificationRoutes.$inferSelect;
+export type NotificationRouteFireRow =
+  typeof notificationRouteFires.$inferSelect;
 export type NodeRow = typeof nodes.$inferSelect;
 export type WorkstreamRow = typeof workstreams.$inferSelect;
 export type WorkstreamEventRow = typeof workstreamEvents.$inferSelect;

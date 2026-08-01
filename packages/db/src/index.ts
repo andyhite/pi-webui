@@ -27,6 +27,8 @@ export * from "./run-store.js";
 export * from "./run-queue-store.js";
 export * from "./claim-store.js";
 export * from "./question-store.js";
+export * from "./approval-store.js";
+export * from "./attention-store.js";
 export * from "./broadcast-store.js";
 export * from "./spend-store.js";
 export * from "./budget-store.js";
