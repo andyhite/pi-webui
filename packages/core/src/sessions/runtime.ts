@@ -60,7 +60,7 @@ export interface RuntimeCapabilities {
 export interface SessionLaunchChoices {
   readonly model: string;
   readonly effort: SessionEffort;
-  readonly toolPermissions: ToolPermissions;
+  readonly toolPermissions: SessionToolPermissions;
 }
 
 /**
@@ -78,7 +78,15 @@ export const SESSION_EFFORTS = [
 
 export type SessionEffort = (typeof SESSION_EFFORTS)[number];
 
-export interface ToolPermissions {
+/**
+ * What one session was launched with (§3.6) — deliberately not `ToolPermissions`
+ * from `commands.ts` (§3.5), which is a command definition's *declared*
+ * allow/deny list where an empty `allowed` means no tools at all. This type is a
+ * narrowing of what the app already permits, so `null` means inherit rather than
+ * forbid. Two different questions, two names: a launch choice that a human made
+ * for one run, against a definition's standing declaration.
+ */
+export interface SessionToolPermissions {
   /**
    * Null inherits the app's tools; a list narrows them. A session can be
    * launched narrower than the app (§3.6) — never wider, which
@@ -87,7 +95,7 @@ export interface ToolPermissions {
   readonly allowedTools: readonly string[] | null;
 }
 
-export const INHERIT_APP_TOOLS: ToolPermissions = { allowedTools: null };
+export const INHERIT_APP_TOOLS: SessionToolPermissions = { allowedTools: null };
 
 export type ToolPermissionRefusal = {
   readonly reason: "widens_app";
@@ -100,8 +108,8 @@ export type ToolPermissionCheck =
   | { readonly allowed: false; readonly refusal: ToolPermissionRefusal };
 
 export function checkToolPermissions(
-  app: ToolPermissions,
-  session: ToolPermissions,
+  app: SessionToolPermissions,
+  session: SessionToolPermissions,
 ): ToolPermissionCheck {
   if (app.allowedTools === null) return { allowed: true };
   if (session.allowedTools === null) return { allowed: true };
