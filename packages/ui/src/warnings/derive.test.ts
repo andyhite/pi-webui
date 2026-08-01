@@ -92,6 +92,75 @@ describe("deriveGraphWarnings", () => {
     expect(warnings.some((w) => w.kind === "unconsumed_output")).toBe(false);
   });
 
+  it("flags content assembled beyond the model's window", () => {
+    const nodes: WarningGraphNode[] = [
+      {
+        id: "command-a",
+        role: "command",
+        assembledContent: "x".repeat(400), // 100 estimated tokens (chars/4)
+        budget: {
+          modelWindowTokens: 100,
+          warnAtFraction: 0.5,
+          hardCapTokens: null,
+        },
+      },
+      { id: "ticket-a", role: "content" },
+    ];
+    const edges: WarningGraphEdge[] = [{ from: "ticket-a", to: "command-a" }];
+    const warnings = deriveGraphWarnings(nodes, edges);
+    const warning = warnings.find((w) => w.kind === "content_budget");
+    expect(warning).toBeDefined();
+    expect(warning?.nodeId).toBe("command-a");
+    expect(warning?.basis).toMatch(/chars/);
+  });
+
+  it("flags content over a command's opt-in hard cap too (still a warning, never a refusal)", () => {
+    const nodes: WarningGraphNode[] = [
+      {
+        id: "command-a",
+        role: "command",
+        assembledContent: "x".repeat(400),
+        budget: {
+          modelWindowTokens: 1000,
+          warnAtFraction: 0.99,
+          hardCapTokens: 10,
+        },
+      },
+      { id: "ticket-a", role: "content" },
+    ];
+    const edges: WarningGraphEdge[] = [{ from: "ticket-a", to: "command-a" }];
+    const warnings = deriveGraphWarnings(nodes, edges);
+    expect(warnings).toEqual([
+      expect.objectContaining({ kind: "content_budget", nodeId: "command-a" }),
+    ]);
+  });
+
+  it("does not flag content_budget comfortably inside the default budget", () => {
+    const nodes: WarningGraphNode[] = [
+      { id: "command-a", role: "command", assembledContent: "short" },
+      { id: "ticket-a", role: "content" },
+    ];
+    const edges: WarningGraphEdge[] = [{ from: "ticket-a", to: "command-a" }];
+    expect(
+      deriveGraphWarnings(nodes, edges).some(
+        (w) => w.kind === "content_budget",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not evaluate content_budget when assembledContent is unknown", () => {
+    const nodes: WarningGraphNode[] = [
+      { id: "command-a", role: "command" },
+      { id: "ticket-a", role: "content" },
+    ];
+    const edges: WarningGraphEdge[] = [{ from: "ticket-a", to: "command-a" }];
+    expect(
+      deriveGraphWarnings(nodes, edges).some(
+        (w) => w.kind === "content_budget",
+      ),
+    ).toBe(false);
+  });
+
   it("returns no warnings for a healthy, fully-wired graph", () => {
     const nodes: WarningGraphNode[] = [
       { id: "ticket-a", role: "content" },

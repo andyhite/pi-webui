@@ -31,6 +31,7 @@ export function GraphWarningsPanel({
             {warning.kind}
           </button>{" "}
           {warning.message}
+          {warning.basis ? <div>basis: {warning.basis}</div> : null}
         </li>
       ))}
     </ul>
