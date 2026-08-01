@@ -86,16 +86,33 @@ authored mutations are attributed in `workstream_events` (schema-enforced, no
 `system` author). Session-authored lifecycle changes are refused outright
 until Phase 6 approvals land propose-and-accept._
 
-### Epic 1.4 — Commands and runs (`commands`, `runs`)
+### Epic 1.4 — Commands and runs (`commands`, `runs`) — _done_
 
-- [ ] Command definitions: instruction, model/effort, tool permissions, expected outcome, ask-points; user-editable content, duplicable, organizable (§3.5)
-- [ ] Command nodes: definition + wiring; parameters with confirm-only derived defaults (§3.5)
-- [ ] Producing vs open lifecycle; expected outcome as typed placeholder; world conditions as declared predicates (§3.5)
-- [ ] Output pre-wiring: typed placeholder outputs exist pre-run, bind post-run (§3.5)
-- [ ] Publish vs promote as two distinct verbs; pre-bind/post-bind two-state rule for cross-workstream wires (§3.5)
-- [ ] **§15-1: run history records full assembled content + configuration** — the exact ordered content and versions in, config, output, cost (§3.7, §4.4)
-- [ ] **§15-4: per-run output addressing** — `output@n` general case, `latest` derived (§4.4)
-- [ ] Run-history retention rule: last N per definition + pinned + window (§4.4)
+- [x] Command definitions: instruction, model/effort, tool permissions, expected outcome, ask-points; user-editable content, duplicable, organizable (§3.5)
+- [x] Command nodes: definition + wiring; parameters with confirm-only derived defaults (§3.5)
+- [x] Producing vs open lifecycle; expected outcome as typed placeholder; world conditions as declared predicates (§3.5)
+- [x] Output pre-wiring: typed placeholder outputs exist pre-run, bind post-run (§3.5)
+- [x] Publish vs promote as two distinct verbs; pre-bind/post-bind two-state rule for cross-workstream wires (§3.5)
+- [x] **§15-1: run history records full assembled content + configuration** — the exact ordered content and versions in, config, output, cost (§3.7, §4.4)
+- [x] **§15-4: per-run output addressing** — `output@n` general case, `latest` derived (§4.4)
+- [x] Run-history retention rule: last N per definition + pinned + window (§4.4)
+
+_Landed as `CommandStore` and `RunStore` in `@plotroom/db` over migration 5,
+calling predicates in `@plotroom/core` (`resolveParameters`, `checkPublish`,
+`checkOutputCrossing`, `effectOfDeletingProducer`, `checkContentBudget`,
+`checkSubmission`, `isRunCompactable`); wiring goes through `GraphStore`, so
+`wouldCycle` is reused rather than restated and a placeholder wired before any
+run is already part of the topology it checks. Four §3.5 rules are schema
+constraints — producing⇔outcome, a proposal cannot carry a confirmation, a
+bound output cannot break, and `runs.assembled_blob_id`/`config_json` are NOT
+NULL — and `run_inputs.version_id` is a real foreign key, so compaction cannot
+eat run history even from outside the store. There is no `latest` column
+anywhere: `RunStore.resolve` orders by `runs.ordinal`. Retention defaults (last
+20 runs per definition, 30-day window) are recorded in AGENTS.md per
+cross-cutting rule 5. Deferred: no transactions around multi-statement writes
+(`start`, `complete`, `compactRuns`, `instantiate`); a soft-deleted command is
+still runnable; `complete` records an output name matching no declared
+placeholder without warning._
 
 ### Epic 1.0 — Primitives (`core`) — _done_
 
@@ -107,8 +124,9 @@ untestable without an injectable clock._
 - [x] Test fixtures/factories for objects, versions, workstreams, runs
 
 _Fixtures live at `@plotroom/core/testing` (subpath export, outside the
-production API); the run factory is a placeholder carrying only what
-retention/`output@n` tests need until Epic 1.4 lands the schema._
+production API). The run factory was a placeholder until Epic 1.4 landed the
+schema; `makeRun` now returns the real domain `Run`, so a fixture cannot be
+built without the assembled content and configuration §15-1 requires._
 
 ### Epic 1.5 — Sessions and drift (`sessions`, `graph`)
 
