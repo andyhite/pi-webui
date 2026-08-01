@@ -811,34 +811,59 @@ one-line fixture change._
 
 **Exit criteria:** run several sessions; inject content mid-flight and see it as a graph edge; answer a structured question from a bubble without opening a panel; stop at all three scopes.
 
-### Epic 5.1 — Conversation surface (`panels`, `sessions`) — _mechanics landed, Stage 1 of 2_
+### Epic 5.1 — Conversation surface (`panels`, `sessions`) — _live, Stage 2 of 2 — W10 milestone gate passed_
 
 - [x] Conversation panel: streaming transcript, reasoning distinct from output, tool calls with I/O, message-level actions, export (§6.1, §11)
 - [x] Bounded transcript with recoverable release: largest old tool outputs first, visible markers, reload, complete export (§6.1)
 - [x] Drafts and prompt history persisted per session (§6.2)
 - [x] Diff panel (read-only file tree + patches) (§11)
 
-_Stage 1 of 2 (Batch 2, Weeks 8–10): landed against `@plotroom/core`'s real
-session/transcript types, fixture-fed — no sessions server API exists yet
-(Track A, in parallel). `ConversationPanel` and `DiffPanel` are registered in
-the same `PanelRegistry`/`DockRail` Epic 3.4 established. Reasoning/output/
-tool-call partitioning and release-marker pairing are pure and unit-tested
-(`sessions/transcript-view.ts`); export reuses `@plotroom/core`'s
-`exportTranscript` over an async release-content loader
-(`sessions/export.ts`) so §6.1's completeness contract is untouched. Drafts
-and prompt history persist per session through a durable-store seam
-(`sessions/drafts.ts`) matching `placement/store.ts`'s pattern exactly
-(localStorage today, a server store later, no caller-visible change).
-`SessionDataSource` (`sessions/data-source.ts`) is the same seam pattern as
-`GraphDataSource`: `loadList`/`loadTranscript`/`loadReleasedContent` plus
-`subscribeList`/`subscribeTranscript`, full-entity and idempotent like every
-other event this codebase emits; the fixture implementation includes a
-scripted streaming playback for dev/tests. `WorkspaceDiff`
-(`diff/types.ts`) is this track's minimal shape for a server that doesn't
-exist yet. Composer send is a no-op hook against fixtures; message-level
-"wire as context" is a placeholder hook. Deferred to Stage 2: swapping the
-fixture `SessionDataSource` for a live one once Track A's sessions API
-lands, live transcript streaming, and the W10 Playwright milestone gate._
+_Stage 1 (Batch 2, Weeks 8–10) landed the mechanics fixture-fed, against
+`@plotroom/core`'s real session/transcript types, ahead of Track A's run
+spine. **Stage 2** (same weeks, once the run spine merged) wires it all
+live:_
+
+_`createApiSessionDataSource` (`sessions/data-source.ts`) replaces the fixture
+as the default, over Track A's real endpoints — `GET /api/sessions(/:id,
+/transcript)` plus `/ws` — reusing `createApiGraphDataSource`'s exact resync
+recipe (connect first, buffer, a seq-stamped `/api/snapshot`, drop what it
+already reflects, apply the rest) for the live session list/status;
+transcript reads have no snapshot-level `seq` of their own, so
+`subscribeTranscript` instead refetches the already-coalesced, idempotent
+`GET /transcript` on every relevant `/ws` event — a deliberately simpler rule
+than the board's, reasoned about in the module's own doc comment. Stage 1's
+parallel `SessionListEvent`/`TranscriptEvent` envelope is gone, replaced by
+`SessionDetail` derived straight from `@plotroom/core`'s `session`/
+`session_observation`/`session_transcript` `DomainEvent` variants (one
+vocabulary, not two, per the Stage 1 review). `ConversationPanel` now takes
+only a `sessionId` and derives everything else live; the board
+(`board-state.ts`/`build-snapshot.ts`) tracks `sessions`/`runs` too, so a
+session or command node's label and running state come from the live
+record, never the placed node's own (write-once) `running` flag — including
+a node already on the canvas before that data arrived (`PlotCanvas`'s
+additive sync effect only ever seeds a label/running state once; a second
+sync effect now keeps it current). A minimal "run" affordance renders on a
+command node (`onRunCommand` → `POST /api/runs` with a generated,
+idempotent initiation key, principle 9); this is not Epic 5.5's fuller run
+affordance (subgraphs, a queue, re-run-drifted) — that epic is still open._
+
+_Composer send is honestly disabled with a reason: injection has no server
+endpoint yet (§6.5 is Batch 3 scope); "wire as context" stays a placeholder
+hook. `DiffPanel` stays fixture-fed — no workspace/diff read API exists yet._
+
+_**THE W10 MILESTONE GATE**: `apps/web/e2e/milestone.spec.ts` (Playwright,
+run via `pnpm --filter @plotroom/web e2e`, not part of `pnpm verify` or
+turbo's `test` — spawns a real server + a real local git repository) proves,
+against the actually-served page in a real browser tab: dropping a command
+definition onto a bare ticket creates a workstream and a wired command node
+(the one-gesture flow, §3.5); clicking "run" starts a real session under the
+scripted runtime (`PLOTROOM_RUNTIME=scripted`); the Conversation panel
+streams its transcript live — reasoning distinct from output, then (after a
+first submission the declared world condition fails, so the session
+continues into a second turn) a tool call with its input and output; and
+proven completion shows on both the session (`end: completed`) and the
+command node's own label (`run: completed`) once the second attempt's
+tool call actually satisfies the condition._
 
 ### Epic 5.2 — Injection, questions, broadcast (`sessions`)
 
@@ -1061,21 +1086,21 @@ Phase 0 and Epic 1.1 are complete; week 1 starts from the current state of
 
 **Weeks 8–10 — First run**
 
-| Track | Work                                                                                                                               |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| A     | Epic 4.2 context assembly, run preview, run-history capture; Epic 2.3 durability + compaction job                                  |
-| B     | Phase 3 polish; start Epic 5.1 Conversation + Diff panels                                                                          |
-| C     | Epic 4.4 path claims (leases, waitlists, deadlock detection) in `core/src/claims/`; Epic 4.5 agent tools + reflexivity enforcement |
+| Track | Work                                                                                                                                                   |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A     | Epic 4.2 context assembly, run preview, run-history capture; Epic 2.3 durability + compaction job                                                      |
+| B     | Phase 3 polish; Epic 5.1 Conversation + Diff panels — _Stage 1 fixture-fed, Stage 2 live once A's run spine merged; both stages landed in this window_ |
+| C     | Epic 4.4 path claims (leases, waitlists, deadlock detection) in `core/src/claims/`; Epic 4.5 agent tools + reflexivity enforcement                     |
 
-**🏁 Milestone (end W10):** drop command on ticket → run → streamed transcript → proven completion, end to end.
+**🏁 Milestone (end W10) — PASSED:** drop command on ticket → run → streamed transcript → proven completion, end to end. Proven by `apps/web/e2e/milestone.spec.ts` (Playwright, against a real spawned server + a real git repository + the actually-served page) — run via `pnpm --filter @plotroom/web e2e`, deliberately not part of `pnpm verify`.
 
 **Weeks 11–14 — Steering (Phase 5)**
 
-| Track | Work                                                                 |
-| ----- | -------------------------------------------------------------------- |
-| A     | Epic 5.5 scoped runs, concurrency queue, preview-is-the-contract     |
-| B     | Epic 5.1 finish; Epic 5.3 speech bubbles                             |
-| C     | Epic 5.2 injection/questions/broadcast; Epic 5.4 resume/fork/handoff |
+| Track | Work                                                                                      |
+| ----- | ----------------------------------------------------------------------------------------- |
+| A     | Epic 5.5 scoped runs, concurrency queue, preview-is-the-contract                          |
+| B     | Epic 5.1 finished ahead of schedule (done at the W10 gate above); Epic 5.3 speech bubbles |
+| C     | Epic 5.2 injection/questions/broadcast; Epic 5.4 resume/fork/handoff                      |
 
 **🏁 Milestone (end W14):** the originating-problem demo — many sessions, inject mid-flight, answer a question from a bubble, stop at three scopes.
 
