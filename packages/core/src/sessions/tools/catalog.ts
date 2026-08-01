@@ -861,6 +861,27 @@ const runTools: readonly AgentTool[] = [
     "/api/commands/:id/runs",
     { id: ID },
   ),
+  read(
+    "run_compare",
+    "Compare two runs of the same command: what went in, what came out, which model, what it cost (§4.4). Runs of different definitions are refused with the reason.",
+    "the compare gesture on run history",
+    "/api/runs/:id/compare",
+    {
+      id: ID,
+      with: {
+        type: "string",
+        required: true,
+        description: "the other run's id",
+      },
+    },
+  ),
+  read(
+    "definition_outcomes_read",
+    "Read cross-run outcomes for a command definition: attempts, the end-state histogram, how many attempts it typically takes, and what it costs — which is how \u201cis delegating this kind of work actually working?\u201d becomes answerable (§4.4).",
+    "the cross-run outcomes on a command definition",
+    "/api/command-definitions/:id/outcomes",
+    { id: ID },
+  ),
   // A tool rather than operator-only: previewing before spending is exactly the
   // gesture principle 8 says both surfaces get, and it is a pure read — it
   // provisions nothing, starts nothing, and records nothing (§4.1).

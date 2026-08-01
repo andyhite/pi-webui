@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { compareRuns } from "@plotroom/core";
+import { badRequest, refused } from "../http/errors.js";
 import { validateJsonBody } from "../http/validate.js";
 import type { RunQueueService } from "../runs/queue.js";
 import type { RunService } from "../runs/service.js";
@@ -160,6 +162,58 @@ export function runRoutes(
   app.get("/commands/:id/runs", (c) =>
     c.json({ runs: stores.runs.history(param(c, "id")) }),
   );
+
+  /**
+   * Compare two runs (§4.4): "what went in, what came out, which model, what it
+   * cost." This is where §15-1 pays off — both runs recorded their whole selves,
+   * so the answer keeps working after the inputs have moved on.
+   *
+   * `with` is a query parameter rather than a second path segment because the
+   * gesture is *this* run compared with another, not a resource of its own; the
+   * comparison is derived and stored nowhere. Runs of different definitions are
+   * **refused with the reason** (`compareRuns` decides, not this route), because a
+   * side-by-side of two different recipes invites reading a difference in
+   * instruction as a difference in outcome.
+   *
+   * The assembled bodies are addressed rather than inlined: both are already
+   * readable at `/runs/:id/assembled`, a diff is derivable from the two, and
+   * shipping two full contexts through a comparison would make the largest thing
+   * in run history the smallest part of the answer.
+   */
+  app.get("/runs/:id/compare", (c) => {
+    const id = param(c, "id");
+    const other = c.req.query("with");
+    if (other === undefined || other.length === 0) {
+      throw badRequest(
+        "name the run to compare with: /runs/:id/compare?with=<runId> (§4.4)",
+      );
+    }
+
+    const result = compareRuns(
+      stores.runs.comparable(id),
+      stores.runs.comparable(other),
+    );
+
+    if (!result.comparable) throw refused(result.refusal);
+    return c.json({ comparison: result.comparison });
+  });
+
+  /**
+   * Cross-run outcomes for one definition (§4.4): "how many attempts it typically
+   * takes, what usually fails, what it costs" — which is how "is delegating this
+   * kind of work actually working?" becomes answerable.
+   *
+   * Per definition, matching retention's grain and the estimate's: the same recipe
+   * run in two workstreams is the same evidence. The cost half is the *same*
+   * `estimateRunCost` the run preview shows, so the two cannot disagree.
+   */
+  app.get("/command-definitions/:id/outcomes", (c) => {
+    const id = param(c, "id");
+    // Reads through the store so an id naming no definition is the same 404 every
+    // other definition read reports.
+    stores.commands.definition(id);
+    return c.json({ outcomes: stores.runs.outcomes(id) });
+  });
 
   /**
    * The completion loop (§3.5): the session says it is done, PlotRoom checks the

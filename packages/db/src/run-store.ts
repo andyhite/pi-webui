@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
+  aggregateRunOutcomes,
   checkContentBudget,
   checkSubmission,
   effectiveAskPoints,
@@ -17,6 +18,7 @@ import {
   type CostEstimate,
   type CommandDefinitionId,
   type CommandId,
+  type ComparableRun,
   type CompletionProof,
   type ConditionEvaluation,
   type NodeId,
@@ -27,6 +29,7 @@ import {
   type RunConfiguration,
   type RunCost,
   type RunId,
+  type RunOutcomeAggregate,
   type RunOutput,
   type RunRetentionPolicy,
   type VersionId,
@@ -58,6 +61,14 @@ export type RunRefusal =
   | { readonly reason: "parameters_unconfirmed"; readonly message: string }
   | { readonly reason: "blocked_input"; readonly message: string }
   | { readonly reason: "content_budget"; readonly message: string }
+  /**
+   * A spend budget that binds this work is exhausted (§8). Collected by the
+   * preview like every other refusal and raised by the run path — which is why it
+   * belongs to this vocabulary rather than being a special case at one call site:
+   * "why can't I run this" has one answer, and "there is no money left" is one of
+   * the things it says.
+   */
+  | { readonly reason: "out_of_budget"; readonly message: string }
   | { readonly reason: "already_ended"; readonly message: string }
   | { readonly reason: "initiation_key_reused"; readonly message: string }
   | { readonly reason: "initiation_in_flight"; readonly message: string };
@@ -764,6 +775,80 @@ export class RunStore {
   assemblyWarning(runId: string): string | null {
     const budget = this.contentBudget(runId);
     return budget.state === "warn" ? budget.message : null;
+  }
+
+  /**
+   * The two runs §4.4's comparison gesture reads, as `@plotroom/core` wants them.
+   *
+   * The rule about what may be compared is `compareRuns`', not this method's: it
+   * gathers what each run recorded — including where its assembled bytes are
+   * addressable, so a diff is derivable without shipping both bodies through the
+   * comparison — and lets core refuse. Nothing here reads an object's *current*
+   * state, which is why a comparison keeps working after the inputs moved on
+   * (§15-1).
+   */
+  comparable(runId: string): ComparableRun {
+    return {
+      run: this.run(runId),
+      outputs: this.outputsOf(runId),
+      assembledAddress: `/api/runs/${runId}/assembled`,
+    };
+  }
+
+  /** What one run produced, addressable as `output@n` (§15-4). */
+  outputsOf(runId: string): RunOutput[] {
+    return this.state.db
+      .select()
+      .from(runOutputs)
+      .where(eq(runOutputs.runId, runId))
+      .orderBy(runOutputs.name)
+      .all()
+      .map((row) => ({
+        runId: row.runId as RunId,
+        name: row.name,
+        objectId: row.objectId as ObjectId,
+        versionId: row.versionId as VersionId,
+      }));
+  }
+
+  /**
+   * Cross-run outcomes for one definition (§4.4): attempts, the end-state
+   * histogram, and what it costs — "how many attempts it typically takes, what
+   * usually fails, what it costs".
+   *
+   * The cost half goes through the **same** `estimateRunCost` the run preview
+   * uses, over the same per-definition grain, rather than computing a second set
+   * of numbers: a cross-run cost and a pre-run estimate that could disagree would
+   * make one of them wrong on every screen showing both.
+   */
+  outcomes(definitionId: string, inputTokens = 0): RunOutcomeAggregate {
+    const rows = this.state.db
+      .select({
+        id: runs.id,
+        commandId: runs.commandId,
+        status: runs.status,
+        costMicros: runs.costMicros,
+        inputTokens: runs.inputTokens,
+        outputTokens: runs.outputTokens,
+        submissions: sql<number>`(select count(*) from run_submissions where run_submissions.run_id = ${runs.id})`,
+      })
+      .from(runs)
+      .where(eq(runs.definitionId, definitionId))
+      .orderBy(runs.startedAt)
+      .all();
+
+    return aggregateRunOutcomes({
+      definitionId: definitionId as CommandDefinitionId,
+      inputTokens,
+      runs: rows.map((row) => ({
+        commandId: row.commandId as CommandId,
+        status: row.status,
+        costMicros: row.costMicros,
+        inputTokens: row.inputTokens,
+        outputTokens: row.outputTokens,
+        submissions: row.submissions,
+      })),
+    });
   }
 
   /** Every run of a command, oldest first: the n in output@n is the ordinal. */

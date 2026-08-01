@@ -131,13 +131,34 @@ export function maintenanceRoutes(
     c.json({ compaction: compaction.runNow() }),
   );
 
-  /** A single run's pin, which is the human's veto over all of the above (§4.4). */
+  /**
+   * A single run's pin, which is the human's veto over all of the above (§4.4):
+   * "pinning is the human's word for never compact this."
+   *
+   * It reaches everything the run references — its assembled content and every
+   * version that went in or came out — which is `RunStore.pin`'s doing, not this
+   * route's. And it **publishes**, because a pin changes what a surface may say
+   * about a run's future: an unpinned run can stop being comparable, a pinned one
+   * cannot, and "comparable forever" (§3.7) is not a state to discover by
+   * refetching.
+   */
+  const setPin = (runId: string, pinned: boolean) => {
+    const run = stores.runs.pin(runId, pinned);
+    stores.bus.publish({
+      entity: "run",
+      verb: "updated",
+      run,
+      author: { kind: "human" },
+    });
+    return run;
+  };
+
   app.post("/runs/:id/pin", (c) =>
-    c.json({ run: stores.runs.pin(param(c, "id"), true) }),
+    c.json({ run: setPin(param(c, "id"), true) }),
   );
 
   app.delete("/runs/:id/pin", (c) =>
-    c.json({ run: stores.runs.pin(param(c, "id"), false) }),
+    c.json({ run: setPin(param(c, "id"), false) }),
   );
 
   return app;
