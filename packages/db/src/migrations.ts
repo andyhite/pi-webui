@@ -468,4 +468,243 @@ export const migrations: readonly Migration[] = [
         ON workstream_events (workstream_id, created_at);
     `,
   },
+  {
+    id: 7,
+    name: "sessions_and_workspaces",
+    sql: `
+      -- One workstream owns exactly one workspace, and workspaces never cross
+      -- workstreams (§3.4). The boundary is a predicate in @plotroom/core
+      -- (checkWorkspaceBoundary); the partial unique index below is the same
+      -- rule the schema cannot represent a violation of. Timestamps in this
+      -- table are MILLISECONDS, matching the workspace record's own
+      -- EpochMillis vocabulary rather than converting at every edge.
+      CREATE TABLE workspaces (
+        id                    TEXT PRIMARY KEY,
+        workstream_id         TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        kind                  TEXT NOT NULL,
+        -- Opaque to the product; the kind validated it (§10.1), and it crosses
+        -- a worker boundary as JSON for a plugin-supplied kind.
+        config_json           TEXT NOT NULL,
+        -- One entry per root, so a multi-root kind (§13) needs no new concept.
+        roots_json            TEXT NOT NULL DEFAULT '[]',
+        -- The readiness record whole, including the last setup attempt's
+        -- output: not-ready blocks a run with a visible reason (§3.4).
+        readiness_json        TEXT NOT NULL,
+        created_by_kind       TEXT NOT NULL CHECK (created_by_kind IN ('human', 'session')),
+        created_by_session    TEXT,
+        created_at            INTEGER NOT NULL,
+        -- Provisioning happens at FIRST RUN, never at workstream creation
+        -- (§3.4, §3.5): a fresh record has no roots and no provisioned_at.
+        provisioned_at        INTEGER,
+        provision_cost_json   TEXT,
+        last_fingerprint_json TEXT,
+        removed_at            INTEGER,
+        CHECK (
+          (created_by_kind = 'session' AND created_by_session IS NOT NULL) OR
+          (created_by_kind = 'human'   AND created_by_session IS NULL)
+        )
+      );
+
+      CREATE UNIQUE INDEX workspaces_workstream_idx
+        ON workspaces (workstream_id)
+        WHERE removed_at IS NULL;
+
+      -- A session (§3.6): live and stored are the same record, so "end" is
+      -- null while it runs. Everything derived from observation — the phase,
+      -- the accounting totals — is a *snapshot* here; session_observations is
+      -- the truth it is folded from, which is why a restart can recompute it
+      -- rather than trust it (principle 7).
+      CREATE TABLE sessions (
+        id                   TEXT PRIMARY KEY,
+        -- A session never leaves its workstream (§3.3).
+        workstream_id        TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        command_id           TEXT REFERENCES commands (id),
+        -- Run retention (§4.4) may reclaim the run; the session record is
+        -- readable, resumable, and forkable *always* (§3.6), so the link goes
+        -- null and the record stays rather than the reverse.
+        run_id               TEXT REFERENCES runs (id) ON DELETE SET NULL,
+        workspace_id         TEXT REFERENCES workspaces (id),
+        mode                 TEXT NOT NULL CHECK (mode IN ('producing', 'open')),
+        -- Per-session launch choices, made at launch and visible after (§3.6).
+        -- A null allowed_tools_json inherits the app's tools; a list narrows
+        -- them, and checkToolPermissions refuses anything wider.
+        model                TEXT NOT NULL,
+        effort               TEXT NOT NULL CHECK (effort IN
+                               ('off', 'minimal', 'low', 'medium', 'high', 'max')),
+        allowed_tools_json   TEXT,
+        initiated_by_kind    TEXT NOT NULL CHECK (initiated_by_kind IN ('human', 'session')),
+        initiated_by_session TEXT,
+        -- Which adapter and which native session, so resume and fork survive a
+        -- restart (decision 0001).
+        adapter_id           TEXT NOT NULL,
+        runtime_ref          TEXT NOT NULL,
+        -- The transcript is content like anything else (§3.6): an object whose
+        -- versions are published by the checkpoint rule, never per turn.
+        transcript_object_id TEXT REFERENCES objects (id),
+        -- Derived by PlotRoom from the observation log, never agent-reported.
+        phase_json           TEXT NOT NULL,
+        turns                INTEGER NOT NULL DEFAULT 0,
+        input_tokens         INTEGER NOT NULL DEFAULT 0,
+        output_tokens        INTEGER NOT NULL DEFAULT 0,
+        cache_read_tokens    INTEGER NOT NULL DEFAULT 0,
+        cache_write_tokens   INTEGER NOT NULL DEFAULT 0,
+        -- Money as integer micros, like runs.cost_micros: a float column is
+        -- how spend totals stop adding up.
+        cost_micros          INTEGER NOT NULL DEFAULT 0,
+        -- A number that cannot name its source is not evidence (§3.6).
+        cost_basis           TEXT NOT NULL DEFAULT 'none' CHECK (cost_basis IN
+                               ('runtime-reported', 'priced-from-tokens', 'none')),
+        context_used_tokens  INTEGER,
+        context_max_tokens   INTEGER,
+        context_basis        TEXT CHECK (context_basis IN ('reported', 'estimated')),
+        started_at           INTEGER NOT NULL,
+        last_activity_at     INTEGER NOT NULL,
+        -- The closed end-state taxonomy (§3.6, principle 11). out-of-budget is
+        -- distinct from failed, and interrupted from both; a nullable end_kind
+        -- is what "live" means, and the three columns move together.
+        end_kind             TEXT CHECK (end_kind IN
+                               ('completed', 'ended-by-user', 'stopped',
+                                'out-of-budget', 'failed', 'interrupted')),
+        end_json             TEXT,
+        ended_at             INTEGER,
+        deleted_at           INTEGER,
+        CHECK (
+          (initiated_by_kind = 'session' AND initiated_by_session IS NOT NULL) OR
+          (initiated_by_kind = 'human'   AND initiated_by_session IS NULL)
+        ),
+        CHECK (
+          (end_kind IS NULL     AND end_json IS NULL     AND ended_at IS NULL) OR
+          (end_kind IS NOT NULL AND end_json IS NOT NULL AND ended_at IS NOT NULL)
+        ),
+        -- A producing session runs a command and its run history is the record
+        -- of what it produced (§3.5); an open session is a conversation.
+        CHECK (
+          (mode = 'producing' AND command_id IS NOT NULL) OR mode = 'open'
+        ),
+        CHECK (
+          (context_used_tokens IS NULL AND context_max_tokens IS NULL
+                                       AND context_basis IS NULL) OR
+          (context_used_tokens IS NOT NULL AND context_max_tokens IS NOT NULL
+                                           AND context_basis IS NOT NULL)
+        )
+      );
+
+      CREATE INDEX sessions_workstream_idx ON sessions (workstream_id);
+      CREATE INDEX sessions_command_idx ON sessions (command_id);
+      CREATE INDEX sessions_run_idx ON sessions (run_id);
+      -- The in-flight query principle 11 runs at every process start.
+      CREATE INDEX sessions_live_idx ON sessions (end_kind, deleted_at);
+
+      -- PlotRoom's OWN observation records, not vendor payloads (§3.6,
+      -- decision 0001): the log resume, fork, phases, and accounting are all
+      -- derived from, so all of them survive vendor churn. Appended in order;
+      -- \`seq\` is 1-based per session and the ordering primitive.
+      CREATE TABLE session_observations (
+        session_id       TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        seq              INTEGER NOT NULL,
+        -- Milliseconds, as the adapter stamped it at observation time.
+        at               INTEGER NOT NULL,
+        kind             TEXT NOT NULL,
+        observation_json TEXT NOT NULL,
+        PRIMARY KEY (session_id, seq)
+      );
+
+      CREATE INDEX session_observations_kind_idx
+        ON session_observations (session_id, kind);
+
+      -- The live-transcript checkpoint rule (§3.6): consumers drift on session
+      -- end or explicit checkpoint, never per turn. One row per published
+      -- version, so "what did this consumer read" is answerable after the fact.
+      CREATE TABLE session_transcript_publications (
+        session_id   TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        ordinal      INTEGER NOT NULL,
+        through_turn INTEGER NOT NULL,
+        trigger      TEXT NOT NULL CHECK (trigger IN ('checkpoint', 'session-end')),
+        by_kind      TEXT CHECK (by_kind IN ('human', 'session')),
+        by_session   TEXT,
+        object_id    TEXT NOT NULL REFERENCES objects (id),
+        version_id   TEXT NOT NULL REFERENCES object_versions (id),
+        at           INTEGER NOT NULL,
+        PRIMARY KEY (session_id, ordinal),
+        -- A session end publishes on nobody's behalf; a checkpoint is a
+        -- gesture, and §3.6 allows the session itself to make it.
+        CHECK (
+          (trigger = 'session-end' AND by_kind IS NULL) OR trigger = 'checkpoint'
+        ),
+        CHECK (
+          (by_kind = 'session' AND by_session IS NOT NULL) OR
+          (by_kind IS NOT 'session' AND by_session IS NULL)
+        )
+      );
+
+      -- The injection ledger (§6.5): queue acceptance and delivery are two
+      -- facts, kept apart, so the UI can show "queued" honestly instead of
+      -- pretending the message landed.
+      CREATE TABLE session_injections (
+        id             TEXT PRIMARY KEY,
+        session_id     TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        -- Steering is authored and leaves a permanent content node on the graph
+        -- (§6.5, principle 5). World-condition feedback is the product
+        -- answering a submission it checked itself — not authored context, so
+        -- it has no author and no node, and the schema says which is which.
+        origin         TEXT NOT NULL CHECK (origin IN ('steering', 'condition-feedback')),
+        author_kind    TEXT CHECK (author_kind IN ('human', 'session')),
+        author_session TEXT,
+        node_id        TEXT REFERENCES nodes (id),
+        text           TEXT NOT NULL,
+        queued_at      INTEGER NOT NULL,
+        delivered_at   INTEGER,
+        refused_at     INTEGER,
+        refused_reason TEXT,
+        CHECK (
+          (origin = 'steering' AND author_kind IS NOT NULL AND node_id IS NOT NULL) OR
+          (origin = 'condition-feedback' AND author_kind IS NULL AND node_id IS NULL)
+        ),
+        CHECK (delivered_at IS NULL OR refused_at IS NULL),
+        CHECK (
+          (author_kind = 'session' AND author_session IS NOT NULL) OR
+          (author_kind IS NOT 'session' AND author_session IS NULL)
+        )
+      );
+
+      CREATE INDEX session_injections_session_idx
+        ON session_injections (session_id, queued_at);
+
+      -- The producing completion loop (§3.5, principle 3): a submission is
+      -- checked against the declared world conditions, and a failing condition
+      -- comes back as feedback while the session continues. Every attempt is
+      -- recorded, whole — that is what makes "typical failures" answerable
+      -- (§6.4) and what keeps proof point-in-time rather than re-derived.
+      CREATE TABLE run_submissions (
+        run_id           TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+        ordinal          INTEGER NOT NULL,
+        session_id       TEXT REFERENCES sessions (id) ON DELETE SET NULL,
+        at               INTEGER NOT NULL,
+        accepted         INTEGER NOT NULL,
+        evaluations_json TEXT NOT NULL,
+        feedback         TEXT,
+        PRIMARY KEY (run_id, ordinal),
+        CHECK (
+          (accepted = 1 AND feedback IS NULL) OR
+          (accepted = 0 AND feedback IS NOT NULL)
+        )
+      );
+
+      -- Idempotent initiation (principle 9): one gesture is one run and one
+      -- session, across retries and reconnects. The client supplies the key, so
+      -- a resent request is recognisable as the same gesture rather than as a
+      -- second one. Cascading with the run is deliberate: once run history has
+      -- been compacted (§4.4) there is nothing left to hand a retry.
+      CREATE TABLE run_initiations (
+        initiation_key TEXT PRIMARY KEY,
+        command_id     TEXT NOT NULL REFERENCES commands (id) ON DELETE CASCADE,
+        run_id         TEXT REFERENCES runs (id) ON DELETE CASCADE,
+        session_id     TEXT REFERENCES sessions (id) ON DELETE SET NULL,
+        created_at     INTEGER NOT NULL,
+        settled_at     INTEGER
+      );
+
+      CREATE INDEX run_initiations_command_idx ON run_initiations (command_id);
+    `,
+  },
 ];

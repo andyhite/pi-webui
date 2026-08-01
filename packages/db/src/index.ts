@@ -24,4 +24,7 @@ export * from "./graph-store.js";
 export * from "./workstream-store.js";
 export * from "./command-store.js";
 export * from "./run-store.js";
+export * from "./workspace-store.js";
+export * from "./session-transcript.js";
+export * from "./session-store.js";
 export { migrations, type Migration } from "./migrations.js";

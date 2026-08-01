@@ -501,6 +501,252 @@ export const runOutputs = sqliteTable(
   ],
 );
 
+/**
+ * One workstream's workspace (§3.4). The boundary — exactly one live workspace
+ * per workstream, and no path shared across workstreams — is a predicate in
+ * `@plotroom/core`; the partial unique index in migration 7 is the same rule
+ * made unrepresentable. Timestamps here are milliseconds, matching the
+ * workspace record's own vocabulary.
+ */
+export const workspaces = sqliteTable(
+  "workspaces",
+  {
+    id: text("id").primaryKey(),
+    workstreamId: text("workstream_id")
+      .notNull()
+      .references(() => workstreams.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    /** Opaque to the product; the kind validated it (§10.1). */
+    configJson: text("config_json").notNull(),
+    rootsJson: text("roots_json").notNull().default("[]"),
+    /** The readiness record whole, last setup attempt's output included. */
+    readinessJson: text("readiness_json").notNull(),
+    createdByKind: text("created_by_kind", {
+      enum: ["human", "session"],
+    }).notNull(),
+    createdBySession: text("created_by_session"),
+    createdAt: integer("created_at").notNull(),
+    /** Null until the first run provisions it (§3.4, §3.5). */
+    provisionedAt: integer("provisioned_at"),
+    provisionCostJson: text("provision_cost_json"),
+    lastFingerprintJson: text("last_fingerprint_json"),
+    removedAt: integer("removed_at"),
+  },
+  (table) => [
+    uniqueIndex("workspaces_workstream_idx")
+      .on(table.workstreamId)
+      .where(sql`removed_at IS NULL`),
+  ],
+);
+
+/**
+ * Spec §3.6: a session is a live or completed agent run inside a workstream,
+ * and one record either way. Everything derived from observation — the phase,
+ * the accounting totals — is a snapshot here; `session_observations` is the
+ * truth it folds from, so a restart recomputes rather than trusts it
+ * (principle 7).
+ */
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    workstreamId: text("workstream_id")
+      .notNull()
+      .references(() => workstreams.id, { onDelete: "cascade" }),
+    commandId: text("command_id").references(() => commands.id),
+    /**
+     * Run retention (§4.4) may reclaim the run; a session record is readable,
+     * resumable, and forkable *always* (§3.6), so the link goes null and the
+     * record stays rather than the reverse.
+     */
+    runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+    workspaceId: text("workspace_id").references(() => workspaces.id),
+    mode: text("mode", { enum: ["producing", "open"] }).notNull(),
+    model: text("model").notNull(),
+    effort: text("effort", {
+      enum: ["off", "minimal", "low", "medium", "high", "max"],
+    }).notNull(),
+    /** Null inherits the app's tools; a list narrows them, never widens (§3.6). */
+    allowedToolsJson: text("allowed_tools_json"),
+    initiatedByKind: text("initiated_by_kind", {
+      enum: ["human", "session"],
+    }).notNull(),
+    initiatedBySession: text("initiated_by_session"),
+    adapterId: text("adapter_id").notNull(),
+    runtimeRef: text("runtime_ref").notNull(),
+    /** The transcript as content (§3.6): versioned on the checkpoint rule. */
+    transcriptObjectId: text("transcript_object_id").references(
+      () => objects.id,
+    ),
+    /** Derived by PlotRoom, never agent-reported (principle 7). */
+    phaseJson: text("phase_json").notNull(),
+    turns: integer("turns").notNull().default(0),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    /** Integer micros, like `runs.cost_micros`: spend is never a float row. */
+    costMicros: integer("cost_micros").notNull().default(0),
+    costBasis: text("cost_basis", {
+      enum: ["runtime-reported", "priced-from-tokens", "none"],
+    })
+      .notNull()
+      .default("none"),
+    contextUsedTokens: integer("context_used_tokens"),
+    contextMaxTokens: integer("context_max_tokens"),
+    contextBasis: text("context_basis", { enum: ["reported", "estimated"] }),
+    startedAt: integer("started_at").notNull(),
+    lastActivityAt: integer("last_activity_at").notNull(),
+    /**
+     * The closed taxonomy (§3.6, principle 11): out-of-budget is distinct from
+     * failed, interrupted from both, and a null `endKind` is what live means.
+     */
+    endKind: text("end_kind", {
+      enum: [
+        "completed",
+        "ended-by-user",
+        "stopped",
+        "out-of-budget",
+        "failed",
+        "interrupted",
+      ],
+    }),
+    endJson: text("end_json"),
+    endedAt: integer("ended_at"),
+    deletedAt: integer("deleted_at"),
+  },
+  (table) => [
+    index("sessions_workstream_idx").on(table.workstreamId),
+    index("sessions_command_idx").on(table.commandId),
+    index("sessions_run_idx").on(table.runId),
+    index("sessions_live_idx").on(table.endKind, table.deletedAt),
+  ],
+);
+
+/**
+ * PlotRoom's own observation records — not vendor payloads (§3.6, decision
+ * 0001). Phases, accounting, transcripts, resume, and fork are all derived
+ * from this log, so all of them survive vendor churn.
+ */
+export const sessionObservations = sqliteTable(
+  "session_observations",
+  {
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    /** 1-based per session; the ordering primitive. */
+    seq: integer("seq").notNull(),
+    /** Milliseconds, as the adapter stamped it at observation time. */
+    at: integer("at").notNull(),
+    kind: text("kind").notNull(),
+    observationJson: text("observation_json").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sessionId, table.seq] }),
+    index("session_observations_kind_idx").on(table.sessionId, table.kind),
+  ],
+);
+
+/** One published transcript version — the checkpoint rule's record (§3.6). */
+export const sessionTranscriptPublications = sqliteTable(
+  "session_transcript_publications",
+  {
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    ordinal: integer("ordinal").notNull(),
+    throughTurn: integer("through_turn").notNull(),
+    trigger: text("trigger", {
+      enum: ["checkpoint", "session-end"],
+    }).notNull(),
+    byKind: text("by_kind", { enum: ["human", "session"] }),
+    bySession: text("by_session"),
+    objectId: text("object_id")
+      .notNull()
+      .references(() => objects.id),
+    versionId: text("version_id")
+      .notNull()
+      .references(() => objectVersions.id),
+    at: integer("at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.sessionId, table.ordinal] })],
+);
+
+/**
+ * The injection ledger (§6.5): queue acceptance and delivery are two facts,
+ * kept apart, so "queued" is honest instead of optimistic. `origin`
+ * distinguishes authored steering — which leaves a permanent content node —
+ * from the product's own world-condition feedback, which authors nothing.
+ */
+export const sessionInjections = sqliteTable(
+  "session_injections",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    origin: text("origin", {
+      enum: ["steering", "condition-feedback"],
+    }).notNull(),
+    authorKind: text("author_kind", { enum: ["human", "session"] }),
+    authorSession: text("author_session"),
+    nodeId: text("node_id").references(() => nodes.id),
+    text: text("text").notNull(),
+    queuedAt: integer("queued_at").notNull(),
+    deliveredAt: integer("delivered_at"),
+    refusedAt: integer("refused_at"),
+    refusedReason: text("refused_reason"),
+  },
+  (table) => [
+    index("session_injections_session_idx").on(table.sessionId, table.queuedAt),
+  ],
+);
+
+/**
+ * The producing completion loop (§3.5, principle 3): every submission attempt,
+ * with what was checked and what held. Proof is point-in-time and recorded on
+ * the run; this is the record of how many tries it took and why.
+ */
+export const runSubmissions = sqliteTable(
+  "run_submissions",
+  {
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    ordinal: integer("ordinal").notNull(),
+    sessionId: text("session_id").references(() => sessions.id, {
+      onDelete: "set null",
+    }),
+    at: integer("at").notNull(),
+    accepted: integer("accepted", { mode: "boolean" }).notNull(),
+    evaluationsJson: text("evaluations_json").notNull(),
+    feedback: text("feedback"),
+  },
+  (table) => [primaryKey({ columns: [table.runId, table.ordinal] })],
+);
+
+/**
+ * Idempotent initiation (principle 9): one gesture is one run and one session,
+ * across retries and reconnects. The key is client-supplied, so a resent
+ * request is recognisable as the same gesture rather than as a second one.
+ */
+export const runInitiations = sqliteTable(
+  "run_initiations",
+  {
+    initiationKey: text("initiation_key").primaryKey(),
+    commandId: text("command_id")
+      .notNull()
+      .references(() => commands.id, { onDelete: "cascade" }),
+    runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
+    sessionId: text("session_id").references(() => sessions.id, {
+      onDelete: "set null",
+    }),
+    createdAt: integer("created_at").notNull(),
+    settledAt: integer("settled_at"),
+  },
+  (table) => [index("run_initiations_command_idx").on(table.commandId)],
+);
+
 export type NodeRow = typeof nodes.$inferSelect;
 export type WorkstreamRow = typeof workstreams.$inferSelect;
 export type WorkstreamEventRow = typeof workstreamEvents.$inferSelect;
@@ -518,3 +764,11 @@ export type CommandOutputRow = typeof commandOutputs.$inferSelect;
 export type RunRow = typeof runs.$inferSelect;
 export type RunInputRow = typeof runInputs.$inferSelect;
 export type RunOutputRow = typeof runOutputs.$inferSelect;
+export type WorkspaceRow = typeof workspaces.$inferSelect;
+export type SessionRow = typeof sessions.$inferSelect;
+export type SessionObservationRow = typeof sessionObservations.$inferSelect;
+export type SessionTranscriptPublicationRow =
+  typeof sessionTranscriptPublications.$inferSelect;
+export type SessionInjectionRow = typeof sessionInjections.$inferSelect;
+export type RunSubmissionRow = typeof runSubmissions.$inferSelect;
+export type RunInitiationRow = typeof runInitiations.$inferSelect;
