@@ -145,9 +145,10 @@ describe("the human edits before it is sent (§6.3)", () => {
     // The structural half: `planHandoff` takes a `ReviewedHandoffBrief`, so a
     // draft does not typecheck. If this ever compiles, the directive becomes an
     // unused-directive error and this file fails to build.
+    // Never invoked: the assertion is that it does not compile.
     // @ts-expect-error a handoff sends a brief the human reviewed (§6.3)
-    const sent = planHandoff(draft(), request());
-    expect(sent).toBeDefined();
+    const sent = () => planHandoff(draft(), request());
+    expect(typeof sent).toBe("function");
   });
 });
 
