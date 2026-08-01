@@ -313,14 +313,43 @@ export async function startMilestoneServer(
   }
 }
 
-/** A same-origin, loopback-trusted POST (spec §12) — this test's own seeding. */
+/**
+ * A same-origin, loopback-trusted POST (spec §12) — this test's own seeding.
+ * `headers` is how a test acts as a session (`X-PlotRoom-Actor: session:<id>`,
+ * `apps/server/src/http/actor.ts`) to seed a delegation the same way
+ * `apps/server/src/routes/delegation.integration.test.ts` does server-side.
+ */
 export async function apiPost<T>(
+  baseUrl: string,
+  path: string,
+  body: unknown,
+  headers?: Record<string, string>,
+): Promise<T> {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: baseUrl,
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `${path} failed: ${response.status} ${await response.text()}`,
+    );
+  }
+  return (await response.json()) as T;
+}
+
+/** Same as {@link apiPost}, for a verb with no request body (`PATCH`/`DELETE`-shaped writes some routes expose as POST-with-empty-body). */
+export async function apiPatch<T>(
   baseUrl: string,
   path: string,
   body: unknown,
 ): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
-    method: "POST",
+    method: "PATCH",
     headers: { "content-type": "application/json", origin: baseUrl },
     body: JSON.stringify(body),
   });
