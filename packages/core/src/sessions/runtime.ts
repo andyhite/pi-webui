@@ -275,7 +275,10 @@ export const UNPROVEN_COMPLETION_REASONS = [
   "not_submitted",
   /** The outcome was submitted but a declared world condition is false. */
   "conditions_failed",
-  /** An open session has no outcome, so completion is not a thing it can claim. */
+  /**
+   * An open session has no outcome, so completion is not a thing it can claim —
+   * which makes the claim more unfounded than a producing session's, not less.
+   */
   "no_declared_outcome",
   /** Nobody supplied evidence, so all there is is the agent's own word. */
   "no_evidence",
@@ -319,7 +322,7 @@ export function checkProvenCompletion(
       proven: false,
       reason: "no_declared_outcome",
       message:
-        "an open session declares no outcome, so it cannot complete; it ends when someone ends it (§3.5)",
+        "the runtime reported completion for an open session, which declares no outcome and so can never have proven one (§3.5, principle 3)",
       failedConditionIds: [],
     };
   }
@@ -394,12 +397,12 @@ export function classifyEnd(
     case "completed": {
       const proof = checkProvenCompletion(context.completion);
       if (proof.proven) return { kind: "completed", at };
-      // An open session had nothing to prove: its end is the end an open session
-      // has (§3.5), not a failure. Anything else is work reported done that the
-      // world does not agree is done.
-      return proof.reason === "no_declared_outcome"
-        ? endedByUser(at, context)
-        : { kind: "failed", message: proof.message, at };
+      // Every unproven completion is a failure that says why, the open lifecycle
+      // included: an open session has no declared outcome, so there is nothing it
+      // could ever have proven, which makes the claim *more* unfounded rather than
+      // less. Recording it as an ordinary end would put a finished-looking record
+      // in front of the operator with nothing having been checked.
+      return { kind: "failed", message: proof.message, at };
     }
     case "ended-by-user":
       return endedByUser(at, context);

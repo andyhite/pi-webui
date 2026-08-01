@@ -184,8 +184,8 @@ describe("checkToolCall", () => {
     const check = checkToolCall(
       { actor: sessionAuthor(CHILD), lineage, targets },
       {
-        tool: "session_dispatch",
-        input: { commandId: "cmd_new" },
+        tool: "run_one",
+        input: { commandId: "cmd_new", initiationKey: "gesture-1" },
         target: { kind: "command", id: "cmd_new" },
       },
     );
@@ -199,8 +199,8 @@ describe("checkToolCall", () => {
     const check = checkToolCall(
       { actor: sessionAuthor(CHILD), lineage, targets },
       {
-        tool: "session_dispatch",
-        input: { commandId: "cmd_grandchild" },
+        tool: "run_one",
+        input: { commandId: "cmd_grandchild", initiationKey: "gesture-2" },
         target: { kind: "command", id: "cmd_grandchild" },
       },
     );
@@ -214,8 +214,8 @@ describe("checkToolCall", () => {
     const check = checkToolCall(
       { actor: sessionAuthor(CHILD), lineage, targets },
       {
-        tool: "session_dispatch",
-        input: { commandId: "cmd_stranger" },
+        tool: "run_one",
+        input: { commandId: "cmd_stranger", initiationKey: "gesture-3" },
         target: commandFeedingStranger,
       },
     );

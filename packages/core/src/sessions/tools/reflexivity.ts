@@ -46,13 +46,14 @@ export interface ToolTarget {
  * backwards, restated here because getting them wrong breaks the product rather
  * than a test:
  *
- * - **`session_dispatch`** resolves to the sessions the command has *already*
- *   run — what a re-run or resume would touch (§4.1: a session may not run,
- *   resume, or re-run work inside its own initiation chain). It must **never**
- *   include the child about to be created: a fresh child is a descendant by
- *   construction, so including it would refuse every delegation principle 1
- *   explicitly permits ("a delegation's result returning to the delegator is not
- *   this").
+ * - **`run_one`** — which is also how a session delegates, since principle 5
+ *   allows exactly one way to start a session — resolves to the sessions the
+ *   command has *already* run, what a re-run or resume would touch (§4.1: a
+ *   session may not run, resume, or re-run work inside its own initiation chain).
+ *   It must **never** include the session the run is about to create: that one is
+ *   a descendant by construction, so including it would refuse every delegation
+ *   principle 1 explicitly permits ("a delegation's result returning to the
+ *   delegator is not this").
  * - **`claim_answer`** (and the claim-policy tools) resolve to the **empty set**,
  *   never the waiting session, however tempting the capability class makes it.
  *   §3.4 states the exemption outright: "a child asking its parent for write

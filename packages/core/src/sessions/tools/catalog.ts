@@ -744,6 +744,204 @@ const commandTools: readonly AgentTool[] = [
   ),
 ];
 
+/* ------------------------------------------------------- runs and sessions */
+
+/**
+ * The run spine's vocabulary (Epic 4.2, §4.1). Every one of these is a gesture a
+ * human has, so an agent has it too — the reflexivity asymmetry does the work
+ * rather than a shorter list.
+ *
+ * **`run_one` is also delegation.** "There is exactly one way to start [a
+ * session], and it is in the app" (principle 5), so a session dispatching a child
+ * is this same endpoint called with a session actor — not a second verb. What
+ * makes it a delegation is the actor: the server records the `session_delegated`
+ * provenance edge and attributes the child's spend up the initiating chain
+ * (`planDelegation`, `attributeSpend` in `delegation.ts`). A separate
+ * `session_dispatch` tool would have been a second way to start a session, which
+ * is exactly what principle 5 forbids.
+ */
+const runTools: readonly AgentTool[] = [
+  mutate({
+    name: "run_one",
+    summary:
+      "Run one command: assemble its context, start a session, and record the run (§4.1).",
+    gesture: "press run on a command card",
+    method: "POST",
+    endpoint: "/api/runs",
+    input: {
+      commandId: {
+        type: "string",
+        required: true,
+        description: "the command node to run",
+      },
+      initiationKey: {
+        type: "string",
+        required: true,
+        description:
+          "the caller's own name for this gesture; the same key returns the same run rather than a second one (principle 9)",
+      },
+      runtime: {
+        type: "object",
+        required: false,
+        description: "adapter selection, where more than one is available",
+      },
+    },
+    requires: {
+      reflexivity: "target-session",
+      approval: "outside-policy",
+      targetResolution:
+        "the sessions this command has already run — what a re-run would touch (§4.1). NEVER the session this run is about to create: it is a descendant by construction, and refusing it would refuse delegation itself.",
+    },
+  }),
+  read(
+    "run_get",
+    "Read a run: what went in, the configuration it ran under, and what came out (§3.7).",
+    "open a run in run history",
+    "/api/runs/:id",
+    { id: ID },
+  ),
+  read(
+    "run_assembled_read",
+    "Read exactly the content a run assembled — the record, not a reconstruction (§15-1).",
+    "the run preview and the run-history diff",
+    "/api/runs/:id/assembled",
+    { id: ID },
+  ),
+  read(
+    "command_runs_list",
+    "List a command's runs, newest first — the history any two runs are compared over (§4.4).",
+    "the run history on a command card",
+    "/api/commands/:id/runs",
+    { id: ID },
+  ),
+  mutate({
+    name: "session_submit",
+    summary:
+      "Submit a producing session's outcome. PlotRoom checks the declared world conditions itself and returns a failing one as feedback (§3.5).",
+    gesture: "submit from the session panel",
+    method: "POST",
+    endpoint: "/api/sessions/:id/submit",
+    input: {
+      id: id("the session submitting"),
+      outputs: {
+        type: "object",
+        required: false,
+        description:
+          "the produced objects and versions, by declared outcome name",
+      },
+    },
+    // Submitting is a session reporting on its *own* work, which is the one thing
+    // principle 1 never had a problem with: completion is proven against the
+    // world, so nothing here expands what the session knows or may do.
+    requires: { reflexivity: "none" },
+  }),
+];
+
+const sessionTools: readonly AgentTool[] = [
+  read(
+    "session_list",
+    "List sessions with their derived phase and end facts (§3.6).",
+    "the fleet view and the queue (§7.1)",
+    "/api/sessions",
+    {
+      workstreamId: {
+        type: "string",
+        required: false,
+        description: "narrow to one workstream",
+      },
+    },
+  ),
+  read(
+    "session_get",
+    "Read one session: its record, phase, accounting, and end state.",
+    "select a session node",
+    "/api/sessions/:id",
+    { id: ID },
+  ),
+  read(
+    "session_observations_read",
+    "Read a session's observation log — what PlotRoom observed, which is what every phase is derived from (principle 7).",
+    "the conversation panel's live stream",
+    "/api/sessions/:id/observations",
+    {
+      id: ID,
+      since: {
+        type: "number",
+        required: false,
+        description: "only records after this sequence number",
+      },
+    },
+  ),
+  read(
+    "session_transcript_read",
+    "Read a session's transcript with its three renderings (§6.1).",
+    "the conversation panel",
+    "/api/sessions/:id/transcript",
+    { id: ID },
+  ),
+  mutate({
+    name: "session_stop",
+    summary:
+      "Stop a session (§6.7). A budget stop is PlotRoom's own and records out-of-budget.",
+    gesture: "stop, at session scope",
+    method: "POST",
+    endpoint: "/api/sessions/:id/stop",
+    input: {
+      id: ID,
+      mode: {
+        type: "string",
+        required: false,
+        description: "graceful | hard",
+      },
+      cause: {
+        type: "string",
+        required: false,
+        description: "user | budget — budget is PlotRoom's own initiation",
+      },
+      scope: {
+        type: "string",
+        required: false,
+        description: "which budget ran out, when the cause is budget",
+      },
+    },
+    // Stopping is not authoring: it takes capability away rather than granting
+    // any, so a session may stop a peer. What it may not do is stop work in its
+    // own chain to escape a gate, so the lineage check still applies.
+    requires: {
+      reflexivity: "target-session",
+      approval: "outside-policy",
+      targetResolution:
+        "the session named by the id, and nothing else — stopping reaches exactly one session.",
+    },
+  }),
+  mutate({
+    name: "session_end",
+    summary: "End an open session — the way open work finishes (§3.5).",
+    gesture: "end from the session panel",
+    method: "POST",
+    endpoint: "/api/sessions/:id/end",
+    input: { id: ID },
+    requires: {
+      reflexivity: "target-session",
+      targetResolution:
+        "the session named by the id, and nothing else. The actor is recorded on the end state, so a peer ending an open session is attributable (§3.6).",
+    },
+  }),
+  mutate({
+    name: "session_checkpoint",
+    summary:
+      "Checkpoint a live transcript, publishing what has been said so far (§3.6).",
+    gesture: "checkpoint from the conversation panel",
+    method: "POST",
+    endpoint: "/api/sessions/:id/checkpoint",
+    input: { id: ID },
+    // §3.6 allows the session itself: "its consumers drift when the session ends
+    // or when someone — the session included — explicitly checkpoints it."
+    // Publishing what it already said adds nothing to what it knows.
+    requires: { reflexivity: "none" },
+  }),
+];
+
 /* ------------------------------------------------------------ whole board */
 
 const boardTools: readonly AgentTool[] = [
@@ -959,40 +1157,6 @@ const agencyTools: readonly AgentTool[] = [
     availability: "pending",
   },
   mutate({
-    name: "session_dispatch",
-    summary:
-      "Dispatch a child session with provenance recorded and its spend attributed up the initiating chain (§3.6).",
-    gesture: "run a command",
-    method: "POST",
-    endpoint: "/api/sessions",
-    availability: "pending",
-    input: {
-      commandId: {
-        type: "string",
-        required: true,
-        description: "command node to run",
-      },
-      reason: {
-        type: "string",
-        required: false,
-        description: "why, recorded with the provenance",
-      },
-    },
-    // Dispatch is lineage-checked, but not because delegating is reflexive: "a
-    // delegation's result returning to the delegator is not this — the delegator
-    // authored that intent when it delegated" (principle 1). What §4.1 does
-    // forbid is a session running, resuming, or re-running work *already in its
-    // own chain*, and that is expressible only if the target resolves to the
-    // command's existing sessions. Server enforcement is Track A's; this declares
-    // what it must enforce.
-    requires: {
-      reflexivity: "target-session",
-      approval: "outside-policy",
-      targetResolution:
-        "the sessions this command has already run — the ones a re-run or resume would touch. NEVER the child about to be created: a fresh child is a descendant by construction, so including it would refuse every delegation principle 1 explicitly permits.",
-    },
-  }),
-  mutate({
     name: "proposal_create",
     summary:
       "Propose a change whose target includes you — a standing instruction, a default for your own parameters. A human accepts it (principle 1).",
@@ -1032,6 +1196,8 @@ export const AGENT_TOOL_CATALOG: readonly AgentTool[] = [
   ...objectTools,
   ...graphTools,
   ...commandTools,
+  ...runTools,
+  ...sessionTools,
   ...boardTools,
   ...claimTools,
   ...agencyTools,

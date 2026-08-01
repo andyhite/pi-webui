@@ -156,16 +156,19 @@ describe("completion is proven, not claimed (principle 3, §3.5)", () => {
     expect(endedBy(byOperator)).toEqual(humanAuthor);
   });
 
-  it("treats an open session's finish as an end, not as proof", () => {
-    // An open session declares no outcome, so there is nothing to prove; its end
-    // is the end an open session has (§3.5), and `proven` stays false.
+  it("refuses an open session's completion claim too", () => {
+    // An open session declares no outcome, so there is nothing it could ever have
+    // proven — which makes the claim *more* unfounded, not less. Recording it as
+    // an ordinary end would leave a finished-looking record nothing had checked,
+    // and its run looking like work still in flight.
     const end = classifyEnd({ kind: "completed" }, 10, {
       completion: { lifecycle: "open" },
-      endedBy: sessionAuthor(PEER),
     });
-    expect(end.kind).toBe("ended-by-user");
+    expect(end.kind).toBe("failed");
     expect(endStateFacts(end).proven).toBe(false);
-    expect(endedBy(end)).toEqual(sessionAuthor(PEER));
+    expect(endStateFacts(end).wantsDecision).toBe(true);
+    if (end.kind !== "failed") return;
+    expect(end.message).toContain("open session");
   });
 
   it("lets PlotRoom's own state still win over the runtime's report", () => {

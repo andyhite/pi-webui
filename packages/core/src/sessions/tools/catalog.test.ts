@@ -247,7 +247,7 @@ describe("the catalog", () => {
   });
 
   it("makes §4.1 expressible for dispatch, and keeps claims exempt (§3.4)", () => {
-    const dispatch = toolByName("session_dispatch");
+    const dispatch = toolByName("run_one");
     expect(dispatch?.requires.reflexivity).toBe("target-session");
     expect(dispatch?.requires.targetResolution).toContain("already run");
     // The trap: resolving a dispatch to its own new child would refuse every
