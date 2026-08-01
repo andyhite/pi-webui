@@ -75,7 +75,10 @@ import {
 } from "./tombstones.js";
 import { remotelyDeletedIds, withConfirmed } from "./reconcile.js";
 import { applyArrangementReset } from "./arrangement-reset.js";
-import { computeAbsoluteScreenExtents } from "./node-extents.js";
+import {
+  computeAbsoluteScreenExtents,
+  toExtentAwareNodes,
+} from "./node-extents.js";
 
 export interface CanvasNodeInput {
   readonly id: string;
@@ -1169,26 +1172,27 @@ function CanvasInner({
     ];
   }, [containerSize]);
 
-  // Screen-space extents for every *visible* box node currently on screen
+  // Screen-space extents for every *visible* node currently on screen
   // (reserved regions above are screen-anchored, so bubbles must place in
   // the same space) — contained (workstream-child) nodes included, resolved
-  // to their absolute position by `computeAbsoluteScreenExtents` (containers
-  // here are always top-level, so a child's absolute position is exactly
-  // its parent's position plus its own).
+  // to their absolute position by `computeAbsoluteScreenExtents`.
+  // `toExtentAwareNodes` (`node-extents.ts`) is handed the *entire* `nodes`
+  // array, container nodes included, deliberately: `computeAbsoluteScreenExtents`
+  // looks up a contained node's parent by id inside the very array it is
+  // given, so filtering to box nodes here (as this once did) silently
+  // dropped every container from that lookup — the parent id still
+  // resolved, found nothing, and every contained node's "absolute" position
+  // fell back to its bare parent-relative one. Containers carry no bubble
+  // sources, so they produce no placements of their own; passing them
+  // through costs nothing.
   const bubbleNodeExtents = useMemo<NodeExtent[]>(
     () =>
       computeAbsoluteScreenExtents(
-        nodes
-          .filter((n): n is BoxNode => n.type === "box")
-          .map((n) => ({
-            id: n.id,
-            x: n.position.x,
-            y: n.position.y,
-            width: n.measured?.width ?? FALLBACK_WIDTH,
-            height: n.measured?.height ?? FALLBACK_HEIGHT,
-            parentId: n.parentId,
-            hidden: n.hidden,
-          })),
+        toExtentAwareNodes(nodes, {
+          containerType: "container",
+          boxSize: { width: FALLBACK_WIDTH, height: FALLBACK_HEIGHT },
+          containerSize: { width: CONTAINER_WIDTH, height: CONTAINER_HEIGHT },
+        }),
         viewport,
       ),
     [nodes, viewport],
