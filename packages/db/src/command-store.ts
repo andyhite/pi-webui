@@ -366,20 +366,16 @@ export class CommandStore {
       throw new Error(`no proposal to confirm for parameter ${name}`);
     }
 
-    const binding = existing
-      ? confirmParameter(toBinding(existing), this.now(), replacement)
-      : confirmParameter(
-          {
-            name,
-            state: "confirmed",
-            value: replacement as ParameterValue,
-            confirmedAt: this.now(),
-          },
-          this.now(),
-          replacement,
-        );
-
-    if (binding.state !== "confirmed") throw new Error("unreachable");
+    const at = this.now();
+    // Confirming a value with no prior proposal is the ordinary case of a
+    // parameter the user simply fills in; the predicate handles both.
+    const binding = confirmParameter(
+      existing
+        ? toBinding(existing)
+        : { name, state: "confirmed", value: replacement!, confirmedAt: at },
+      at,
+      replacement,
+    );
 
     this.state.db
       .insert(commandParameterBindings)
@@ -387,9 +383,9 @@ export class CommandStore {
         commandId,
         name,
         state: "confirmed",
-        valueJson: JSON.stringify(binding.value),
+        valueJson: JSON.stringify(valueOf(binding)),
         derivedFrom: existing?.derivedFrom ?? null,
-        confirmedAt: binding.confirmedAt,
+        confirmedAt: at,
       })
       .onConflictDoUpdate({
         target: [
@@ -398,8 +394,8 @@ export class CommandStore {
         ],
         set: {
           state: "confirmed",
-          valueJson: JSON.stringify(binding.value),
-          confirmedAt: binding.confirmedAt,
+          valueJson: JSON.stringify(valueOf(binding)),
+          confirmedAt: at,
         },
       })
       .run();
@@ -636,6 +632,11 @@ export function toDefinition(row: CommandDefinitionRow): CommandDefinition {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/** `confirmParameter` always returns a confirmed binding; this reads its value. */
+function valueOf(binding: ParameterBinding): ParameterValue {
+  return binding.state === "confirmed" ? binding.value : binding.proposal;
 }
 
 function toBinding(row: {
