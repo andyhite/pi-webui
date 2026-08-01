@@ -47,6 +47,16 @@ describe("createHttpClient", () => {
     );
   });
 
+  it("sends PATCH with a body, matching the server's patch routes", async () => {
+    const spy = vi.fn(() => ({ ok: true, status: 200, body: {} }));
+    const client = createHttpClient(fakeFetch(spy));
+    await client.patch("/api/workstreams/w1", { status: "done" });
+    expect(spy).toHaveBeenCalledWith(
+      "/api/workstreams/w1",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+  });
+
   it("throws HttpError with the status on a non-ok response", async () => {
     const client = createHttpClient(
       fakeFetch(() => ({ ok: false, status: 404 })),
@@ -56,6 +66,41 @@ describe("createHttpClient", () => {
       status: 404,
       path: "/api/missing",
     });
+  });
+
+  it("parses the server's ApiErrorBody shape onto code/reason/message", async () => {
+    const client = createHttpClient(
+      fakeFetch(() => ({
+        ok: false,
+        status: 409,
+        body: {
+          error: {
+            code: "refused",
+            message: "that session has ended; fork or re-run it instead",
+            details: { reason: "session_not_running" },
+          },
+        },
+      })),
+    );
+
+    await expect(client.post("/api/edges", {})).rejects.toMatchObject({
+      status: 409,
+      code: "refused",
+      reason: "session_not_running",
+      message: "that session has ended; fork or re-run it instead",
+      isRefusal: true,
+    });
+  });
+
+  it("degrades gracefully when the error body isn't the ApiErrorBody shape", async () => {
+    const client = createHttpClient(
+      fakeFetch(() => ({ ok: false, status: 500, body: "not json shaped" })),
+    );
+    const error = await client.get("/api/x").catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(HttpError);
+    expect((error as HttpError).code).toBeNull();
+    expect((error as HttpError).reason).toBeNull();
+    expect((error as HttpError).isRefusal).toBe(false);
   });
 
   it("returns undefined for a 204 No Content response", async () => {
