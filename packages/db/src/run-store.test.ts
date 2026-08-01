@@ -352,6 +352,20 @@ describe("§15 invariant 4: per-run output addressing", () => {
 });
 
 describe("starting a run refuses rather than degrades (§3.5)", () => {
+  it("refuses to run a deleted command until it is restored (principle 10)", () => {
+    const command = wired(["input"]);
+    commands.delete(command.command.id);
+
+    expect(() => runs.start({ commandId: command.command.id })).toThrow(
+      RunRefused,
+    );
+    expect(runs.history(command.command.id)).toHaveLength(0);
+
+    commands.restore(command.command.id);
+
+    expect(runs.start({ commandId: command.command.id }).run.ordinal).toBe(1);
+  });
+
   it("refuses while a derived default is still a proposal", () => {
     const definition = define({
       parameters: [

@@ -29,6 +29,7 @@ import {
 } from "@plotroom/core";
 import { BlobStore } from "./blob-store.js";
 import type { PlotroomDatabase } from "./client.js";
+import { EntityNotFound } from "./errors.js";
 import { CommandStore } from "./command-store.js";
 import { GraphStore } from "./graph-store.js";
 import { ObjectStore } from "./object-store.js";
@@ -46,6 +47,7 @@ const BLOB_OWNER = "run";
 
 /** Why a run could not start. Every reason is actionable, never a truncation. */
 export type RunRefusal =
+  | { readonly reason: "command_deleted"; readonly message: string }
   | { readonly reason: "parameters_unconfirmed"; readonly message: string }
   | { readonly reason: "blocked_input"; readonly message: string }
   | { readonly reason: "content_budget"; readonly message: string }
@@ -127,6 +129,16 @@ export class RunStore {
    */
   start(input: StartRunInput): StartedRun {
     const command = this.commands.command(input.commandId);
+
+    // A soft-deleted command is off the board (principle 10): running it
+    // would produce history for work the human deleted. Restore it first.
+    if (command.deletedAt !== null) {
+      throw new RunRefused({
+        reason: "command_deleted",
+        message: `command ${input.commandId} is deleted; restore it before running it`,
+      });
+    }
+
     const definition = this.commands.definition(command.definitionId);
     const node = this.commands.commandNode(input.commandId);
 
@@ -168,48 +180,54 @@ export class RunStore {
 
     const id = newRunId();
     const at = this.now();
-    const blob = this.blobs.put(body, { kind: "assembled_content" });
-    this.blobs.reference(blob.id, { ownerKind: BLOB_OWNER, ownerId: id });
 
-    this.state.db
-      .insert(runs)
-      .values({
-        id,
-        commandId: input.commandId,
-        definitionId: definition.id,
-        ordinal: this.nextOrdinal(input.commandId),
-        status: "running",
-        assembledBlobId: blob.id,
-        assembledHash: createHash("sha256").update(body).digest("hex"),
-        assembledBytes: Buffer.byteLength(body, "utf8"),
-        configJson: JSON.stringify(configuration),
-        startedAt: at,
-      })
-      .run();
+    // §15-1 is all-or-nothing: a run row without its inputs, or inputs whose
+    // versions were never marked retained, is the uncomparable half-record
+    // the invariant exists to prevent. One transaction, or none of it.
+    return this.state.db.transaction(() => {
+      const blob = this.blobs.put(body, { kind: "assembled_content" });
+      this.blobs.reference(blob.id, { ownerKind: BLOB_OWNER, ownerId: id });
 
-    for (const part of assembled) {
       this.state.db
-        .insert(runInputs)
+        .insert(runs)
         .values({
-          runId: id,
-          ordinal: part.ordinal,
-          nodeId: part.nodeId,
-          objectId: part.objectId,
-          versionId: part.versionId,
-          contentHash: part.contentHash,
-          bytes: part.bytes,
+          id,
+          commandId: input.commandId,
+          definitionId: definition.id,
+          ordinal: this.nextOrdinal(input.commandId),
+          status: "running",
+          assembledBlobId: blob.id,
+          assembledHash: createHash("sha256").update(body).digest("hex"),
+          assembledBytes: Buffer.byteLength(body, "utf8"),
+          configJson: JSON.stringify(configuration),
+          startedAt: at,
         })
         .run();
-    }
 
-    // §15 invariant 3's other half: a version a run consumed is retained, so
-    // any two runs stay comparable forever (§4.4).
-    this.objects.markRunReferenced(assembled.map((part) => part.versionId));
+      for (const part of assembled) {
+        this.state.db
+          .insert(runInputs)
+          .values({
+            runId: id,
+            ordinal: part.ordinal,
+            nodeId: part.nodeId,
+            objectId: part.objectId,
+            versionId: part.versionId,
+            contentHash: part.contentHash,
+            bytes: part.bytes,
+          })
+          .run();
+      }
 
-    return {
-      run: this.run(id),
-      warning: budget.state === "warn" ? budget.message : null,
-    };
+      // §15 invariant 3's other half: a version a run consumed is retained, so
+      // any two runs stay comparable forever (§4.4).
+      this.objects.markRunReferenced(assembled.map((part) => part.versionId));
+
+      return {
+        run: this.run(id),
+        warning: budget.state === "warn" ? budget.message : null,
+      };
+    });
   }
 
   /**
@@ -244,53 +262,58 @@ export class RunStore {
 
     const cost = input.cost ?? ZERO_COST;
 
-    for (const produced of input.outputs ?? []) {
+    // Recording the outputs, binding the placeholders, and ending the run are
+    // one act: a run that ended "completed" while an output failed to bind is
+    // a completion nobody can address (§15-4).
+    return this.state.db.transaction(() => {
+      for (const produced of input.outputs ?? []) {
+        this.state.db
+          .insert(runOutputs)
+          .values({
+            runId,
+            name: produced.name,
+            objectId: produced.objectId,
+            versionId: produced.versionId,
+          })
+          .run();
+
+        this.objects.markRunReferenced([produced.versionId]);
+
+        const output = this.state.db
+          .select()
+          .from(commandOutputs)
+          .where(
+            and(
+              eq(commandOutputs.commandId, row.commandId),
+              eq(commandOutputs.name, produced.name),
+            ),
+          )
+          .get();
+
+        // Post-bind: the placeholder now stands for a real object (§3.5).
+        if (output) {
+          this.commands.bindOutput(output.id, {
+            runId,
+            objectId: produced.objectId,
+          });
+        }
+      }
+
       this.state.db
-        .insert(runOutputs)
-        .values({
-          runId,
-          name: produced.name,
-          objectId: produced.objectId,
-          versionId: produced.versionId,
+        .update(runs)
+        .set({
+          status: "completed",
+          endedAt: at,
+          outcomeProofJson: JSON.stringify(proof),
+          inputTokens: cost.inputTokens,
+          outputTokens: cost.outputTokens,
+          costMicros: cost.costMicros,
         })
+        .where(eq(runs.id, runId))
         .run();
 
-      this.objects.markRunReferenced([produced.versionId]);
-
-      const output = this.state.db
-        .select()
-        .from(commandOutputs)
-        .where(
-          and(
-            eq(commandOutputs.commandId, row.commandId),
-            eq(commandOutputs.name, produced.name),
-          ),
-        )
-        .get();
-
-      // Post-bind: the placeholder now stands for a real object (§3.5).
-      if (output) {
-        this.commands.bindOutput(output.id, {
-          runId,
-          objectId: produced.objectId,
-        });
-      }
-    }
-
-    this.state.db
-      .update(runs)
-      .set({
-        status: "completed",
-        endedAt: at,
-        outcomeProofJson: JSON.stringify(proof),
-        inputTokens: cost.inputTokens,
-        outputTokens: cost.outputTokens,
-        costMicros: cost.costMicros,
-      })
-      .where(eq(runs.id, runId))
-      .run();
-
-    return { accepted: true, run: this.run(runId), proof };
+      return { accepted: true, run: this.run(runId), proof };
+    });
   }
 
   /** A run that failed. Distinct from one PlotRoom stopped (§3.6, §8). */
@@ -691,7 +714,7 @@ export class RunStore {
       .from(runs)
       .where(eq(runs.id, runId))
       .get();
-    if (!row) throw new Error(`unknown run ${runId}`);
+    if (!row) throw new EntityNotFound("run", runId);
     return row;
   }
 
