@@ -1,4 +1,22 @@
-import type { RuntimeCapabilities, TranscriptPoint } from "./runtime.js";
+import type { Author } from "../author.js";
+import type { ObjectId, SessionId, WorkstreamId } from "../ids.js";
+import type { WorkspaceId } from "../workspaces/ids.js";
+import type {
+  WorkspaceKindConfig,
+  WorkspaceKindName,
+} from "../workspaces/kind.js";
+import { isDeleted } from "./deletion.js";
+import {
+  forkCleanlinessAt,
+  type ForkCleanliness,
+  type OutsideWorldMarkers,
+} from "./outside-world.js";
+import type {
+  RuntimeCapabilities,
+  SessionLaunchChoices,
+  TranscriptPoint,
+} from "./runtime.js";
+import type { Session, SessionMode } from "./session.js";
 import type { ReleaseMarker, Transcript } from "./transcript.js";
 import { exportTranscript } from "./transcript.js";
 
@@ -83,5 +101,195 @@ export function planFork(
     throughTurn: prefix.turns.at(-1)?.ordinal ?? 0,
     complete: exported.complete,
     unavailable: exported.unavailable,
+  };
+}
+
+/* --------------------------------------------------- fork as a graph act */
+
+/**
+ * A fork is a **new session with its own workstream and workspace** (§6.3): "a
+ * fork from any point inherits the conversation up to that point and gets its own
+ * workstream and workspace, so two lines of work can diverge from shared
+ * understanding."
+ *
+ * `planFork` above decides how the *runtime* gets there. This decides what
+ * PlotRoom writes: the records, the provenance, and the cleanliness of the point
+ * — which comes from reversibility declarations rather than a heuristic (§6.6).
+ */
+export interface SessionForkIds {
+  readonly sessionId: SessionId;
+  readonly workstreamId: WorkstreamId;
+  readonly workspaceId: WorkspaceId;
+}
+
+/** The new workstream a fork gets. Its subject is the source's, when there is one. */
+export interface ForkedWorkstream {
+  readonly id: WorkstreamId;
+  readonly name: string;
+  readonly subjectObjectId: ObjectId | null;
+}
+
+/** Its own workspace, provisioned like any other — at first run, not now (§3.4). */
+export interface ForkedWorkspace {
+  readonly id: WorkspaceId;
+  readonly workstreamId: WorkstreamId;
+  readonly kind: WorkspaceKindName;
+  readonly config: WorkspaceKindConfig;
+  readonly createdBy: Author;
+}
+
+export interface SessionForkPlan {
+  readonly sourceSessionId: SessionId;
+  readonly point: TranscriptPoint;
+  /** Native or seeded, and which — a seeded fork is not pretended to be native. */
+  readonly runtime: ForkPlan;
+  readonly session: {
+    readonly id: SessionId;
+    readonly workstreamId: WorkstreamId;
+    readonly mode: SessionMode;
+    readonly launch: SessionLaunchChoices;
+    readonly initiatedBy: Author;
+  };
+  readonly workstream: ForkedWorkstream;
+  readonly workspace: ForkedWorkspace;
+  /** §3.7 already has the relation; this names which one a fork is. */
+  readonly provenance: {
+    readonly relation: "session_forked_from";
+    readonly fromSessionId: SessionId;
+    readonly toSessionId: SessionId;
+    readonly recordedAt: number;
+  };
+  /** Fork-before-clean, fork-after-dirty (§6.3), from declarations (§6.6). */
+  readonly cleanliness: ForkCleanliness;
+  /**
+   * False when the seed could not be assembled completely — released tool output
+   * that would not reload. Surfaced, never silent (principle 12).
+   */
+  readonly seedComplete: boolean;
+  readonly forkedBy: Author;
+  readonly at: number;
+}
+
+export const SESSION_FORK_REFUSAL_REASONS = [
+  /** The transcript has no such turn, so there is no point to inherit from. */
+  "unknown_point",
+  /** Forking a deleted record would resurrect it as a side effect. */
+  "source_deleted",
+] as const;
+
+export type SessionForkRefusalReason =
+  (typeof SESSION_FORK_REFUSAL_REASONS)[number];
+
+export interface SessionForkRefusal {
+  readonly reason: SessionForkRefusalReason;
+  readonly message: string;
+}
+
+export type SessionForkResult =
+  | { readonly ok: true; readonly plan: SessionForkPlan }
+  | { readonly ok: false; readonly refusal: SessionForkRefusal };
+
+export interface SessionForkRequest {
+  readonly ids: SessionForkIds;
+  readonly point: TranscriptPoint;
+  readonly forkedBy: Author;
+  /** Where the new workstream's own workspace comes from — the source's kind. */
+  readonly workspace: {
+    readonly kind: WorkspaceKindName;
+    readonly config: WorkspaceKindConfig;
+  };
+  readonly workstreamName: string;
+  readonly subjectObjectId?: ObjectId | null;
+  readonly at: number;
+}
+
+export interface SessionForkContext {
+  readonly source: Session;
+  readonly transcript: Transcript;
+  readonly capabilities: RuntimeCapabilities;
+  /** The markers cleanliness is read from; empty means nothing was declared. */
+  readonly markers?: OutsideWorldMarkers;
+  readonly loadReleased?: (
+    marker: ReleaseMarker,
+    callId: string,
+  ) => string | null;
+}
+
+export function planSessionFork(
+  context: SessionForkContext,
+  request: SessionForkRequest,
+): SessionForkResult {
+  if (isDeleted(context.source)) {
+    return {
+      ok: false,
+      refusal: {
+        reason: "source_deleted",
+        message:
+          "this session was deleted; restore it before forking from it (principle 10)",
+      },
+    };
+  }
+  if (!isTurnBoundary(context.transcript, request.point)) {
+    return {
+      ok: false,
+      refusal: {
+        reason: "unknown_point",
+        message: `this session has no turn ${request.point.turn} to fork from`,
+      },
+    };
+  }
+
+  const runtime = planFork(
+    context.capabilities,
+    context.transcript,
+    request.point,
+    context.loadReleased,
+  );
+
+  const markers: OutsideWorldMarkers = context.markers ?? {
+    touches: [],
+    undeclared: [],
+    turns: [],
+  };
+
+  return {
+    ok: true,
+    plan: {
+      sourceSessionId: context.source.id,
+      point: request.point,
+      runtime,
+      session: {
+        id: request.ids.sessionId,
+        workstreamId: request.ids.workstreamId,
+        // A fork inherits how the source ends, not just what it said: forking a
+        // producing session produces one too, and its outcome is proven the same
+        // way (§3.5).
+        mode: context.source.mode,
+        launch: context.source.launch,
+        initiatedBy: request.forkedBy,
+      },
+      workstream: {
+        id: request.ids.workstreamId,
+        name: request.workstreamName,
+        subjectObjectId: request.subjectObjectId ?? null,
+      },
+      workspace: {
+        id: request.ids.workspaceId,
+        workstreamId: request.ids.workstreamId,
+        kind: request.workspace.kind,
+        config: request.workspace.config,
+        createdBy: request.forkedBy,
+      },
+      provenance: {
+        relation: "session_forked_from",
+        fromSessionId: context.source.id,
+        toSessionId: request.ids.sessionId,
+        recordedAt: request.at,
+      },
+      cleanliness: forkCleanlinessAt(markers, request.point.turn),
+      seedComplete: runtime.mode === "native" ? true : runtime.complete,
+      forkedBy: request.forkedBy,
+      at: request.at,
+    },
   };
 }
