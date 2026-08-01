@@ -1721,6 +1721,38 @@ every open item at once, and a delivery failure is **route health** rather than 
 exception: an unreachable webhook must never be able to stop the derivation that
 feeds it.
 
+_Known behaviour, recorded rather than built (raised in review, deliberately not
+fixed here):_
+
+- **Health thresholds are a constructor parameter, not a setting.**
+  `AttentionService` takes an `AttentionConfig`; only the tick interval reads the
+  environment (`PLOTROOM_ATTENTION_TICK_SECONDS`). §7.2 says thresholds are
+  configurable and they are — by the one caller — but an operator cannot change
+  them without a restart and a code change. Wiring them to settings is Epic 8.3's
+  job, which is where every other knob is going anyway; adding a second
+  environment-variable surface now would be a thing to migrate then.
+- **`spinning` can fire for a session writing through an undeclared tool.** The
+  "nothing in the workspace changed" half reads the path-write ledger, and that
+  ledger only records writes the adapter _declared_ (§3.4's stated limit: claims
+  are enforceable over declared paths only). A session doing real work through an
+  unbounded tool therefore looks quiet, and if its runtime also reports cost it
+  will be reported as spinning. The alternative — treating an unbounded write as a
+  workspace change — would silence the alert for exactly the tool most likely to
+  loop, so the false positive is the safer direction, and the row says what it
+  observed rather than asserting a diagnosis.
+- **`waiting-approval` is per session, not per call.** `phaseContext` asks whether
+  the session has _any_ unanswered approval, so a session that raised one, carried
+  on with other work, and is now streaming still reads as waiting. The phase is
+  derived from PlotRoom's own state, which is right; making it per blocked call
+  means the phase reducer learning about approvals, which is a bigger change than
+  the imprecision costs.
+- **Triage takes any item id.** `POST /api/attention/:id/{acknowledge,snooze,mute}`
+  writes a row for an id that matches nothing — the ledger is keyed by a derived
+  id, and validating against the current derivation would refuse a triage for an
+  item that is momentarily absent (a snoozed one, a health alert between ticks),
+  which is worse than a harmless orphan row. Orphans cost one row each and are
+  cleared by `DELETE /api/attention/:id/triage`.
+
 **Completions and broadcasts have a window, and it is a decision.** A finished
 session and a session-originated broadcast stay in the queue for 24 hours unless
 triaged; after that they are history, and the session card is what shows them. A
@@ -2024,10 +2056,23 @@ a second place to keep that derivation right. Answering the approval grants or
 denies the wait; a wait that was settled some other way stops asking rather than
 sitting in the queue about something that no longer exists.
 
+**Two things a review round tightened.** A destructive gesture that never went
+through the guard is now caught by `checkDeletion` inside `performDestruction` —
+the predicate refuses a session-authored deletion with no approval behind it, and
+the caller has to _state_ that an operator answered rather than have it inferred
+from the author. And a **re-raise of a call whose approval was denied settles the
+call with that denial** instead of reporting a pending approval: `raise` is
+idempotent in the call id, so the gate found the answered row, the pump left the
+request open, and the session waited forever on a decision already made
+(`answerApproval` refuses a second answer). The integration test for it fails by
+timing out without the fix, which is what the wedge looked like.
+
 _Deferred: the approval reads and every triage/route verb are **operator-only with
 no agent tool at all**, recorded in `catalog.test.ts`'s `OPERATOR_ONLY_ROUTES` — the
 budgets precedent, for the budgets reason (principle 1). The write verbs are
-enforced by the actor as well as declared, the way the claim verbs are._
+enforced by the actor as well as declared, the way the claim verbs are — and so is
+the notification-route **read**, because a route's URL is a webhook token in
+everything but name and §9.3 exposes credentials to nothing._
 
 ### Epic 6.4 — Run comparison and cross-run outcomes (`runs`) — _done (endpoints; no UI)_
 
