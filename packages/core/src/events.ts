@@ -33,6 +33,7 @@ import type {
   CommandNode,
   CommandOutput,
 } from "./commands.js";
+import type { AttentionItem, NotificationRoute } from "./attention/index.js";
 import type { Budget } from "./budgets.js";
 import type { Edge, PlacedNode } from "./edges.js";
 import type {
@@ -50,8 +51,11 @@ import type {
 } from "./ids.js";
 import type { PlotObject } from "./objects.js";
 import type {
+  Approval,
+  ApprovalAttention,
   BroadcastActivityEntry,
   BroadcastAttention,
+  PreGrant,
   QuestionOption,
   SessionQuestion,
 } from "./sessions/index.js";
@@ -113,6 +117,23 @@ export const EVENT_ENTITIES = [
    * cannot describe the same broadcast differently.
    */
   "broadcast",
+  /**
+   * An approval raised or answered (§6.6). Its own entity for the same reason a
+   * question is: it **outlives the call it blocks**, so a surface that rendered
+   * it as a property of the session would have nothing to show the moment the
+   * call settled.
+   */
+  "approval",
+  /** A standing decision about capability, declared or withdrawn (§6.6). */
+  "pre_grant",
+  /**
+   * One row of the attention derivation (§7). Full-entity like everything else
+   * here, keyed by the item's own stable id — so applying one twice changes
+   * nothing, and an item leaving the queue is a `deleted` naming that id.
+   */
+  "attention",
+  /** An outbound notification route and its delivery health (§7.3). */
+  "notification_route",
 ] as const;
 
 export type EventEntity = (typeof EVENT_ENTITIES)[number];
@@ -414,6 +435,49 @@ export type DomainEventBody =
       readonly attention: BroadcastAttention | null;
       /** One entry per recipient workstream (§7.3). */
       readonly activity: readonly BroadcastActivityEntry[];
+    }
+  /**
+   * An approval (§6.6), whole: raised (`created`) or answered (`updated`). There
+   * is no `deleted` — an approval that was asked stays asked, exactly like a
+   * question.
+   */
+  | {
+      readonly entity: "approval";
+      readonly verb: "created" | "updated";
+      readonly approval: Approval;
+      /** Null once answered: the feed ranks what is still asking (§7.1). */
+      readonly attention: ApprovalAttention | null;
+    }
+  | {
+      readonly entity: "pre_grant";
+      readonly verb: "created" | "deleted";
+      readonly preGrant: PreGrant;
+    }
+  | {
+      readonly entity: "attention";
+      readonly verb: "created" | "updated";
+      readonly item: AttentionItem;
+    }
+  | {
+      readonly entity: "attention";
+      readonly verb: "deleted";
+      readonly itemId: string;
+      /**
+       * Why it left: the condition it reported is no longer true, or the
+       * operator triaged it away. A subscriber told only "gone" could not tell a
+       * snooze from a resolution, and the two read differently to a human.
+       */
+      readonly reason: "resolved" | "triaged";
+    }
+  | {
+      readonly entity: "notification_route";
+      readonly verb: "created" | "updated";
+      readonly route: NotificationRoute;
+    }
+  | {
+      readonly entity: "notification_route";
+      readonly verb: "deleted";
+      readonly routeId: string;
     };
 
 /** One message on the state-change stream: envelope plus a typed body. */
