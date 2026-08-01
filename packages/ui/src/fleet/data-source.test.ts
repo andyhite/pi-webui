@@ -11,73 +11,68 @@ function fakeHttp(get: (path: string) => Promise<unknown>): HttpClient {
 }
 
 describe("createApiFleetDataSource", () => {
-  it("counts only genuinely queued (not starting/running/needs_reask/paused) entries as queuedCount", async () => {
+  it("maps GET /api/fleet's real fields, one read, no fan-out", async () => {
     const get = vi.fn(async (path: string) => {
-      if (path === "/api/sessions") return { sessions: [] };
-      if (path === "/api/run-queue") {
-        return {
-          queued: [
-            { state: "queued" },
-            { state: "queued" },
-            { state: "starting" },
-            { state: "running" },
-            { state: "needs_reask" },
-            { state: "paused" },
-          ],
-        };
-      }
-      throw new Error(`unexpected path: ${path}`);
+      expect(path).toBe("/api/fleet");
+      return {
+        today: { spentMicros: 4_250_000, spent: "$4.25", sessions: 2 },
+        allTime: { spentMicros: 9_000_000, spent: "$9.00" },
+        biggestSpender: {
+          sessionId: "session-running",
+          workstreamId: "workstream-oxy-2982",
+          spentMicros: 3_100_000,
+          spent: "$3.10",
+        },
+        concurrency: { running: 2, limit: 4, queued: 1 },
+        budgets: [],
+      };
     });
-    const source = createApiFleetDataSource({
-      http: fakeHttp(get),
-      now: () => 0,
-    });
+    const source = createApiFleetDataSource({ http: fakeHttp(get) });
 
     const summary = await source.load();
 
-    expect(summary.queuedCount).toBe(2);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(summary).toEqual({
+      todayTotalMicros: 4_250_000,
+      biggestSpender: {
+        sessionId: "session-running",
+        workstreamId: "workstream-oxy-2982",
+        amountMicros: 3_100_000,
+      },
+      runningCount: 2,
+      concurrencyLimit: 4,
+      queuedCount: 1,
+    });
   });
 
-  it("counts running sessions and reports the fallback concurrency limit", async () => {
-    const get = vi.fn(async (path: string) => {
-      if (path === "/api/sessions") {
-        return {
-          sessions: [
-            { session: { id: "s1" }, end: null },
-            { session: { id: "s2" }, end: { kind: "completed", at: 0 } },
-          ],
-        };
-      }
-      if (path.startsWith("/api/sessions/")) return { entries: [] };
-      if (path === "/api/run-queue") return { queued: [] };
-      throw new Error(`unexpected path: ${path}`);
-    });
-    const source = createApiFleetDataSource({
-      http: fakeHttp(get),
-      now: () => 0,
-    });
+  it("reports no biggest spender when the fleet response says so, rather than guessing", async () => {
+    const get = vi.fn(async () => ({
+      today: { spentMicros: 0, spent: "$0.00", sessions: 0 },
+      allTime: { spentMicros: 0, spent: "$0.00" },
+      biggestSpender: null,
+      concurrency: { running: 0, limit: 4, queued: 0 },
+      budgets: [],
+    }));
+    const source = createApiFleetDataSource({ http: fakeHttp(get) });
 
     const summary = await source.load();
 
-    expect(summary.runningCount).toBe(1);
-    expect(summary.concurrencyLimit).toBe(4);
+    expect(summary.biggestSpender).toBeNull();
   });
 
-  it("takes an explicit concurrencyLimit over the fallback", async () => {
-    const get = vi.fn(async (path: string) => {
-      if (path === "/api/sessions") return { sessions: [] };
-      if (path === "/api/run-queue") return { queued: [] };
-      throw new Error(`unexpected path: ${path}`);
-    });
-    const source = createApiFleetDataSource({
-      http: fakeHttp(get),
-      now: () => 0,
-      concurrencyLimit: 8,
-    });
+  it("reads the concurrency limit's real configured value off the response, never a fallback", async () => {
+    const get = vi.fn(async () => ({
+      today: { spentMicros: 0, spent: "$0.00", sessions: 0 },
+      allTime: { spentMicros: 0, spent: "$0.00" },
+      biggestSpender: null,
+      concurrency: { running: 0, limit: 12, queued: 0 },
+      budgets: [],
+    }));
+    const source = createApiFleetDataSource({ http: fakeHttp(get) });
 
     const summary = await source.load();
 
-    expect(summary.concurrencyLimit).toBe(8);
+    expect(summary.concurrencyLimit).toBe(12);
   });
 });
 

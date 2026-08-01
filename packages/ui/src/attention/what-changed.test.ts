@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import type { HttpClient } from "../transport/http.js";
 import {
   activityForWorkstream,
   activityTargetExists,
   appendActivityEntry,
+  createApiActivityDataSource,
+  createFixtureActivityDataSource,
   describeActivityTarget,
 } from "./what-changed.js";
 import type { WorkstreamActivityEntry } from "./what-changed.js";
@@ -63,5 +66,46 @@ describe("activityTargetExists / describeActivityTarget", () => {
     expect(describeActivityTarget(e, () => false)).toBe(
       "node-deleted (no longer on the graph)",
     );
+  });
+});
+
+describe("createApiActivityDataSource", () => {
+  it("reads GET /api/activity with no query when no workstream is named", async () => {
+    const get = vi.fn(async () => ({ entries: [entry()] }));
+    const http = { get } as unknown as HttpClient;
+    const source = createApiActivityDataSource({ http });
+
+    const entries = await source.load();
+
+    expect(get).toHaveBeenCalledWith("/api/activity");
+    expect(entries).toEqual([entry()]);
+  });
+
+  it("scopes the query to a workstream when one is named", async () => {
+    const get = vi.fn(async () => ({ entries: [] }));
+    const http = { get } as unknown as HttpClient;
+    const source = createApiActivityDataSource({ http });
+
+    await source.load("workstream-1");
+
+    expect(get).toHaveBeenCalledWith("/api/activity?workstreamId=workstream-1");
+  });
+});
+
+describe("createFixtureActivityDataSource", () => {
+  it("returns every entry when no workstream is named", async () => {
+    const source = createFixtureActivityDataSource([
+      entry({ id: "a", workstreamId: "w1" }),
+      entry({ id: "b", workstreamId: "w2" }),
+    ]);
+    expect((await source.load()).map((e) => e.id)).toEqual(["a", "b"]);
+  });
+
+  it("filters to one workstream when named", async () => {
+    const source = createFixtureActivityDataSource([
+      entry({ id: "a", workstreamId: "w1" }),
+      entry({ id: "b", workstreamId: "w2" }),
+    ]);
+    expect((await source.load("w2")).map((e) => e.id)).toEqual(["b"]);
   });
 });

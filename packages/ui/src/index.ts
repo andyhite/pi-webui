@@ -69,7 +69,6 @@ export * from "./attention/what-changed.js";
 export * from "./attention/QueuePanel.js";
 export * from "./attention/WhatChangedPanel.js";
 export * from "./fleet/types.js";
-export * from "./fleet/derive.js";
 export * from "./fleet/data-source.js";
 export * from "./fleet/FleetPanel.js";
 export * from "./timeline/layout.js";

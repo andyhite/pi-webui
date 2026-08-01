@@ -34,11 +34,14 @@ import {
   beginRun,
   browserWebSocketFactory,
   createApiActions,
+  createApiActivityDataSource,
+  createApiAttentionDataSource,
   createApiDiffDataSource,
   createApiFleetDataSource,
   createApiGraphDataSource,
   createApiQuestionDataSource,
   createApiSessionDataSource,
+  createFixtureActivityDataSource,
   createFixtureAttentionDataSource,
   createFixtureDiffDataSource,
   createFixtureFleetDataSource,
@@ -78,7 +81,6 @@ import {
   FIXTURE_RELEASED_CONTENT,
   FIXTURE_SESSIONS,
   FIXTURE_WHAT_CHANGED,
-  FIXTURE_WORKSTREAM_NAMES,
   FIXTURE_SESSION_STATUSES,
   FIXTURE_SNAPSHOT,
   FIXTURE_TRANSCRIPT,
@@ -188,30 +190,37 @@ const now = () => Date.now();
 const nowSeconds = () => Math.floor(now() / 1000);
 
 /**
- * The attention data seam (Epic 6.1, §7): fixture-fed either way — there is
- * no live server endpoint yet (Track A's Stage 2 job; see `@plotroom/ui`'s
- * `attention/types.ts` for the landed contract this data source will
- * implement server-side). `createFixtureAttentionDataSource` is real
- * mechanics over a realistic scenario, not a stub: triage, ranking, and
- * snooze/mute all work exactly as they will once a live source replaces
- * this one, behind the identical `AttentionDataSource` interface.
+ * The attention data seam (Epic 6.1, §7, Stage 2): live over Track A's
+ * derivation (`GET /api/attention` + the `attention` `/ws` entity,
+ * `docs/attention-contract.md`) by default — the same swap every other
+ * live seam in this file makes. `createFixtureAttentionDataSource` stays
+ * for `VITE_USE_FIXTURES` (tests, offline dev), behind the identical
+ * `AttentionDataSource` interface.
  */
-const attentionDataSource = createFixtureAttentionDataSource(
-  FIXTURE_ATTENTION_ITEMS,
-  nowSeconds,
-);
+const attentionDataSource = LIVE
+  ? createApiAttentionDataSource({ http: httpClient, createSocket: wsFactory })
+  : createFixtureAttentionDataSource(FIXTURE_ATTENTION_ITEMS, nowSeconds);
 
 /**
- * The Fleet panel's data seam (§8, §11, Epic 6.2): live over what exists on
- * main today — `GET /api/sessions` plus per-session `GET /api/sessions/:id/
- * spend` — real aggregation, not a fixture standing in for missing data.
- * The concurrency limit's value has no read endpoint at all yet (a genuine
- * gap for Track A, documented in `@plotroom/ui`'s `fleet/types.ts`), so it
- * rides on the shipped default here until one exists.
+ * The Fleet panel's data seam (§8, §11, Epic 6.2, Stage 2): live over
+ * `GET /api/fleet` — the fleet aggregate endpoint that closed the
+ * per-session-fan-out/no-concurrency-limit gap `fleet/types.ts` used to
+ * record. Fixture-fed for `VITE_USE_FIXTURES`.
  */
 const fleetDataSource = LIVE
-  ? createApiFleetDataSource({ http: httpClient, now: nowSeconds })
+  ? createApiFleetDataSource({ http: httpClient })
   : createFixtureFleetDataSource(FIXTURE_FLEET_SUMMARY);
+
+/**
+ * The what-changed-while-away seam (§7.3, Stage 2): live over
+ * `GET /api/activity`, derived server-side from records that already
+ * exist (a broadcast, a session that ended) — the server's own `cap` query
+ * param trims per workstream, so there is no client-side capping left to
+ * do. Fixture-fed for `VITE_USE_FIXTURES`.
+ */
+const activityDataSource = LIVE
+  ? createApiActivityDataSource({ http: httpClient })
+  : createFixtureActivityDataSource(FIXTURE_WHAT_CHANGED);
 
 /** Drafts and prompt history persist per session (§6.2), the same durable-store seam as placement. */
 const sessionDraftsStore = createWebStorageSessionDraftsStore(
@@ -267,6 +276,14 @@ export function App() {
     const node = graph.nodes.find((n) => n.id === selectedNodeId);
     return node?.containerId ?? null;
   }, [graph, selectedNodeId]);
+
+  // What-changed's per-workstream section names (§7.3): a container's own
+  // id is its workstream's id, so this is the same live graph the rest of
+  // the app already reads — no separate fixture-vs-live name map needed.
+  const workstreamNames = useMemo(
+    () => new Map((graph?.containers ?? []).map((c) => [c.id, c.label])),
+    [graph],
+  );
 
   const [collapsedContainerIds, setCollapsedContainerIds] = useState<
     Set<string>
@@ -910,8 +927,8 @@ export function App() {
         initialState: null,
         render: () => (
           <WhatChangedPanel
-            history={FIXTURE_WHAT_CHANGED}
-            workstreamNames={FIXTURE_WORKSTREAM_NAMES}
+            dataSource={activityDataSource}
+            workstreamNames={workstreamNames}
             nodeExists={(nodeId) =>
               graph?.nodes.some((node) => node.id === nodeId) ?? false
             }

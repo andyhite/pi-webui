@@ -653,11 +653,6 @@ export const FIXTURE_ATTENTION_ITEMS: readonly AttentionItem[] = [
   },
 ];
 
-/** §7.3: readable names for the what-changed panel's per-workstream sections. */
-export const FIXTURE_WORKSTREAM_NAMES: ReadonlyMap<string, string> = new Map([
-  ["workstream-oxy-2982", "OXY-2982"],
-]);
-
 /**
  * §7.3's "what changed while I was away": a short, capped per-workstream
  * event history, entry ids stable so `appendActivityEntry`'s cap has
@@ -700,7 +695,11 @@ export const FIXTURE_WHAT_CHANGED: readonly WorkstreamActivityEntry[] = [
  */
 export const FIXTURE_FLEET_SUMMARY: FleetSummary = {
   todayTotalMicros: 4_250_000,
-  biggestSpender: { sessionId: "session-running", amountMicros: 3_100_000 },
+  biggestSpender: {
+    sessionId: "session-running",
+    workstreamId: "workstream-oxy-2982",
+    amountMicros: 3_100_000,
+  },
   runningCount: 1,
   concurrencyLimit: 4,
   queuedCount: 0,

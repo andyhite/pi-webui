@@ -13,6 +13,8 @@
  * generalization of that exact row, not a parallel shape beside it.
  */
 
+import type { HttpClient } from "../transport/http.js";
+
 export const WORKSTREAM_ACTIVITY_KINDS = [
   "broadcast",
   "ticket-updated",
@@ -20,6 +22,18 @@ export const WORKSTREAM_ACTIVITY_KINDS = [
   "completion",
   "failure",
 ] as const;
+
+/**
+ * The live seam over `GET /api/activity` (§7.3, Track A's Stage 2): the
+ * server derives the same shape this module already declares —
+ * `{id, workstreamId, kind, text, at, targetNodeId}` — straight from
+ * records that already exist (a broadcast, a session that ended), so this
+ * is a plain read with no client-side capping or derivation left to do
+ * (the server's own `cap` query param already trims per workstream).
+ */
+export interface ActivityDataSource {
+  load(workstreamId?: string): Promise<readonly WorkstreamActivityEntry[]>;
+}
 
 export type WorkstreamActivityKind = (typeof WORKSTREAM_ACTIVITY_KINDS)[number];
 
@@ -96,4 +110,41 @@ export function describeActivityTarget(
   return activityTargetExists(entry, nodeExists)
     ? entry.targetNodeId
     : `${entry.targetNodeId} (no longer on the graph)`;
+}
+
+export interface ApiActivityDataSourceOptions {
+  readonly http: HttpClient;
+}
+
+export function createApiActivityDataSource(
+  options: ApiActivityDataSourceOptions,
+): ActivityDataSource {
+  const { http } = options;
+
+  return {
+    load(workstreamId): Promise<readonly WorkstreamActivityEntry[]> {
+      const query = workstreamId
+        ? `?workstreamId=${encodeURIComponent(workstreamId)}`
+        : "";
+      return http
+        .get<{ readonly entries: readonly WorkstreamActivityEntry[] }>(
+          `/api/activity${query}`,
+        )
+        .then((response) => response.entries);
+    },
+  };
+}
+
+export function createFixtureActivityDataSource(
+  entries: readonly WorkstreamActivityEntry[],
+): ActivityDataSource {
+  return {
+    load(workstreamId): Promise<readonly WorkstreamActivityEntry[]> {
+      return Promise.resolve(
+        workstreamId === undefined
+          ? entries
+          : activityForWorkstream(entries, workstreamId),
+      );
+    },
+  };
 }
