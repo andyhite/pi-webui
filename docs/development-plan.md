@@ -210,12 +210,42 @@ store's seam); WS reconnect replay (a client resyncs via a REST snapshot plus
 the `hello` message's `nextSeq`, once Epic 2.2 has a snapshot endpoint to
 offer); a persisted structured-log sink (today: stdout JSON lines only)._
 
-### Epic 2.2 — Graph and workstream API (`server`, `graph`)
+### Epic 2.2 — Graph and workstream API (`server`, `graph`) — _done_
 
-- [ ] CRUD + verbs for objects, edges, workstreams, commands, notes — every gesture as an endpoint, because agents get the same vocabulary later (principle 8)
-- [ ] Authorship attribution on every mutating call (human vs session identity) — feeds §15-2
-- [ ] Refusal of illegal edges and self-chain authoring at the API layer (principles 1, 8: enforced, not documented)
-- [ ] Undo/restore endpoints for destructive operations (principle 10)
+- [x] CRUD + verbs for objects, edges, workstreams, commands, notes — every gesture as an endpoint, because agents get the same vocabulary later (principle 8)
+- [x] Authorship attribution on every mutating call (human vs session identity) — feeds §15-2
+- [x] Refusal of illegal edges and self-chain authoring at the API layer (principles 1, 8: enforced, not documented)
+- [x] Undo/restore endpoints for destructive operations (principle 10)
+
+_Attribution is one mechanism, applied uniformly: the `X-PlotRoom-Actor`
+header (`human`, the default, or `session:<id>`), read once for every `/api`
+request rather than restated per route — attribution belongs to the caller,
+and the operator credential identifies the installation (§12), not the actor.
+An unparseable actor is refused, so an unattributed write has no
+representation in the API any more than it has in the schema. Refusals are
+not written at the API layer at all: routes call the stores, the stores call
+the predicates in `@plotroom/core`, and the route reports what they said —
+`409` with `code: "refused"` and the predicate's own machine-readable
+`details.reason` (`illegal_target`, `source_not_content`,
+`session_not_running`, `would_cycle`, `duplicate`, `own_chain`,
+`session_sets_lifecycle`, `already_bound`), never a 500 and never a silent
+no-op; an id that names nothing is a `404` matched on `EntityNotFound` rather
+than on a message's wording. Undo is a first-class pair everywhere:
+`DELETE` soft-deletes, `POST .../restore` puts it back, and `GET
+/api/restorable` lists what can be — including deletions a session made.
+Removing a node takes its context edges with it and restores exactly those.
+Every successful mutation publishes on the Epic 2.1 bus (the vocabulary grew
+a `node` entity, since placement is a gesture too), so `/ws` sees the same
+shapes the REST reads return and a refused mutation publishes nothing.
+Migration 6 adds `deleted_at` to objects and workstreams and widens the
+workstream attribution trail to cover deletion. Two Epic 1.4 deferrals
+landed alongside: command and run writes are transactional, and a
+soft-deleted command is refused a run until it is restored. Deferred: a
+snapshot endpoint for WS resync (the stream still has no replay); sessions
+and runs have no endpoints yet (Epics 1.5/4.2 own them, and the lineage a
+session-authored refusal reads is written by the store, not by an API);
+approval-gated destruction (§6.6) — an agent may delete today, and
+recoverability is the answer principle 10 gives._
 
 ### Epic 2.3 — Durability and portability (`server`, `db`)
 
