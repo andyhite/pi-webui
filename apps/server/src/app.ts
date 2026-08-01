@@ -1,17 +1,25 @@
 import type { Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { UpgradeWebSocket } from "hono/ws";
 import type { PlotroomDatabase } from "@plotroom/db";
 import type { ServerConfig } from "./config.js";
 import type { EventBus } from "./events/bus.js";
-import { ApiError } from "./http/errors.js";
+import { actorMiddleware } from "./http/actor.js";
+import { toApiError } from "./http/domain-errors.js";
 import {
   credentialMiddleware,
   originCheckMiddleware,
   requestLogMiddleware,
 } from "./http/middleware.js";
 import type { Logger } from "./logging/logger.js";
+import { createStores } from "./routes/api.js";
+import { commandRoutes } from "./routes/commands.js";
+import { graphRoutes } from "./routes/graph.js";
 import { healthRoutes } from "./routes/health.js";
 import { logLevelRoutes } from "./routes/log-level.js";
+import { objectRoutes } from "./routes/objects.js";
+import { restorableRoutes } from "./routes/restorable.js";
+import { workstreamRoutes } from "./routes/workstreams.js";
 import { serveRenderer } from "./static/serve.js";
 import { mountWsRoute } from "./ws/route.js";
 
@@ -43,8 +51,20 @@ export function configureApp(app: Hono, deps: AppDependencies): void {
   app.use("/ws", originCheckMiddleware(originPolicy));
   app.use("/ws", credentialMiddleware(config.credential));
 
+  // Attribution (§15 invariant 2) is a property of the caller, so it is
+  // established once for every API request rather than restated per route —
+  // there is no path to a mutation that skips saying who made it.
+  app.use("/api/*", actorMiddleware());
+
+  const stores = createStores(db, bus);
+
   app.route("/api", healthRoutes(db));
   app.route("/api", logLevelRoutes(logger));
+  app.route("/api", workstreamRoutes(stores));
+  app.route("/api", objectRoutes(stores));
+  app.route("/api", graphRoutes(stores));
+  app.route("/api", commandRoutes(stores));
+  app.route("/api", restorableRoutes(stores));
 
   mountWsRoute({ app, path: "/ws", upgradeWebSocket, bus, logger });
 
@@ -87,8 +107,12 @@ export function configureApp(app: Hono, deps: AppDependencies): void {
   );
 
   app.onError((err, c) => {
-    if (err instanceof ApiError) {
-      return c.json(err.toBody(), err.status as 400 | 401 | 403 | 404);
+    // A refusal is an answer, not a crash (Epic 2.2): a predicate's refusal
+    // and an id that names nothing map to 4xx carrying the reason, and only a
+    // genuine surprise is a 500.
+    const api = toApiError(err);
+    if (api) {
+      return c.json(api.toBody(), api.status as ContentfulStatusCode);
     }
     logger.error("unhandled error", { err: String(err) });
     return c.json(

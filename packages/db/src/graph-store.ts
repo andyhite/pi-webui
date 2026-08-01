@@ -132,15 +132,23 @@ export class GraphStore {
 
   /** The node standing for a subject, unique per (role, refId) by index. */
   nodeFor(role: NodeRole, refId: string): NodeRow {
-    const row = this.state.db
-      .select()
-      .from(nodes)
-      .where(and(eq(nodes.role, role), eq(nodes.refId, refId)))
-      .get();
+    const row = this.findNodeFor(role, refId);
     if (!row) {
       throw new EntityNotFound("node", refId, `no ${role} node for ${refId}`);
     }
     return row;
+  }
+
+  /**
+   * The same lookup for callers where "nothing is placed for this subject" is
+   * an ordinary answer — an object can exist without being on the board.
+   */
+  findNodeFor(role: NodeRole, refId: string): NodeRow | undefined {
+    return this.state.db
+      .select()
+      .from(nodes)
+      .where(and(eq(nodes.role, role), eq(nodes.refId, refId)))
+      .get();
   }
 
   setRunning(nodeId: string, running: boolean): void {

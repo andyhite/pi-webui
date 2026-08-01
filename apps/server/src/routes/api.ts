@@ -1,0 +1,88 @@
+import type { Author } from "@plotroom/core";
+import {
+  CommandStore,
+  GraphStore,
+  ObjectStore,
+  RunStore,
+  WorkstreamStore,
+  type PlotroomDatabase,
+} from "@plotroom/db";
+import type { EventBus } from "../events/bus.js";
+import { badRequest } from "../http/errors.js";
+
+/**
+ * What every Epic 2.2 route is handed: the stores that own the rules and the
+ * bus every successful mutation announces itself on. Nothing here reimplements
+ * a rule — the stores call the predicates in `@plotroom/core`, so the API, the
+ * canvas, and agent tools refuse identically (principle 8).
+ */
+export interface ApiStores {
+  readonly db: PlotroomDatabase;
+  readonly bus: EventBus;
+  readonly objects: ObjectStore;
+  readonly graph: GraphStore;
+  readonly workstreams: WorkstreamStore;
+  readonly commands: CommandStore;
+  readonly runs: RunStore;
+}
+
+export function createStores(db: PlotroomDatabase, bus: EventBus): ApiStores {
+  return {
+    db,
+    bus,
+    objects: new ObjectStore(db),
+    graph: new GraphStore(db),
+    workstreams: new WorkstreamStore(db),
+    commands: new CommandStore(db),
+    runs: new RunStore(db),
+  };
+}
+
+/**
+ * `actor` is set by the attribution middleware for every request; `body` by
+ * `validateJsonBody` for the routes that take one.
+ */
+export interface ApiEnv {
+  readonly Variables: {
+    actor: Author;
+    body: unknown;
+  };
+}
+
+/**
+ * The accessors below take the smallest shape they need rather than a
+ * `Context<ApiEnv>`: `validateJsonBody` intersects the env with the schema it
+ * validated, so a handler's context is a *narrower* type than the route's,
+ * and pinning these to one env would make every validated route fail to
+ * typecheck for a reason that has nothing to do with the route.
+ */
+export interface ActorAware {
+  get(key: "actor"): Author;
+}
+
+export interface BodyAware {
+  get(key: "body"): unknown;
+}
+
+export interface ParamAware {
+  readonly req: { param(name: string): string | undefined };
+}
+
+/** The validated body, typed by the schema the route declared. */
+export function body<T>(c: BodyAware): T {
+  return c.get("body") as T;
+}
+
+export function actorOf(c: ActorAware): Author {
+  return c.get("actor");
+}
+
+/**
+ * A matched path parameter. Absent means the route pattern and the read
+ * disagree — a bug, reported rather than passed on as `undefined`.
+ */
+export function param(c: ParamAware, name: string): string {
+  const value = c.req.param(name);
+  if (value === undefined) throw badRequest(`missing path parameter ${name}`);
+  return value;
+}

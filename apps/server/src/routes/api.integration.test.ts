@@ -1,0 +1,751 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import WebSocket from "ws";
+import { GraphStore } from "@plotroom/db";
+import type { DomainEvent } from "@plotroom/core";
+import { loadServerConfig } from "../config.js";
+import { startServer } from "../index.js";
+
+let port = 46100;
+type Handle = ReturnType<typeof startServer>;
+
+let handle: Handle;
+let base: string;
+let origin: string;
+
+beforeEach(() => {
+  port += 1;
+  const stateDir = mkdtempSync(join(tmpdir(), "plotroom-api-test-"));
+  handle = startServer(
+    loadServerConfig(
+      {},
+      {
+        host: "127.0.0.1",
+        port,
+        stateDir,
+        credential: null,
+        allowNonLoopbackBind: false,
+        trustedOrigins: [],
+        staticDir: join(tmpdir(), "plotroom-no-such-renderer-dir"),
+        logLevel: "error",
+      },
+    ),
+  );
+  base = `http://127.0.0.1:${port}/api`;
+  origin = `http://localhost:${port}`;
+});
+
+afterEach(async () => {
+  const stateDir = handle.db.layout.dir;
+  await handle.close();
+  rmSync(stateDir, { recursive: true, force: true });
+});
+
+interface CallOptions {
+  readonly method?: string;
+  readonly body?: unknown;
+  /** The attribution header: "human", "session:<id>", or something invalid. */
+  readonly actor?: string;
+}
+
+async function call(
+  path: string,
+  options: CallOptions = {},
+): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(`${base}${path}`, {
+    method: options.method ?? "GET",
+    headers: {
+      origin,
+      "content-type": "application/json",
+      ...(options.actor ? { "x-plotroom-actor": options.actor } : {}),
+    },
+    ...(options.body !== undefined
+      ? { body: JSON.stringify(options.body) }
+      : {}),
+  });
+
+  return { status: res.status, body: await res.json() };
+}
+
+/** Asserts a 2xx and hands back the body, so a failing setup fails loudly. */
+async function ok(path: string, options: CallOptions = {}): Promise<unknown> {
+  const res = await call(path, options);
+  if (res.status >= 300) {
+    throw new Error(
+      `${path} failed: ${res.status} ${JSON.stringify(res.body)}`,
+    );
+  }
+  return res.body;
+}
+
+function at(value: unknown, path: string): unknown {
+  return path
+    .split(".")
+    .reduce<unknown>(
+      (current, key) => (current as Record<string, unknown>)?.[key],
+      value,
+    );
+}
+
+function str(value: unknown, path: string): string {
+  const found = at(value, path);
+  if (typeof found !== "string") {
+    throw new Error(
+      `expected a string at ${path}, got ${JSON.stringify(found)}`,
+    );
+  }
+  return found;
+}
+
+function list(value: unknown, path: string): unknown[] {
+  const found = at(value, path);
+  if (!Array.isArray(found)) {
+    throw new Error(
+      `expected an array at ${path}, got ${JSON.stringify(found)}`,
+    );
+  }
+  return found;
+}
+
+/** A workstream, a note, and the note's placement on the board. */
+async function board() {
+  const workstream = str(
+    await ok("/workstreams", { method: "POST", body: {} }),
+    "workstream.id",
+  );
+  const note = await ok("/notes", {
+    method: "POST",
+    body: { title: "context", body: "some content", workstreamId: workstream },
+  });
+  const noteId = str(note, "object.id");
+  const noteNode = await ok("/nodes", {
+    method: "POST",
+    body: { role: "content", refId: noteId, workstreamId: workstream },
+  });
+
+  return { workstream, noteId, noteNode: str(noteNode, "node.id") };
+}
+
+/** A producing command node, with the typed placeholder it declared (§3.5). */
+async function producingCommand(workstream: string, name: string) {
+  const definition = await ok("/command-definitions", {
+    method: "POST",
+    body: {
+      name,
+      instruction: "Do the thing.",
+      model: "fixture-model",
+      effort: "medium",
+      lifecycle: "producing",
+      outcome: { name: "result", kind: "document", conditions: [] },
+    },
+  });
+  const definitionId = str(definition, "definition.id");
+
+  const command = await ok("/commands", {
+    method: "POST",
+    body: { definitionId, workstreamId: workstream },
+  });
+  const outputId = str(list(command, "outputs")[0], "id");
+  const output = await ok(`/outputs/${outputId}`);
+
+  return {
+    definitionId,
+    commandId: str(command, "command.id"),
+    node: str(command, "node.id"),
+    outputId,
+    outputNode: str(output, "node.id"),
+  };
+}
+
+/** Collects events off the live stream while `run` mutates (Epic 2.1 seam). */
+async function eventsDuring(run: () => Promise<void>): Promise<DomainEvent[]> {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+    headers: { origin },
+  });
+  const events: DomainEvent[] = [];
+
+  await new Promise<void>((resolve, reject) => {
+    ws.on("error", reject);
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString()) as {
+        type: string;
+        event?: DomainEvent;
+      };
+      if (message.type === "hello") resolve();
+      if (message.type === "event" && message.event) events.push(message.event);
+    });
+  });
+
+  await run();
+  // A round trip plus a tick, so anything published during `run` has arrived.
+  await ok("/health");
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  ws.close();
+
+  return events;
+}
+
+describe("refusals come from the predicates, not from the route (principle 8)", () => {
+  it("refuses content wired into content, with the predicate's reason", async () => {
+    const { noteNode } = await board();
+    const second = await ok("/notes", {
+      method: "POST",
+      body: { title: "other", body: "other content" },
+    });
+    const otherNode = await ok("/nodes", {
+      method: "POST",
+      body: { role: "content", refId: str(second, "object.id") },
+    });
+
+    const res = await call("/edges", {
+      method: "POST",
+      body: { from: noteNode, to: str(otherNode, "node.id") },
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: {
+        code: "refused",
+        message: "content cannot be wired into content",
+        details: { reason: "illegal_target" },
+      },
+    });
+  });
+
+  it("refuses a command as the source of context", async () => {
+    const { workstream, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+
+    const res = await call("/edges", {
+      method: "POST",
+      body: { from: command.node, to: noteNode },
+    });
+
+    expect(res.status).toBe(409);
+    expect(at(res.body, "error.details")).toEqual({
+      reason: "source_not_content",
+    });
+  });
+
+  it("refuses context into a session that has ended", async () => {
+    const { workstream, noteNode } = await board();
+    const session = await ok("/nodes", {
+      method: "POST",
+      body: {
+        role: "session",
+        refId: "sess_ended",
+        workstreamId: workstream,
+        running: false,
+      },
+    });
+
+    const res = await call("/edges", {
+      method: "POST",
+      body: { from: noteNode, to: str(session, "node.id") },
+    });
+
+    expect(res.status).toBe(409);
+    expect(at(res.body, "error.details")).toEqual({
+      reason: "session_not_running",
+    });
+    expect(at(res.body, "error.message")).toMatch(/fork or re-run it instead/);
+  });
+
+  it("refuses a command-topology cycle transitively (§3.7)", async () => {
+    const { workstream } = await board();
+    const first = await producingCommand(workstream, "First");
+    const second = await producingCommand(workstream, "Second");
+
+    // first → second is legal; second → first would close the loop.
+    await ok("/edges", {
+      method: "POST",
+      body: { from: first.outputNode, to: second.node },
+    });
+
+    const res = await call("/edges", {
+      method: "POST",
+      body: { from: second.outputNode, to: first.node },
+    });
+
+    expect(res.status).toBe(409);
+    expect(at(res.body, "error.details")).toEqual({ reason: "would_cycle" });
+  });
+
+  it("refuses a session authoring context into itself (principle 1)", async () => {
+    const { workstream, noteNode } = await board();
+    const session = await ok("/nodes", {
+      method: "POST",
+      body: {
+        role: "session",
+        refId: "sess_self",
+        workstreamId: workstream,
+        running: true,
+      },
+    });
+    const sessionNode = str(session, "node.id");
+
+    const refused = await call("/edges", {
+      method: "POST",
+      actor: "session:sess_self",
+      body: { from: noteNode, to: sessionNode },
+    });
+
+    expect(refused.status).toBe(409);
+    expect(at(refused.body, "error.details")).toEqual({ reason: "own_chain" });
+
+    // The human is unconstrained: the same wire, the same target, allowed.
+    const allowed = await call("/edges", {
+      method: "POST",
+      body: { from: noteNode, to: sessionNode },
+    });
+    expect(allowed.status).toBe(201);
+  });
+
+  it("refuses a session authoring into a descendant it started", async () => {
+    const { workstream, noteNode } = await board();
+    // The chain terminates at a human gesture, so the parent is recorded
+    // first with no initiator of its own (principle 1).
+    const graph = new GraphStore(handle.db);
+    graph.recordLineage("sess_parent", null);
+    graph.recordLineage("sess_child", "sess_parent");
+    const child = await ok("/nodes", {
+      method: "POST",
+      body: {
+        role: "session",
+        refId: "sess_child",
+        workstreamId: workstream,
+        running: true,
+      },
+    });
+
+    const res = await call("/edges", {
+      method: "POST",
+      actor: "session:sess_parent",
+      body: { from: noteNode, to: str(child, "node.id") },
+    });
+
+    expect(res.status).toBe(409);
+    expect(at(res.body, "error.details")).toEqual({ reason: "own_chain" });
+  });
+
+  it("refuses a duplicate wire rather than silently ignoring it", async () => {
+    const { workstream, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+
+    await ok("/edges", {
+      method: "POST",
+      body: { from: noteNode, to: command.node },
+    });
+    const res = await call("/edges", {
+      method: "POST",
+      body: { from: noteNode, to: command.node },
+    });
+
+    expect(res.status).toBe(409);
+    expect(at(res.body, "error.details")).toEqual({ reason: "duplicate" });
+  });
+
+  it("refuses a session setting workstream lifecycle (§3.3)", async () => {
+    const { workstream } = await board();
+
+    const res = await call(`/workstreams/${workstream}`, {
+      method: "PATCH",
+      actor: "session:sess_agent",
+      body: { status: "done" },
+    });
+
+    expect(res.status).toBe(409);
+    expect(at(res.body, "error.details")).toEqual({
+      reason: "session_sets_lifecycle",
+    });
+
+    // …and the human's identical call is accepted.
+    const human = await call(`/workstreams/${workstream}`, {
+      method: "PATCH",
+      body: { status: "done" },
+    });
+    expect(human.status).toBe(200);
+    expect(at(human.body, "workstream.status")).toBe("done");
+  });
+
+  it("refuses publishing an output that already bound (§3.5)", async () => {
+    const { workstream } = await board();
+    const command = await producingCommand(workstream, "Implement");
+    const produced = await ok("/objects", {
+      method: "POST",
+      body: {
+        kind: "document",
+        title: "the result",
+        renderings: { card: {}, summary: "result", agentContent: "done" },
+        workstreamId: workstream,
+      },
+    });
+
+    // Binding is what a completed run does; forced here so the route's
+    // refusal is what is under test rather than the run machinery.
+    handle.db.sqlite
+      .prepare(
+        "UPDATE command_outputs SET bound_object_id = ?, bound_at = 1 WHERE id = ?",
+      )
+      .run(str(produced, "object.id"), command.outputId);
+
+    const res = await call(`/outputs/${command.outputId}/publish`, {
+      method: "POST",
+    });
+
+    expect(res.status).toBe(409);
+    expect(at(res.body, "error.details")).toEqual({ reason: "already_bound" });
+  });
+
+  it("answers 404, never 500, for an id that names nothing", async () => {
+    const res = await call("/nodes/node_nope");
+
+    expect(res.status).toBe(404);
+    expect(at(res.body, "error.code")).toBe("not_found");
+  });
+
+  it("answers 400 with the validation issues for a malformed body", async () => {
+    const res = await call("/edges", { method: "POST", body: { from: "" } });
+
+    expect(res.status).toBe(400);
+    expect(at(res.body, "error.code")).toBe("bad_request");
+    expect(Array.isArray(at(res.body, "error.details"))).toBe(true);
+  });
+});
+
+describe("attribution on every mutating call (§15 invariant 2)", () => {
+  it("defaults to the human operator", async () => {
+    const { workstream, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+
+    const created = await ok("/edges", {
+      method: "POST",
+      body: { from: noteNode, to: command.node },
+    });
+
+    expect(at(created, "edge.author")).toEqual({ kind: "human" });
+  });
+
+  it("records the session that authored the edge", async () => {
+    const { workstream, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+
+    const created = await ok("/edges", {
+      method: "POST",
+      actor: "session:sess_peer",
+      body: { from: noteNode, to: command.node },
+    });
+
+    expect(at(created, "edge.author")).toEqual({
+      kind: "session",
+      sessionId: "sess_peer",
+    });
+
+    const inputs = await ok(`/nodes/${command.node}/context`);
+    expect(at(list(inputs, "inputs")[0], "author")).toEqual({
+      kind: "session",
+      sessionId: "sess_peer",
+    });
+  });
+
+  it("attributes workstream gestures in the stored trail", async () => {
+    const { workstream, noteId } = await board();
+
+    await ok(`/workstreams/${workstream}`, {
+      method: "PATCH",
+      actor: "session:sess_agent",
+      body: { subjectId: noteId },
+    });
+
+    const read = await ok(`/workstreams/${workstream}`);
+    const subjectSet = list(read, "events").find(
+      (event) => at(event, "kind") === "subject_set",
+    );
+
+    expect(at(subjectSet, "authorKind")).toBe("session");
+    expect(at(subjectSet, "authorSession")).toBe("sess_agent");
+  });
+
+  it("refuses an actor it cannot parse rather than guessing one", async () => {
+    const res = await call("/workstreams", {
+      method: "POST",
+      actor: "robot",
+      body: {},
+    });
+
+    expect(res.status).toBe(400);
+    expect(at(res.body, "error.message")).toMatch(/session:<sessionId>/);
+  });
+});
+
+describe("undo and restore for destructive operations (principle 10)", () => {
+  it("restores a removed edge", async () => {
+    const { workstream, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+    const edgeId = str(
+      await ok("/edges", {
+        method: "POST",
+        body: { from: noteNode, to: command.node },
+      }),
+      "edge.id",
+    );
+
+    await ok(`/edges/${edgeId}`, { method: "DELETE" });
+    expect(
+      list(await ok(`/nodes/${command.node}/context`), "inputs"),
+    ).toHaveLength(0);
+    expect(list(await ok("/restorable"), "edges")).toHaveLength(1);
+
+    await ok(`/edges/${edgeId}/restore`, { method: "POST" });
+    expect(
+      list(await ok(`/nodes/${command.node}/context`), "inputs"),
+    ).toHaveLength(1);
+  });
+
+  it("restores a removed node with the wires it took down", async () => {
+    const { workstream, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+    await ok("/edges", {
+      method: "POST",
+      body: { from: noteNode, to: command.node },
+    });
+
+    await ok(`/nodes/${noteNode}`, { method: "DELETE" });
+    expect(
+      list(await ok(`/nodes/${command.node}/context`), "inputs"),
+    ).toHaveLength(0);
+
+    await ok(`/nodes/${noteNode}/restore`, { method: "POST" });
+    expect(
+      list(await ok(`/nodes/${command.node}/context`), "inputs"),
+    ).toHaveLength(1);
+  });
+
+  it("restores a workstream an agent deleted", async () => {
+    const { workstream } = await board();
+
+    await ok(`/workstreams/${workstream}`, {
+      method: "DELETE",
+      actor: "session:sess_agent",
+    });
+    expect(list(await ok("/workstreams"), "workstreams")).toHaveLength(0);
+    expect(at(list(await ok("/restorable"), "workstreams")[0], "id")).toBe(
+      workstream,
+    );
+
+    await ok(`/workstreams/${workstream}/restore`, { method: "POST" });
+    expect(list(await ok("/workstreams"), "workstreams")).toHaveLength(1);
+  });
+
+  it("restores a deleted command and clears the broken placeholder", async () => {
+    const { workstream } = await board();
+    const command = await producingCommand(workstream, "Implement");
+
+    const deleted = await ok(`/commands/${command.commandId}`, {
+      method: "DELETE",
+    });
+    expect(at(deleted, "restorable")).toBe(true);
+    expect(
+      at(await ok(`/outputs/${command.outputId}`), "output.brokenAt"),
+    ).not.toBeNull();
+
+    await ok(`/commands/${command.commandId}/restore`, { method: "POST" });
+
+    expect(
+      at(await ok(`/outputs/${command.outputId}`), "output.brokenAt"),
+    ).toBeNull();
+  });
+
+  it("restores a deleted object together with its placement", async () => {
+    const { noteId, noteNode } = await board();
+
+    await ok(`/objects/${noteId}`, { method: "DELETE" });
+    expect(at(await ok(`/nodes/${noteNode}`), "node.deletedAt")).not.toBeNull();
+    expect(list(await ok("/restorable"), "objects")).toHaveLength(1);
+
+    await ok(`/objects/${noteId}/restore`, { method: "POST" });
+    expect(at(await ok(`/nodes/${noteNode}`), "node.deletedAt")).toBeNull();
+  });
+
+  it("restores a deleted command definition", async () => {
+    const { workstream } = await board();
+    const command = await producingCommand(workstream, "Implement");
+
+    await ok(`/command-definitions/${command.definitionId}`, {
+      method: "DELETE",
+    });
+    expect(list(await ok("/command-definitions"), "definitions")).toHaveLength(
+      0,
+    );
+
+    await ok(`/command-definitions/${command.definitionId}/restore`, {
+      method: "POST",
+    });
+    expect(list(await ok("/command-definitions"), "definitions")).toHaveLength(
+      1,
+    );
+  });
+});
+
+describe("every successful mutation announces itself (Epic 2.1 seam)", () => {
+  it("publishes what a composing gesture produced, with its author", async () => {
+    const events = await eventsDuring(async () => {
+      const { workstream, noteNode } = await board();
+      const command = await producingCommand(workstream, "Implement");
+      await ok("/edges", {
+        method: "POST",
+        actor: "session:sess_peer",
+        body: { from: noteNode, to: command.node },
+      });
+    });
+
+    const seen = events.map((event) => `${event.entity}.${event.verb}`);
+    expect(seen).toContain("workstream.created");
+    expect(seen).toContain("object.created");
+    expect(seen).toContain("version.created");
+    expect(seen).toContain("node.created");
+    expect(seen).toContain("command_definition.created");
+    expect(seen).toContain("command.created");
+    expect(seen).toContain("command_output.created");
+    expect(seen).toContain("edge.created");
+
+    const edgeEvent = events.find((event) => event.entity === "edge");
+    expect(edgeEvent?.author).toEqual({
+      kind: "session",
+      sessionId: "sess_peer",
+    });
+  });
+
+  it("publishes deletions and restorations", async () => {
+    const { workstream } = await board();
+
+    const events = await eventsDuring(async () => {
+      await ok(`/workstreams/${workstream}`, { method: "DELETE" });
+      await ok(`/workstreams/${workstream}/restore`, { method: "POST" });
+    });
+
+    expect(events.map((event) => `${event.entity}.${event.verb}`)).toEqual([
+      "workstream.deleted",
+      "workstream.created",
+    ]);
+  });
+
+  it("publishes nothing when the mutation was refused", async () => {
+    const { workstream, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+    await ok("/edges", {
+      method: "POST",
+      body: { from: noteNode, to: command.node },
+    });
+
+    const events = await eventsDuring(async () => {
+      const res = await call("/edges", {
+        method: "POST",
+        body: { from: noteNode, to: command.node },
+      });
+      expect(res.status).toBe(409);
+    });
+
+    expect(events).toEqual([]);
+  });
+});
+
+describe("content, notes, and assembly order (spec §3.2, §3.5, §3.8)", () => {
+  it("makes each note edit a new version of the same object", async () => {
+    const { noteId } = await board();
+
+    const edited = await ok(`/notes/${noteId}`, {
+      method: "PATCH",
+      body: { body: "a sharper thought" },
+    });
+
+    expect(at(edited, "object.id")).toBe(noteId);
+    expect(at(edited, "ordinal")).toBe(2);
+    expect(
+      list(await ok(`/objects/${noteId}/versions`), "versions"),
+    ).toHaveLength(2);
+    expect(
+      at(await ok(`/objects/${noteId}`), "content.renderings.agentContent"),
+    ).toBe("a sharper thought");
+  });
+
+  it("promotes a local object to world scope in one gesture", async () => {
+    const { noteId } = await board();
+
+    const promoted = await ok(`/objects/${noteId}/promote`, { method: "POST" });
+
+    expect(at(promoted, "object.scope")).toBe("world");
+    expect(at(promoted, "object.workstreamId")).toBeNull();
+  });
+
+  it("reorders context inputs, and refuses a partial reorder", async () => {
+    const { workstream, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+    const second = await ok("/notes", {
+      method: "POST",
+      body: { title: "second", body: "more", workstreamId: workstream },
+    });
+    const secondNode = str(
+      await ok("/nodes", {
+        method: "POST",
+        body: {
+          role: "content",
+          refId: str(second, "object.id"),
+          workstreamId: workstream,
+        },
+      }),
+      "node.id",
+    );
+
+    const first = str(
+      await ok("/edges", {
+        method: "POST",
+        body: { from: noteNode, to: command.node },
+      }),
+      "edge.id",
+    );
+    const later = str(
+      await ok("/edges", {
+        method: "POST",
+        body: { from: secondNode, to: command.node },
+      }),
+      "edge.id",
+    );
+
+    const reordered = await ok(`/nodes/${command.node}/context/order`, {
+      method: "POST",
+      body: { edgeIds: [later, first] },
+    });
+
+    expect(list(reordered, "inputs").map((edge) => at(edge, "id"))).toEqual([
+      later,
+      first,
+    ]);
+
+    const partial = await call(`/nodes/${command.node}/context/order`, {
+      method: "POST",
+      body: { edgeIds: [first] },
+    });
+    expect(partial.status).toBe(400);
+  });
+});
+
+describe("placing is idempotent (principle 9)", () => {
+  it("returns the same node for the same subject, announcing it once", async () => {
+    const { noteId, noteNode } = await board();
+
+    const events = await eventsDuring(async () => {
+      const again = await call("/nodes", {
+        method: "POST",
+        body: { role: "content", refId: noteId },
+      });
+
+      expect(again.status).toBe(200);
+      expect(at(again.body, "node.id")).toBe(noteNode);
+    });
+
+    expect(events).toEqual([]);
+  });
+});

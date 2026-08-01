@@ -1,0 +1,44 @@
+import { Hono } from "hono";
+import { toDefinition } from "@plotroom/db";
+import type { ApiEnv, ApiStores } from "./api.js";
+import {
+  toCommandNode,
+  toEdge,
+  toPlacedNode,
+  toWorkstream,
+} from "./mappers.js";
+
+/**
+ * What can be undone (spec §5, principle 10).
+ *
+ * "Deletion is recoverable for authored state — including when an agent did
+ * the deleting" is only true if there is a way to find what was deleted. The
+ * restore verbs live on the entities themselves (`POST /api/edges/:id/restore`
+ * and friends), because undoing is the same gesture wherever it is offered;
+ * this endpoint is the list those verbs act on, so undo works after a reload,
+ * from a different surface, or on something a session removed while nobody
+ * was watching.
+ */
+export function restorableRoutes(stores: ApiStores): Hono<ApiEnv> {
+  const app = new Hono<ApiEnv>();
+  const { objects, graph, workstreams, commands } = stores;
+
+  app.get("/restorable", (c) =>
+    c.json({
+      objects: objects.deleted().map((row) => ({
+        id: row.id,
+        title: row.title,
+        deletedAt: row.deletedAt,
+      })),
+      nodes: graph.deletedNodes().map((row) => toPlacedNode(row)),
+      edges: graph.deletedEdges().map((row) => toEdge(row)),
+      workstreams: workstreams.deleted().map((row) => toWorkstream(row)),
+      commands: commands.deletedCommands().map((row) => toCommandNode(row)),
+      commandDefinitions: commands
+        .deletedDefinitions()
+        .map((row) => toDefinition(row)),
+    }),
+  );
+
+  return app;
+}

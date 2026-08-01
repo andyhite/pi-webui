@@ -54,3 +54,23 @@ export function unauthorized(message: string): ApiError {
 export function forbidden(message: string): ApiError {
   return new ApiError(403, "forbidden", message);
 }
+
+/**
+ * What a predicate said, verbatim (Epic 2.2, principles 1 and 8).
+ *
+ * A refusal is not a malformed request and never an internal error: the
+ * request was understood and the rules said no. `reason` is the predicate's
+ * own machine-readable reason — `would_cycle`, `own_chain`,
+ * `session_not_running` — so an agent branches on exactly the value the
+ * canvas shows mid-drag, and the two surfaces cannot drift apart.
+ */
+export interface Refusal {
+  readonly reason: string;
+  readonly message: string;
+}
+
+export function refused(refusal: Refusal): ApiError {
+  return new ApiError(409, "refused", refusal.message, {
+    reason: refusal.reason,
+  });
+}
