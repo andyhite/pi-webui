@@ -79,6 +79,28 @@ describe("spawnOrAttach", () => {
     expect(child.killed).toBe(true);
   });
 
+  it("attaches instead of throwing when a re-probe after the deadline finds it healthy after all", async () => {
+    // Models a race with a concurrent launch: nothing is healthy when this
+    // call starts, the wait times out, but a re-probe right before giving
+    // up finds the other launch finished in the meantime.
+    const child = fakeProcess(11);
+    let probeCalls = 0;
+    const probe = async () => {
+      probeCalls += 1;
+      return probeCalls >= 3;
+    };
+
+    const handle = await spawnOrAttach({
+      probe,
+      spawn: () => child,
+      waitUntilHealthy: async (p) => p(),
+    });
+
+    expect(handle.result).toEqual({ mode: "attached" });
+    // The spawn attempt that lost the race is cleaned up, not left running.
+    expect(child.killed).toBe(true);
+  });
+
   it("stop() kills only the process this call spawned", async () => {
     const child = fakeProcess(9);
     const handle = await spawnOrAttach({

@@ -64,15 +64,25 @@ export async function spawnOrAttach(
 
   const child = deps.spawn();
   const becameHealthy = await deps.waitUntilHealthy(deps.probe, readyTimeoutMs);
-  if (!becameHealthy) {
-    child.kill();
-    throw new ServerNeverBecameHealthyError(child.pid, readyTimeoutMs);
+  if (becameHealthy) {
+    return {
+      result: { mode: "spawned", pid: child.pid },
+      stop: () => child.kill(),
+    };
   }
 
-  return {
-    result: { mode: "spawned", pid: child.pid },
-    stop: () => child.kill(),
-  };
+  // Re-probe once before giving up: a concurrent launch (another instance,
+  // or someone starting the server by hand) may have finished becoming
+  // healthy in the beat between the deadline and now. If so, prefer it and
+  // kill the spawn attempt that lost the race, rather than leaving two
+  // server processes running for one instance.
+  const healthyAfterAll = await deps.probe();
+  child.kill();
+  if (healthyAfterAll) {
+    return { result: { mode: "attached" }, stop: () => {} };
+  }
+
+  throw new ServerNeverBecameHealthyError(child.pid, readyTimeoutMs);
 }
 
 /** A fixed-interval poller; `now`/`sleep` are injectable for deterministic tests. */

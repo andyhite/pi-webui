@@ -9,22 +9,28 @@
  * unit-tested with a mocked probe/spawn; this file only wires it to real
  * Electron/Node primitives (`app`, `BrowserWindow`, `child_process`, `fetch`)
  * and is not itself unit-tested — there is nothing left to test once the
- * seams are pulled out.
+ * seams are pulled out (see `spawn-or-attach.integration.test.ts`, which
+ * drives `spawnServer`/`healthProbe` against a real built server instead).
  *
- * Stage 1 note: `apps/server` does not listen on a port yet (Epic 2.1 has
- * not landed) — spawning it will start a process that exits immediately, so
- * `spawnOrAttach` will correctly fail to observe health and throw. This file
- * is the mechanism; Track A's server landing an actual `/health` endpoint
- * and a listener is what makes it succeed end-to-end (Sync 2).
+ * Three things beyond spawn-or-attach itself, all required before this
+ * mechanism counts as done:
+ *
+ *   - a single-instance lock, so a second launch does not spawn a second
+ *     server for the same instance;
+ *   - `spawnOrAttach`'s own re-probe-after-timeout (in spawn-or-attach.ts)
+ *     covers a race between two *separate* instances/launches;
+ *   - a child exit listener, so a server that crashes after this process
+ *     already attached/spawned it successfully surfaces as a visible error
+ *     rather than a window that silently stops responding.
  */
 
 import { spawn as spawnChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { app, BrowserWindow } from "electron";
+import { BrowserWindow, app } from "electron";
 
 import { resolvePort } from "./config.js";
-import { spawnOrAttach, createPollingWaiter } from "./spawn-or-attach.js";
+import { createPollingWaiter, spawnOrAttach } from "./spawn-or-attach.js";
 import type { HealthProbe, SpawnedProcess } from "./spawn-or-attach.js";
 
 /**
@@ -36,10 +42,12 @@ const SERVER_ENTRY = fileURLToPath(
   new URL("../../server/dist/index.js", import.meta.url),
 );
 
-function healthProbe(port: number): HealthProbe {
+export function healthProbe(port: number): HealthProbe {
   return async () => {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/health`);
+      // The server's real health route (apps/server/src/routes/health.ts)
+      // lives under /api, like everything else — never a bare /health.
+      const response = await fetch(`http://127.0.0.1:${port}/api/health`);
       return response.ok;
     } catch {
       return false;
@@ -47,7 +55,10 @@ function healthProbe(port: number): HealthProbe {
   };
 }
 
-function spawnServer(port: number): SpawnedProcess {
+export function spawnServer(
+  port: number,
+  onUnexpectedExit: (code: number | null) => void,
+): SpawnedProcess {
   const child = spawnChildProcess(process.execPath, [SERVER_ENTRY], {
     stdio: "inherit",
     env: { ...process.env, PLOTROOM_PORT: String(port) },
@@ -56,22 +67,62 @@ function spawnServer(port: number): SpawnedProcess {
   if (pid === undefined) {
     throw new Error("failed to spawn the local server: no pid");
   }
+
+  let expectedShutdown = false;
+  child.on("exit", (code) => {
+    if (!expectedShutdown) onUnexpectedExit(code);
+  });
+
   return {
     pid,
     kill: () => {
+      expectedShutdown = true;
       child.kill();
     },
   };
 }
 
+/** Shown in place of the app when the server we spawned crashes underneath it. */
+function crashPage(code: number | null): string {
+  const message = `the local server exited unexpectedly (code ${String(code)}). Restart PlotRoom to try again.`;
+  return `data:text/html,${encodeURIComponent(`<pre>${message}</pre>`)}`;
+}
+
 async function main(): Promise<void> {
+  // One server per instance: a second launch attaches to nothing new and
+  // spawns nothing new — it just quits, leaving the first instance's
+  // window as the one true window (spec §12's single-origin rule extends
+  // to "one process talks to one server", not just "one origin").
+  const gotLock = app.requestSingleInstanceLock();
+  if (!gotLock) {
+    app.quit();
+    return;
+  }
+
   const port = resolvePort();
   const probe = healthProbe(port);
+  let window: BrowserWindow | null = null;
 
   const handle = await spawnOrAttach({
     probe,
-    spawn: () => spawnServer(port),
+    spawn: () =>
+      spawnServer(port, (code) => {
+        // The server we spawned crashed after we already confirmed it
+        // healthy — surface it rather than leaving an unresponsive window.
+        if (window) {
+          void window.loadURL(crashPage(code));
+        } else {
+          app.quit();
+        }
+      }),
     waitUntilHealthy: createPollingWaiter(250),
+  });
+
+  app.on("second-instance", () => {
+    if (window) {
+      if (window.isMinimized()) window.restore();
+      window.focus();
+    }
   });
 
   app.on("window-all-closed", () => {
@@ -83,7 +134,7 @@ async function main(): Promise<void> {
   app.on("before-quit", () => handle.stop());
 
   await app.whenReady();
-  const window = new BrowserWindow({ width: 1280, height: 800 });
+  window = new BrowserWindow({ width: 1280, height: 800 });
   // The one single-origin URL (§12) — same port the health probe just
   // confirmed is serving, never a second address.
   await window.loadURL(`http://127.0.0.1:${port}/`);
