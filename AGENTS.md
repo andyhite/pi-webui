@@ -126,7 +126,10 @@ backup and movement:
   inside it but are derived and excluded from the backup story, which
   `GET /api/maintenance/state` states rather than leaves to be inferred. Every
   reset verb is a plan and an execution: an unconfirmed `POST /api/reset`
-  answers with the plan and removes nothing. The compaction job schedules the
+  answers with the plan and removes nothing, and the plan asks git which
+  checkouts hold uncommitted, untracked, or unpushed work so it can name what
+  deleting them would destroy (an unreadable checkout is reported as unreadable,
+  never as clean). The compaction job schedules the
   sweep (injected timers, `PLOTROOM_COMPACTION_INTERVAL_SECONDS`, `0` disables
   the schedule but never the endpoint) and decides nothing — the rules stay the
   predicates in `@plotroom/core`, and the sweep order is runs → versions →

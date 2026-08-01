@@ -282,6 +282,15 @@ unprovisioned and deletes the checkouts and the mirror cache, keeping every
 record; `everything` empties the store and says how many rows and blobs that
 is first. Both halves — rows and directories — are reported in one answer.
 
+Deleting a checkout is not lossless, so the plan says so rather than leaving
+"re-provisioned at the next run" to imply it. Both scopes that delete one carry
+an explicit destruction sentence, and the plan **asks git** about every
+provisioned checkout first: each one holding uncommitted changes, untracked
+files, or commits that were never pushed is named individually, with whether
+this reset deletes its files or merely forgets it. A checkout whose status could
+not be read is listed as unreadable — "we could not look" and "there is nothing
+there" are different sentences, and only one of them is safe to act on.
+
 The compaction job schedules the sweep and decides nothing else: the rules stay
 `isCompactable` / `isRunCompactable` in `@plotroom/core`, and
 `Maintenance.compact` sequences runs → versions → blob sweep in that order,
