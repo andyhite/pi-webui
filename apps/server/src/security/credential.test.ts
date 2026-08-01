@@ -1,0 +1,58 @@
+import { describe, expect, it } from "vitest";
+import { checkCredential } from "./credential.js";
+
+describe("checkCredential (spec §12)", () => {
+  it("allows anything when no credential is configured", () => {
+    expect(
+      checkCredential(
+        { authorizationHeader: undefined, credentialQueryParam: undefined },
+        null,
+      ),
+    ).toEqual({ allowed: true });
+  });
+
+  it("requires a credential once one is configured", () => {
+    const result = checkCredential(
+      { authorizationHeader: undefined, credentialQueryParam: undefined },
+      "s3cret",
+    );
+    expect(result.allowed).toBe(false);
+  });
+
+  it("accepts a matching Authorization: Bearer header", () => {
+    expect(
+      checkCredential(
+        {
+          authorizationHeader: "Bearer s3cret",
+          credentialQueryParam: undefined,
+        },
+        "s3cret",
+      ),
+    ).toEqual({ allowed: true });
+  });
+
+  it("accepts a matching credential query param, for browser WebSocket clients", () => {
+    expect(
+      checkCredential(
+        { authorizationHeader: undefined, credentialQueryParam: "s3cret" },
+        "s3cret",
+      ),
+    ).toEqual({ allowed: true });
+  });
+
+  it("refuses a wrong credential", () => {
+    const result = checkCredential(
+      { authorizationHeader: "Bearer nope", credentialQueryParam: undefined },
+      "s3cret",
+    );
+    expect(result.allowed).toBe(false);
+  });
+
+  it("refuses a malformed Authorization header", () => {
+    const result = checkCredential(
+      { authorizationHeader: "s3cret", credentialQueryParam: undefined },
+      "s3cret",
+    );
+    expect(result.allowed).toBe(false);
+  });
+});
