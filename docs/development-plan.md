@@ -561,24 +561,90 @@ in, with no reader for the in-repository file yet; discovery walks with a
 directory-listing seam and no watch; and clone-from-a-PR-card is the same
 `clone` path with a UI that does not exist until §9.4._
 
-### Epic 4.4 — Path claims (`claims`)
+### Epic 4.4 — Path claims (`claims`) — _done (domain; server wiring pending Track A)_
 
-- [ ] Claim model: per-path leases; root claim per workstream; every claim a subdivision of a held claim (§3.4)
-- [ ] Hierarchical conflict (ancestor/descendant paths, not-yet-existing paths covered)
-- [ ] Grant authority follows path hierarchy; human may grant/revoke/force-release anything
-- [ ] Pre-granted claim policies (allow/deny patterns per subtree)
-- [ ] Lease expiry + activity renewal; automatic release on session end
-- [ ] Waitlists as visible state; wait-for-cycle deadlock detection refusing the newest claim with an actionable message
-- [ ] Claim-precise divergence: stale iff a read path was written by a different holder (§3.4)
-- [ ] Operator as implicit claim holder: hand edits are their own divergence class, staling a session only for paths it read (§3.4)
-- [ ] Session tools: request, yield, inspect (enforced server-side, not by convention — principle 4)
+- [x] Claim model: per-path leases; root claim per workstream; every claim a subdivision of a held claim (§3.4)
+- [x] Hierarchical conflict (ancestor/descendant paths, not-yet-existing paths covered)
+- [x] Grant authority follows path hierarchy; human may grant/revoke/force-release anything
+- [x] Pre-granted claim policies (allow/deny patterns per subtree)
+- [x] Lease expiry + activity renewal; automatic release on session end
+- [x] Waitlists as visible state; wait-for-cycle deadlock detection refusing the newest claim with an actionable message
+- [x] Claim-precise divergence: stale iff a read path was written by a different holder (§3.4)
+- [x] Operator as implicit claim holder: hand edits are their own divergence class, staling a session only for paths it read (§3.4)
+- [x] Session tools: request, yield, inspect — decision functions in `core` (`ClaimManager`); the endpoints that expose them are Track A's, tracked in Epic 4.5's carry-over below (principle 4)
 
-### Epic 4.5 — Agent tool surface (`tools`)
+_Landed as `@plotroom/core`'s `claims/` subtree: `paths` (canonicalization stated
+and tested — case-folded, separators and `..` normalized, escapes refused — plus
+the hierarchical conflict rule, over names rather than files, which is why
+not-yet-existing paths are ordinary), `policy` (pre-granted allow/deny per
+subtree with a small auditable glob; **deny wins at any depth**), `model` (the
+records, the effects Track A persists, and the invariants as predicates:
+`violatesGrantExtent`, `violatesSingleWriter`), `deadlock` (the wait-for graph
+over sessions — the operator is never a node, so force-release is always
+available), `manager` (pure decision functions with an injected clock and id
+factory), and `divergence` (claim-precise staleness).
 
-- [ ] Every human gesture exposed as an agent tool over the same API vocabulary (principle 8)
-- [ ] Reflexivity enforcement: no session authors context/capabilities/budget into its own initiation chain; propose-and-accept path for self-touching targets (principle 1) — enforced at the server using the Phase 1 lineage model. _Carry-over from the Epic 2.2 review: `X-PlotRoom-Actor` is currently caller-supplied and trivially forgeable (acceptable single-operator/local). When agent tools land, the tool/runtime layer must set the actor itself from the session it serves — never trust an agent-supplied actor — or principle 1 becomes advisory._
-- [ ] Delegation: child sessions visible on the graph with provenance; spend attributed up the initiating chain (§3.6, principle 2)
-- [ ] Graph warnings readable by agents (§5)
+The shape worth knowing: **grant authority is `authorityFor`**, the deepest claim
+covering a path, so "whoever holds a path may grant inside it" and "who may write
+it" are one lookup and cannot disagree; a claim that merely encloses the path is
+the authority rather than contention, and the operator never blocks. A **wait has
+two independent gates** — availability (`blockedByClaimIds`) and authorization
+(`authorizedAt`) — so a policy-allowed waiter is granted the instant the path
+frees instead of queueing for a second approval, and §6.6's approval is raised at
+request time rather than after the wait. Releasing a claim **reattaches** its
+sub-claims to its own grantor (the capability came from the root grant; a wedged
+intermediary should not punish its children); cascade is the operator's explicit
+revoke. Invariants are asserted over pseudo-random operation sequences
+(`invariants.test.ts`), not just examples.
+
+Retention-style default decided: **claim leases lapse after 15 minutes of
+inactivity** (`DEFAULT_CLAIM_LEASE_SECONDS`), renewed by activity in the claimed
+path — long enough to survive a slow tool call, short enough that a wedged holder
+frees its paths without the operator. Claim waits past **5 minutes** are marked
+for §7.2's alert; the data (position, since-when, blocked-on-human vs
+blocked-on-session, overlapping waitlisted paths) is exposed now, the alerts land
+with Phase 6.
+
+Deferred, honestly: nothing is persisted — `ClaimState` plus the `ClaimEffect`
+list is the persistence contract Track A implements, and the claim endpoints are
+`pending` in the tool catalog until it does; the write ledger
+(`PathWrite`/`PathRead`) is a shape, and who records reads and writes during a run
+lands with Epic 4.2's run path; and `checkClaimContinuation` keeps Epic 4.3's
+conservative verdict whenever the ledger is not complete for the interval, so
+narrowing only takes effect once run-time recording exists._
+
+### Epic 4.5 — Agent tool surface (`tools`) — _done (domain; server mounting pending Track A)_
+
+- [x] Every human gesture exposed as an agent tool over the same API vocabulary (principle 8) — one catalog in `core`, pinned to the server's mounted routes by a test in both directions
+- [x] Reflexivity enforcement: no session authors context/capabilities/budget into its own initiation chain; propose-and-accept path for self-touching targets (principle 1) — `checkToolCall` over the Phase 1 lineage model, called by the bridge before any request is built. _Carry-over resolved in the tool layer: the bridge is constructed with the session it serves, sets `X-PlotRoom-Actor` from that binding, and refuses an actor-shaped input rather than stripping it — a session has no way to say who it is. The server-side half (mount the bridge's transport, keep the header caller-supplied only for the operator) is Track A's._
+- [x] Delegation: child sessions visible on the graph with provenance; spend attributed up the initiating chain (§3.6, principle 2) — `planDelegation` records the `session_delegated` provenance edge and `attributeSpend` writes one ledger row per session in the chain; enforcement lands with Phase 6 budgets
+- [x] Graph warnings readable by agents (§5) — in the catalog as `graph_warnings_read`, `pending` until the warnings endpoint exists
+
+_Landed as `@plotroom/core`'s `sessions/tools/` subtree: `catalog` (the single
+declaration of the vocabulary — name, gesture it mirrors, method, endpoint,
+input schema, and what it requires: a claim, an approval, a lineage class, or the
+operator), `reflexivity` (principle 1 as a refusal, plus `ToolProposal` and a
+human-only `decideProposal`), `bridge` (request building with the actor set from
+the binding; a refused call never reaches the transport), `gate` (per-call
+permission decisions where claims answer, with an undeclared write extent treated
+as unbounded and therefore approval-raising), and `delegation` (provenance plus
+the spend-attribution rows). `adapters/pi/write-intents.ts` declares what pi's
+tools write — today only that `bash` is unbounded, verified by the C6 spike — and
+treats every undeclared tool as unbounded rather than as harmless.
+
+`catalog.test.ts` reads `apps/server/src/routes/` and compares both directions,
+expanding templated route registrations rather than wildcarding them, so a new
+endpoint without a tool fails and a `pending` tool whose endpoint appeared fails
+too.
+
+Deferred, honestly: the endpoints for claims, sessions/dispatch, proposals, and
+graph warnings are `pending` — Track A mounts them and flips the flag (the test
+says which); `ToolTargetIndex` is a seam — resolving which sessions a command node
+feeds is the graph's answer, so Track A supplies the implementation; tool input
+_field_ names are declarations checked by review rather than pinned, because the
+request schemas live in `apps/server` (zod) and `core` cannot import them — when
+those schemas move into `core`, the catalog derives from them; and the propose‑
+and‑accept records are shapes until proposals are persisted._
 
 ---
 
