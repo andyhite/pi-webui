@@ -17,6 +17,8 @@ export type SessionId = Brand<string, "SessionId">;
 export type RunId = Brand<string, "RunId">;
 export type ObjectId = Brand<string, "ObjectId">;
 export type VersionId = Brand<string, "VersionId">;
+/** One entry in the server's state-change stream (§2.1, §8). */
+export type EventId = Brand<string, "EventId">;
 
 /**
  * Id generation lives beside the brands so every store mints ids the same
@@ -41,3 +43,4 @@ export const newSessionId = (): SessionId => newId<"SessionId">("sess");
 export const newRunId = (): RunId => newId<"RunId">("run");
 export const newObjectId = (): ObjectId => newId<"ObjectId">("obj");
 export const newVersionId = (): VersionId => newId<"VersionId">("ver");
+export const newEventId = (): EventId => newId<"EventId">("evt");
