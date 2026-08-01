@@ -21,6 +21,13 @@ export interface GraphNode {
  * transfers of context create one.
  */
 export type ProvenanceKind =
+  /**
+   * A producing command's typed output placeholder (§3.5). Recorded when the
+   * command node is instantiated, before any run, so a placeholder wired
+   * downstream resolves back to the command that will produce it — which is
+   * what lets `wouldCycle` see topology composed ahead of running it.
+   */
+  | "command_declares_output"
   | "command_started_session"
   | "session_created_object"
   | "session_forked_from"

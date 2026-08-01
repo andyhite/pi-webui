@@ -16,3 +16,4 @@ export * from "./versions.js";
 export * from "./edges.js";
 export * from "./lineage.js";
 export * from "./workstreams.js";
+export * from "./commands.js";
