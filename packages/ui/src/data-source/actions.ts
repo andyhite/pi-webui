@@ -77,6 +77,37 @@ export interface RunCommandInput {
   readonly initiationKey: string;
 }
 
+export interface InjectInput {
+  readonly sessionId: string;
+  readonly text: string;
+  /** The caller's own idea of "this gesture" (principle 9); a fresh one per send. */
+  readonly injectionId?: string;
+}
+
+export interface AnswerQuestionInput {
+  readonly questionId: string;
+  readonly optionId: string;
+  readonly text?: string;
+}
+
+export type StopScopeInput =
+  | { readonly scope: "session"; readonly sessionId: string }
+  | { readonly scope: "workstream"; readonly workstreamId: string }
+  | { readonly scope: "everything" };
+
+export interface StopPreview {
+  readonly scope: StopScopeInput["scope"];
+  readonly sessionIds: readonly string[];
+  /** How many sessions this scope would stop — named before the gesture is made (§6.7). */
+  readonly count: number;
+  /** False when nothing is running in scope — disabled, not silent. */
+  readonly enabled: boolean;
+  /** True at the widest scope only (§6.7): the gesture refuses without `confirm: true`. */
+  readonly requiresConfirmation: boolean;
+  /** The sentence every stop surface shows, so they never disagree. */
+  readonly description: string;
+}
+
 export interface GraphActions {
   createWorkstream(
     subjectId?: string,
@@ -97,15 +128,33 @@ export interface GraphActions {
     input: { readonly title?: string; readonly body: string },
   ): Promise<ActionResult<void>>;
   /**
-   * Run one command (§4.1): idempotent in the initiation key. Refusal
-   * reasons travel back verbatim (workspace not ready, budget exceeded, an
-   * initiation key already in flight, ...) — surfaced, never swallowed.
+   * Run one command (§4.1): idempotent in the initiation key, and bounded
+   * by the global concurrency limit like every other initiation (Batch 3's
+   * decision). Two-shaped on success, matching the server's own two-shaped
+   * response: a free slot starts the session immediately (`kind:
+   * "started"`); an admitted-but-waiting gesture answers `kind: "queued"`
+   * with its position, cancellable before it starts via `cancelQueuedRun`.
+   * Refusal reasons (workspace not ready, budget exceeded, ...) travel back
+   * verbatim either way — surfaced, never swallowed.
    */
-  runCommand(
-    input: RunCommandInput,
-  ): Promise<
-    ActionResult<{ readonly runId: string; readonly sessionId: string }>
+  runCommand(input: RunCommandInput): Promise<
+    ActionResult<
+      | {
+          readonly kind: "started";
+          readonly runId: string;
+          readonly sessionId: string;
+        }
+      | {
+          readonly kind: "queued";
+          readonly queueEntryId: string;
+          readonly position: number | null;
+        }
+    >
   >;
+  /** "Cancellable before it starts" (§4.1) — refused once it has. */
+  cancelQueuedRun(
+    queueEntryId: string,
+  ): Promise<ActionResult<{ readonly cancelled: boolean }>>;
   /** A command definition dropped onto a bare ticket (§3.5, §3.3), post-workstream. */
   instantiateCommand(
     input: InstantiateCommandInput,
@@ -131,6 +180,42 @@ export interface GraphActions {
       } | null;
     }>
   >;
+  /**
+   * Add content to a running session mid-flight (§6.5). `status` is
+   * `queued` or `refused` (a live but unattached runtime) — never
+   * `delivered`: that is the separate observed fact the ledger
+   * (`SessionDataSource.subscribeInjections`) reports, never assumed here.
+   */
+  injectIntoSession(input: InjectInput): Promise<
+    ActionResult<{
+      readonly injectionId: string;
+      readonly status: "queued" | "refused";
+      readonly refusedReason: string | null;
+    }>
+  >;
+  /**
+   * Answer a structured question (§6.4), inline from its bubble or the
+   * panel — the same endpoint either way. `settled` is false for a question
+   * raised over HTTP rather than blocking a runtime call.
+   */
+  answerQuestion(
+    input: AnswerQuestionInput,
+  ): Promise<ActionResult<{ readonly settled: boolean }>>;
+  /**
+   * What a stop would cover, without making it (§6.7) — a read, so looking
+   * is free. Not wrapped in `ActionResult`: a preview never refuses, it only
+   * ever answers with a count (possibly zero) and whether it is enabled.
+   */
+  previewStop(scope: StopScopeInput): Promise<StopPreview>;
+  /**
+   * Stop at a scope (§6.7). The widest scope refuses with
+   * `confirmation_required` unless `confirm` is set — the same refusal
+   * channel every other gesture uses, so a caller catches it the same way
+   * ("stop everything" answers this, a caller re-asks with `confirm: true`).
+   */
+  stopScope(
+    input: StopScopeInput & { readonly confirm?: boolean },
+  ): Promise<ActionResult<{ readonly stoppedSessionIds: readonly string[] }>>;
 }
 
 export function createApiActions(http: HttpClient): GraphActions {
@@ -196,10 +281,40 @@ export function createApiActions(http: HttpClient): GraphActions {
     runCommand: (input) =>
       asAction(async () => {
         const response = await http.post<{
-          run: { readonly id: string };
-          session: { readonly id: string };
+          run: { readonly id: string } | null;
+          session: { readonly id: string } | null;
+          queued: {
+            readonly id: string;
+            readonly position: number | null;
+          } | null;
         }>("/api/runs", input);
-        return { runId: response.run.id, sessionId: response.session.id };
+        if (response.run !== null && response.session !== null) {
+          return {
+            kind: "started" as const,
+            runId: response.run.id,
+            sessionId: response.session.id,
+          };
+        }
+        if (response.queued !== null) {
+          return {
+            kind: "queued" as const,
+            queueEntryId: response.queued.id,
+            position: response.queued.position,
+          };
+        }
+        // Neither shape the contract promises — not a refusal (no 409), and
+        // pretending success here would be worse than throwing (principle 12).
+        throw new Error(
+          "POST /api/runs returned neither a started run nor a queued entry",
+        );
+      }),
+
+    cancelQueuedRun: (queueEntryId) =>
+      asAction(async () => {
+        const response = await http.delete<{ readonly cancelled: boolean }>(
+          apiPath("/api/run-queue", queueEntryId),
+        );
+        return { cancelled: response.cancelled };
       }),
 
     reorderContext: (nodeId, edgeIds) =>
@@ -219,7 +334,69 @@ export function createApiActions(http: HttpClient): GraphActions {
         }>(checkpointPath(sessionId));
         return { publication: response.published?.publication ?? null };
       }),
+
+    injectIntoSession: (input) =>
+      asAction(async () => {
+        const response = await http.post<{
+          injectionId: string;
+          status: "queued" | "refused";
+          refusedReason: string | null;
+        }>(`${apiPath("/api/sessions", input.sessionId)}/inject`, {
+          text: input.text,
+          ...(input.injectionId === undefined
+            ? {}
+            : { injectionId: input.injectionId }),
+        });
+        return {
+          injectionId: response.injectionId,
+          status: response.status,
+          refusedReason: response.refusedReason,
+        };
+      }),
+
+    answerQuestion: (input) =>
+      asAction(async () => {
+        const response = await http.post<{ settled: boolean }>(
+          `${apiPath("/api/questions", input.questionId)}/answer`,
+          {
+            optionId: input.optionId,
+            ...(input.text === undefined ? {} : { text: input.text }),
+          },
+        );
+        return { settled: response.settled };
+      }),
+
+    previewStop: (scope) =>
+      http.get<StopPreview>(`/api/stops/preview?${stopQuery(scope)}`),
+
+    stopScope: (input) =>
+      asAction(async () => {
+        const response = await http.post<{ stopped: readonly string[] }>(
+          "/api/stops",
+          {
+            scope: input.scope,
+            ...(input.scope === "session"
+              ? { sessionId: input.sessionId }
+              : {}),
+            ...(input.scope === "workstream"
+              ? { workstreamId: input.workstreamId }
+              : {}),
+            confirm: input.confirm ?? false,
+          },
+        );
+        return { stoppedSessionIds: response.stopped };
+      }),
   };
+}
+
+/** `scope=...&sessionId=...`/`workstreamId=...` — the query shape `GET /stops/preview` reads. */
+function stopQuery(scope: StopScopeInput): string {
+  const params = new URLSearchParams({ scope: scope.scope });
+  if (scope.scope === "session") params.set("sessionId", scope.sessionId);
+  if (scope.scope === "workstream") {
+    params.set("workstreamId", scope.workstreamId);
+  }
+  return params.toString();
 }
 
 /** `/api/sessions/<id>/checkpoint` — same path-encoding rule as {@link apiPath}. */

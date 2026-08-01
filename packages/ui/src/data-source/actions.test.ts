@@ -112,10 +112,11 @@ describe("createApiActions", () => {
     });
   });
 
-  it("runCommand posts to /api/runs and returns the run/session ids", async () => {
+  it("runCommand posts to /api/runs and returns kind: started with the run/session ids", async () => {
     const post = vi.fn(async () => ({
       run: { id: "run1" },
       session: { id: "sess1" },
+      queued: null,
     }));
     const actions = createApiActions(fakeHttp({ post }));
 
@@ -130,8 +131,37 @@ describe("createApiActions", () => {
     });
     expect(result).toEqual({
       ok: true,
-      value: { runId: "run1", sessionId: "sess1" },
+      value: { kind: "started", runId: "run1", sessionId: "sess1" },
     });
+  });
+
+  it("runCommand reports a 202 admission as kind: queued rather than crashing on a null run/session", async () => {
+    const post = vi.fn(async () => ({
+      run: null,
+      session: null,
+      queued: { id: "q1", position: 3 },
+    }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.runCommand({
+      commandId: "cmd1",
+      initiationKey: "key1",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: { kind: "queued", queueEntryId: "q1", position: 3 },
+    });
+  });
+
+  it("cancelQueuedRun deletes the queue entry", async () => {
+    const del = vi.fn(async () => ({ cancelled: true }));
+    const actions = createApiActions(fakeHttp({ delete: del }));
+
+    const result = await actions.cancelQueuedRun("q1");
+
+    expect(del).toHaveBeenCalledWith("/api/run-queue/q1");
+    expect(result).toEqual({ ok: true, value: { cancelled: true } });
   });
 
   it("runCommand surfaces a refusal (e.g. the workspace isn't ready) rather than throwing", async () => {
@@ -206,5 +236,114 @@ describe("createApiActions", () => {
     const result = await actions.checkpointTranscript("sess1");
 
     expect(result).toEqual({ ok: true, value: { publication: null } });
+  });
+
+  it("injectIntoSession posts to the session's inject endpoint", async () => {
+    const post = vi.fn(async () => ({
+      injectionId: "inj1",
+      status: "queued",
+      refusedReason: null,
+    }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.injectIntoSession({
+      sessionId: "sess/1",
+      text: "stop grepping",
+      injectionId: "inj1",
+    });
+
+    expect(post).toHaveBeenCalledWith("/api/sessions/sess%2F1/inject", {
+      text: "stop grepping",
+      injectionId: "inj1",
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: { injectionId: "inj1", status: "queued", refusedReason: null },
+    });
+  });
+
+  it("answerQuestion posts to the question's answer endpoint", async () => {
+    const post = vi.fn(async () => ({
+      question: {},
+      answer: {},
+      pathsNotTaken: [],
+      settled: true,
+    }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.answerQuestion({
+      questionId: "q1",
+      optionId: "opt-yes",
+    });
+
+    expect(post).toHaveBeenCalledWith("/api/questions/q1/answer", {
+      optionId: "opt-yes",
+    });
+    expect(result).toEqual({ ok: true, value: { settled: true } });
+  });
+
+  it("previewStop reads GET /api/stops/preview with the scope's own query params, never wrapped in ActionResult", async () => {
+    const get = vi.fn(async () => ({
+      scope: "workstream",
+      sessionIds: ["s1", "s2"],
+      count: 2,
+      enabled: true,
+      requiresConfirmation: false,
+      description: "stop 2 sessions in this workstream",
+    }));
+    const actions = createApiActions(fakeHttp({ get }));
+
+    const preview = await actions.previewStop({
+      scope: "workstream",
+      workstreamId: "ws1",
+    });
+
+    expect(get).toHaveBeenCalledWith(
+      "/api/stops/preview?scope=workstream&workstreamId=ws1",
+    );
+    expect(preview.count).toBe(2);
+  });
+
+  it("stopScope posts scope + confirm to /api/stops", async () => {
+    const post = vi.fn(async () => ({ stopped: ["s1"] }));
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.stopScope({
+      scope: "session",
+      sessionId: "s1",
+      confirm: true,
+    });
+
+    expect(post).toHaveBeenCalledWith("/api/stops", {
+      scope: "session",
+      sessionId: "s1",
+      confirm: true,
+    });
+    expect(result).toEqual({ ok: true, value: { stoppedSessionIds: ["s1"] } });
+  });
+
+  it("stopScope surfaces the widest-scope confirmation refusal rather than throwing", async () => {
+    const post = vi.fn(async () => {
+      throw new HttpError(409, "/api/stops", {
+        error: {
+          code: "refused",
+          message:
+            "stop everything running — confirm to stop everything running (§6.7)",
+          details: { reason: "confirmation_required" },
+        },
+      });
+    });
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.stopScope({ scope: "everything" });
+
+    expect(result).toEqual({
+      ok: false,
+      refusal: {
+        reason: "confirmation_required",
+        message:
+          "stop everything running — confirm to stop everything running (§6.7)",
+      },
+    });
   });
 });
