@@ -21,6 +21,7 @@ import {
   evaluateSessionBroadcastScope,
   planHumanBroadcast,
   planSessionBroadcast,
+  senderSharesScope,
   type BroadcastIds,
   type BroadcastMember,
   type BroadcastSend,
@@ -267,6 +268,111 @@ describe("a session's broadcast carries its constraints (§6.5)", () => {
     expect(planned.ok).toBe(false);
     if (planned.ok) return;
     expect(planned.refusal.reason).toBe("empty_scope");
+  });
+
+  it("refuses a scope the sender does not stand in (§6.5's 'this' repository)", () => {
+    // The attack this closes: a foreign workspace with one session in it is a
+    // recipient list of exactly one, dressed as a scope of shared state.
+    const foreignWorkspace = newWorkspaceId();
+    const alone = newSessionId();
+    const planned = planSessionBroadcast(
+      {
+        world: {
+          members: [
+            member(sender, {
+              workstreamId: senderWorkstream,
+              workspaceId: WORKSPACE,
+            }),
+            member(alone, { workspaceId: foreignWorkspace }),
+          ],
+        },
+        history: [],
+        lineage,
+      },
+      {
+        ...request,
+        scope: { kind: "everyone-in-workspace", workspaceId: foreignWorkspace },
+      },
+    );
+
+    expect(planned.ok).toBe(false);
+    if (planned.ok) return;
+    expect(planned.refusal.reason).toBe("scope_not_shared");
+  });
+
+  it("refuses a repository the sender's workspace does not stand in", () => {
+    const planned = planSessionBroadcast(
+      { world, history: [], lineage },
+      {
+        ...request,
+        scope: { kind: "everyone-in-repository", repositoryId: OTHER_REPO },
+      },
+    );
+
+    expect(planned.ok).toBe(false);
+    if (planned.ok) return;
+    expect(planned.refusal.reason).toBe("scope_not_shared");
+  });
+
+  it("refuses a sender the world does not know: absent membership is not membership", () => {
+    const stranger = newSessionId();
+    const planned = planSessionBroadcast(
+      { world, history: [], lineage },
+      { ...request, senderSessionId: stranger },
+    );
+
+    expect(planned.ok).toBe(false);
+    if (planned.ok) return;
+    expect(planned.refusal.reason).toBe("scope_not_shared");
+  });
+
+  it("checks the shared scope before the rate bound, so probing costs nothing", () => {
+    // Three sends already in the window: rate-limited if it got that far. It must
+    // not, or a `rate_limited` answer would confirm a scope the sender is not in.
+    const full: readonly BroadcastSend[] = [
+      { senderSessionId: sender, at: 9_990 },
+      { senderSessionId: sender, at: 9_991 },
+      { senderSessionId: sender, at: 9_992 },
+    ];
+    const planned = planSessionBroadcast(
+      { world, history: full, lineage },
+      {
+        ...request,
+        scope: { kind: "everyone-in-repository", repositoryId: OTHER_REPO },
+      },
+    );
+
+    expect(planned.ok).toBe(false);
+    if (planned.ok) return;
+    expect(planned.refusal.reason).toBe("scope_not_shared");
+  });
+
+  it("tells the scope question apart from the may-I question", () => {
+    // `evaluateSessionBroadcastScope` still answers "who is in that scope" for a
+    // scope the sender is not in — that is the operator's question, and it is not
+    // the one that gates a session.
+    expect(
+      evaluateSessionBroadcastScope(
+        world,
+        { kind: "everyone-in-repository", repositoryId: OTHER_REPO },
+        sender,
+      ).map((entry) => entry.sessionId),
+    ).toEqual([elsewhere]);
+
+    expect(
+      senderSharesScope(
+        world,
+        { kind: "everyone-in-repository", repositoryId: REPO },
+        sender,
+      ),
+    ).toBe(true);
+    expect(
+      senderSharesScope(
+        world,
+        { kind: "everyone-in-repository", repositoryId: OTHER_REPO },
+        sender,
+      ),
+    ).toBe(false);
   });
 
   it("is visible to the operator: one attention row, one activity entry per workstream", () => {

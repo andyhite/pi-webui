@@ -36,7 +36,9 @@ import {
  *   on this path, and the type carries no field for any of them.
  * - **Session broadcast names a scope of shared material state, never a
  *   recipient.** `SessionBroadcastScope` has no variant that lists sessions, so a
- *   chosen list is not something a session can express. It also carries a
+ *   chosen list is not something a session can express — and the scope must be
+ *   one the sender itself stands in (`senderSharesScope`), or naming a foreign
+ *   workspace would be a recipient list with extra steps. It also carries a
  *   mandatory declared category from a closed enum, is rate-bounded per sender
  *   per window, and charges induced spend to the sender's budget chain.
  *
@@ -49,9 +51,10 @@ import {
  * the same thing. (Excluding the sender's chain would exclude exactly the
  * sessions most likely affected.)" So `planSessionBroadcast` does not call
  * `checkAuthoring`, on purpose, and a test asserts that a parent in scope
- * receives it. What bounds the channel instead: the scope is evaluated from
- * material state, the category is declared and auditable, the rate is bounded,
- * the spend lands on the sender, and the operator sees every one of them.
+ * receives it. What bounds the channel instead: the sender has to stand in the
+ * scope it names, the scope is evaluated from material state, the category is
+ * declared and auditable, the rate is bounded, the spend lands on the sender, and
+ * the operator sees every one of them.
  */
 
 export const SESSION_BROADCAST_CATEGORIES = [
@@ -119,22 +122,58 @@ function running(world: BroadcastWorld): readonly BroadcastMember[] {
   return world.members.filter((member) => member.running);
 }
 
+/** Whether one session stands in a scope — the whole of what "in" means. */
+function standsIn(
+  member: BroadcastMember,
+  scope: SessionBroadcastScope,
+): boolean {
+  return scope.kind === "everyone-in-repository"
+    ? member.repositoryIds.includes(scope.repositoryId)
+    : member.workspaceId !== null && member.workspaceId === scope.workspaceId;
+}
+
+/**
+ * Whether the sender shares the state it is declaring, which is what makes the
+ * scope a *fact about the sender* rather than an address (§6.5).
+ *
+ * The spec's scopes are deictic: "**this** repository," "**this** workspace" — a
+ * session telling everyone in the repository it just rebased is reporting on the
+ * repository it is standing in. Without this check the scope is an address after
+ * all: name a workspace some other single session occupies and "a scope of shared
+ * material state" resolves to exactly one chosen recipient, which is the
+ * recipient list §6.5 refuses to let a session write. So a scope the sender is
+ * not in is refused rather than evaluated.
+ *
+ * A sender the world does not know is not in any scope either — absent membership
+ * is not membership (principle 7).
+ */
+export function senderSharesScope(
+  world: BroadcastWorld,
+  scope: SessionBroadcastScope,
+  sender: SessionId,
+): boolean {
+  const member = world.members.find((entry) => entry.sessionId === sender);
+  return member !== undefined && standsIn(member, scope);
+}
+
 /**
  * Evaluate a scope against material state. The sender's *own session* is not a
  * recipient — it already knows — but every other session in scope is, its own
  * ancestors and descendants included (see the module comment).
+ *
+ * This answers "who is in that scope" and nothing else. Whether the sender may
+ * declare it is `senderSharesScope`, checked by `planSessionBroadcast`: keeping
+ * them apart means the operator's own view of a scope ("who would this reach")
+ * does not inherit a rule that only binds sessions.
  */
 export function evaluateSessionBroadcastScope(
   world: BroadcastWorld,
   scope: SessionBroadcastScope,
   sender: SessionId,
 ): readonly BroadcastMember[] {
-  return running(world).filter((member) => {
-    if (member.sessionId === sender) return false;
-    return scope.kind === "everyone-in-repository"
-      ? member.repositoryIds.includes(scope.repositoryId)
-      : member.workspaceId !== null && member.workspaceId === scope.workspaceId;
-  });
+  return running(world).filter(
+    (member) => member.sessionId !== sender && standsIn(member, scope),
+  );
 }
 
 /** The operator's target list, resolved to what is actually running (§6.5, §6.7). */
@@ -300,6 +339,11 @@ export interface BroadcastPlan {
 export const BROADCAST_REFUSAL_REASONS = [
   /** Nothing running matches the declared scope, so nothing was sent. */
   "empty_scope",
+  /**
+   * The sender does not stand in the scope it declared, so the scope is an
+   * address rather than a shared fact (§6.5). Sessions only.
+   */
+  "scope_not_shared",
   /** The per-sender window is full (§6.5). */
   "rate_limited",
 ] as const;
@@ -443,14 +487,37 @@ export interface SessionBroadcastContext {
 
 /**
  * A session's broadcast. Every §6.5 constraint is applied here, in one place:
- * the scope is evaluated against material state, the category rides on the
- * content, the rate bound refuses with a retry-after, and the plan names the
- * sender's whole chain as what the induced turns are charged to.
+ * the sender must share the state it declares, the scope is evaluated against
+ * material state, the category rides on the content, the rate bound refuses with
+ * a retry-after, and the plan names the sender's whole chain as what the induced
+ * turns are charged to.
+ *
+ * Order matters between the first two: the shared-scope check runs **before** the
+ * rate bound, so a session probing for a scope it is not in cannot burn its own
+ * window doing it — and, more importantly, cannot learn from a `rate_limited`
+ * answer that a scope it named exists.
  */
 export function planSessionBroadcast(
   context: SessionBroadcastContext,
   request: SessionBroadcastRequest,
 ): BroadcastResult {
+  if (
+    !senderSharesScope(context.world, request.scope, request.senderSessionId)
+  ) {
+    return {
+      ok: false,
+      refusal: {
+        reason: "scope_not_shared",
+        // §6.5's scopes are "everyone in *this* repository" and "everyone in
+        // *this* workspace": a scope is a fact about where the sender stands. One
+        // it is not in would be an address — and a foreign workspace with one
+        // session in it is a recipient list of exactly one.
+        message:
+          "a session broadcasts to a scope it stands in: name the repository or workspace this session is working in (§6.5)",
+      },
+    };
+  }
+
   const rate = checkBroadcastRate(
     context.history,
     request.senderSessionId,
