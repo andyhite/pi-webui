@@ -2,6 +2,7 @@ import {
   ConnectionRefused,
   EntityNotFound,
   LifecycleRefused,
+  PlacementRefused,
   PublishRefused,
   RunRefused,
   ScopeRefused,
@@ -28,6 +29,7 @@ export function toApiError(err: unknown): ApiError | null {
   if (
     err instanceof ConnectionRefused ||
     err instanceof ScopeRefused ||
+    err instanceof PlacementRefused ||
     err instanceof LifecycleRefused ||
     err instanceof PublishRefused ||
     err instanceof RunRefused
