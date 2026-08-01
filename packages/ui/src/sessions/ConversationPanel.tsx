@@ -31,6 +31,12 @@ import type { SessionDraftsStore } from "./drafts.js";
 import { exportIncompleteMessage, exportTranscriptAsync } from "./export.js";
 import { buildTranscriptView } from "./transcript-view.js";
 import type { TranscriptViewItem } from "./transcript-view.js";
+import {
+  DEFAULT_TRANSCRIPT_WINDOW,
+  computeTailWindow,
+  growTranscriptWindow,
+  hasEarlierTurns,
+} from "./windowing.js";
 
 export interface ConversationPanelProps {
   readonly sessionId: SessionId;
@@ -83,6 +89,10 @@ export function ConversationPanel({
   copyToClipboard = defaultCopyToClipboard,
 }: ConversationPanelProps) {
   const [detail, setDetail] = useState<SessionDetail | null>(null);
+  // Bounded rendering (§6.1 mechanics): a live tail window, not the whole
+  // transcript — reset per session so switching sessions never carries a
+  // stale "loaded earlier turns" state into an unrelated one.
+  const [windowSize, setWindowSize] = useState(DEFAULT_TRANSCRIPT_WINDOW);
   const [transcript, setTranscript] = useState<Transcript>({
     sessionId,
     turns: [],
@@ -105,6 +115,7 @@ export function ConversationPanel({
     let cancelled = false;
     setDetail(null);
     setTranscript({ sessionId, turns: [] });
+    setWindowSize(DEFAULT_TRANSCRIPT_WINDOW);
 
     void draftsStore.load(sessionId).then((state) => {
       if (cancelled) return;
@@ -133,6 +144,11 @@ export function ConversationPanel({
   }, [sessionId, dataSource, draftsStore]);
 
   const turns = buildTranscriptView(transcript);
+  // Bounded rendering (§6.1 mechanics, Epic 5.1 finish): a live tail window
+  // of turns, not the whole history — "load earlier turns" grows it one
+  // step at a time rather than rendering a thousand-turn DOM up front.
+  const turnWindow = computeTailWindow(turns.length, windowSize);
+  const windowedTurns = turns.slice(turnWindow.start, turnWindow.end);
 
   function handleDraftChange(next: string): void {
     setDraft(next);
@@ -181,6 +197,10 @@ export function ConversationPanel({
     setExportResult(result);
   }
 
+  function handleLoadEarlierTurns(): void {
+    setWindowSize((current) => growTranscriptWindow(current, turns.length));
+  }
+
   if (detail === null) {
     return <div role="status">loading session {sessionId}…</div>;
   }
@@ -202,7 +222,12 @@ export function ConversationPanel({
       </div>
 
       <div>
-        {turns.map((turn) => (
+        {hasEarlierTurns(turnWindow) ? (
+          <button type="button" onClick={handleLoadEarlierTurns}>
+            load earlier turns ({turnWindow.start} not shown)
+          </button>
+        ) : null}
+        {windowedTurns.map((turn) => (
           <div key={turn.ordinal}>
             <div>turn {turn.ordinal}</div>
             <ul>

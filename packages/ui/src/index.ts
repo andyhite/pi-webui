@@ -56,3 +56,4 @@ export * from "./bubbles/placement.js";
 export * from "./bubbles/derive-sources.js";
 export * from "./bubbles/question-source.js";
 export * from "./bubbles/BubbleLayer.js";
+export * from "./sessions/windowing.js";
