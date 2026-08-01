@@ -70,6 +70,17 @@ export interface ConversationPanelProps {
    */
   readonly onCheckpointTranscript?: (sessionId: SessionId) => void;
   readonly checkpointDisabledReason?: string | undefined;
+  /**
+   * Resume vs fork (§6.3): "continuing a session is an explicit choice
+   * between resume and fork — never an implicit consequence of typing into
+   * it." Once `detail.session.end` is set, this panel replaces the composer
+   * with exactly these two choices — there is no third path back to typing
+   * into an ended session, and neither fires without the operator picking
+   * one.
+   */
+  readonly onResume?: (sessionId: SessionId) => void;
+  /** Forks from the given 1-based turn (defaults to the transcript's last turn). */
+  readonly onFork?: (sessionId: SessionId, turn: number) => void;
   /** Injectable so copy is testable without a real clipboard. */
   readonly copyToClipboard?: (text: string) => void;
 }
@@ -102,6 +113,8 @@ export function ConversationPanel({
   onWireAsContext,
   onCheckpointTranscript,
   checkpointDisabledReason,
+  onResume,
+  onFork,
   copyToClipboard = defaultCopyToClipboard,
 }: ConversationPanelProps) {
   const [detail, setDetail] = useState<SessionDetail | null>(null);
@@ -132,6 +145,10 @@ export function ConversationPanel({
   const [injections, setInjections] = useState<readonly InjectionLedgerEntry[]>(
     [],
   );
+  // Resume-vs-fork (§6.3): the turn to fork from. Null until the operator
+  // edits it, so the default tracks the transcript's own last turn instead
+  // of freezing at whatever it was when the panel first rendered.
+  const [forkTurn, setForkTurn] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -364,31 +381,78 @@ export function ConversationPanel({
       </div>
 
       <div>
-        <div>prompt history</div>
-        <ul>
-          {history.map((entry, index) => (
-            <li key={index}>
-              <button type="button" onClick={() => recallFromHistory(entry)}>
-                {entry}
-              </button>
-            </li>
-          ))}
-        </ul>
-        <textarea
-          value={draft}
-          onChange={(event) => handleDraftChange(event.target.value)}
-        />
-        <button
-          type="button"
-          onClick={handleSend}
-          disabled={sendDisabledReason !== undefined}
-          title={sendDisabledReason}
-        >
-          send
-        </button>
-        {sendDisabledReason !== undefined ? (
-          <div data-testid="send-disabled-reason">{sendDisabledReason}</div>
-        ) : null}
+        {session.end !== null ? (
+          // Resume-vs-fork (§6.3): the composer is replaced entirely, not
+          // merely disabled — typing into an ended session has no
+          // disposition of its own, so there is no textarea here for it to
+          // fall back to. Two explicit choices, nothing implicit.
+          <div data-testid="resume-or-fork">
+            <div>
+              this session has ended — resume it, or fork from a point (§6.3)
+            </div>
+            <button
+              type="button"
+              onClick={() => onResume?.(sessionId)}
+              disabled={!onResume}
+            >
+              resume
+            </button>
+            <label>
+              fork from turn
+              <input
+                type="number"
+                min={1}
+                value={forkTurn ?? transcript.turns.at(-1)?.ordinal ?? 1}
+                onChange={(event) =>
+                  setForkTurn(Number(event.target.value) || 1)
+                }
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() =>
+                onFork?.(
+                  sessionId,
+                  forkTurn ?? transcript.turns.at(-1)?.ordinal ?? 1,
+                )
+              }
+              disabled={!onFork}
+            >
+              fork
+            </button>
+          </div>
+        ) : (
+          <>
+            <div>prompt history</div>
+            <ul>
+              {history.map((entry, index) => (
+                <li key={index}>
+                  <button
+                    type="button"
+                    onClick={() => recallFromHistory(entry)}
+                  >
+                    {entry}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <textarea
+              value={draft}
+              onChange={(event) => handleDraftChange(event.target.value)}
+            />
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={sendDisabledReason !== undefined}
+              title={sendDisabledReason}
+            >
+              send
+            </button>
+            {sendDisabledReason !== undefined ? (
+              <div data-testid="send-disabled-reason">{sendDisabledReason}</div>
+            ) : null}
+          </>
+        )}
         {injections.length > 0 ? (
           <ul>
             {injections.map((entry) => (
