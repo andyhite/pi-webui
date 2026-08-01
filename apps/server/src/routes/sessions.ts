@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import {
   BUDGET_SCOPES,
+  endedBy,
   endStateFacts,
   exportTranscript,
   systemMillisClock,
@@ -72,6 +73,9 @@ export function sessionRoutes(
       status: stores.sessions.status(id, { now: systemMillisClock() }),
       end:
         stored.session.end === null ? null : endStateFacts(stored.session.end),
+      // Resolved through core, so "an omitted author means the operator" is
+      // stated once rather than assumed differently by each surface (§3.6).
+      endedBy: stored.session.end === null ? null : endedBy(stored.session.end),
       injections: stores.sessions.injections(id),
     });
   });
@@ -133,12 +137,18 @@ export function sessionRoutes(
   });
 
   /** §3.5: an open session ends when the user ends it. */
+  /**
+   * §3.5: an open session ends when the user ends it — and the record says which
+   * user. The attributed actor is the caller's, the same one every other gesture
+   * carries, so a card can say "ended by you" or name the session that did it.
+   */
   app.post("/sessions/:id/end", async (c) => {
-    const ended = await service.endOpenSession(param(c, "id"));
+    const ended = await service.endOpenSession(param(c, "id"), actorOf(c));
 
     return c.json({
       session: ended.session,
       end: ended.session.end === null ? null : endStateFacts(ended.session.end),
+      endedBy: ended.session.end === null ? null : endedBy(ended.session.end),
     });
   });
 

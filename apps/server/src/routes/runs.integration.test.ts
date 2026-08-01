@@ -1323,6 +1323,44 @@ describe("end states are distinct (§3.6, principle 11)", () => {
     });
   });
 
+  it("records who ended an open session, and defaults to the operator", async () => {
+    const harness = await boot(repository());
+    const first = await command(harness, { lifecycle: "open" });
+    const started = await run(harness, first.commandId, neverEnds);
+
+    const ended = await harness.ok(
+      `/sessions/${str(started, "session.id")}/end`,
+      { method: "POST", body: {} },
+    );
+
+    // The runtime cannot know who ended it — it sees its input close — so the
+    // actor comes from the caller, like every other gesture (§3.6).
+    expect(at(ended, "session.end.kind")).toBe("ended-by-user");
+    expect(at(ended, "endedBy")).toEqual({ kind: "human" });
+
+    // A peer session's gesture is recorded as that session's, not the
+    // operator's, so accounting can tell them apart.
+    const second = await command(harness, { lifecycle: "open" });
+    const peerRun = await run(harness, second.commandId, neverEnds);
+    const peerSessionId = str(peerRun, "session.id");
+    const third = await command(harness, { lifecycle: "open" });
+    const target = await run(harness, third.commandId, neverEnds);
+
+    const byPeer = await harness.ok(
+      `/sessions/${str(target, "session.id")}/end`,
+      { method: "POST", body: {}, actor: `session:${peerSessionId}` },
+    );
+
+    expect(at(byPeer, "endedBy")).toEqual({
+      kind: "session",
+      sessionId: peerSessionId,
+    });
+
+    // And the read agrees with the write: one place resolves the default.
+    const read = await harness.ok(`/sessions/${str(started, "session.id")}`);
+    expect(at(read, "endedBy")).toEqual({ kind: "human" });
+  });
+
   it("interrupts a live session at a graceful shutdown rather than orphaning it", async () => {
     const repositoryPath = gitRepository();
     const stateDir = mkdtempSync(join(tmpdir(), "plotroom-shutdown-"));

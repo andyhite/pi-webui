@@ -531,7 +531,10 @@ export class RunService {
    * it ends on proven completion, or it is stopped, and calling this on one is
    * refused rather than quietly recorded as something it was not.
    */
-  async endOpenSession(sessionId: string): Promise<StoredSession> {
+  async endOpenSession(
+    sessionId: string,
+    actor: Author = { kind: "human" },
+  ): Promise<StoredSession> {
     const { stores } = this.deps;
     const session = stores.sessions.get(sessionId);
 
@@ -544,17 +547,21 @@ export class RunService {
     }
 
     // Written before the runtime is stopped, for the same reason as a stop: the
-    // adapter's report must not win over the outcome PlotRoom knows.
-    const ended = stores.sessions.end(sessionId, {
-      kind: "ended-by-user",
-      at: stores.clock(),
-    });
+    // adapter's report must not win over the outcome PlotRoom knows. Through
+    // `classifyEnd` like every other end, carrying the actor the runtime could
+    // not know — it sees its input close, not who closed it (§3.6).
+    const ended = stores.sessions.end(
+      sessionId,
+      classifyEnd({ kind: "ended-by-user" }, stores.clock(), {
+        endedBy: actor,
+      }),
+    );
 
     const live = this.deps.hub.get(sessionId);
     if (live) await live.handle.stop("graceful");
 
     await this.endRunFor(ended);
-    this.publishSession(ended, { kind: "human" });
+    this.publishSession(ended, actor);
 
     return ended;
   }
