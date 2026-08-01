@@ -198,6 +198,13 @@ const workstreamTools: readonly AgentTool[] = [
     },
   }),
   read(
+    "workstream_spend_read",
+    "Read a workstream's total spend — every session in it, counted once (§8).",
+    "the spend line on a workstream card",
+    "/api/workstreams/:id/spend",
+    { id: ID },
+  ),
+  read(
     "workstream_list",
     "List workstreams.",
     "the canvas at workstream zoom (§5)",
@@ -883,6 +890,13 @@ const sessionTools: readonly AgentTool[] = [
     },
   ),
   read(
+    "session_spend_read",
+    "Read what a session's budgets are charged: its own work plus everything it delegated (§3.6, principle 2).",
+    "the accounting on a session card (§8)",
+    "/api/sessions/:id/spend",
+    { id: ID },
+  ),
+  read(
     "session_transcript_read",
     "Read a session's transcript with its three renderings (§6.1).",
     "the conversation panel",
@@ -1284,6 +1298,12 @@ const boardTools: readonly AgentTool[] = [
     "List what can be restored, including an agent's own deletions (principle 10).",
     "the undo list",
     "/api/restorable",
+  ),
+  read(
+    "fleet_spend_read",
+    "Read the fleet's total spend — what everything running and finished has cost (§8).",
+    "the fleet panel's today's-total line (§11)",
+    "/api/spend",
   ),
   read(
     "health_read",

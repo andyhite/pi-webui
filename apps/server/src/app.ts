@@ -28,6 +28,7 @@ import { restorableRoutes } from "./routes/restorable.js";
 import { runRoutes } from "./routes/runs.js";
 import { sessionRoutes } from "./routes/sessions.js";
 import { snapshotRoutes } from "./routes/snapshot.js";
+import { spendRoutes } from "./routes/spend.js";
 import { workstreamRoutes } from "./routes/workstreams.js";
 import { RunService } from "./runs/service.js";
 import { createRuntimeRegistry } from "./runtime/index.js";
@@ -145,6 +146,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", runRoutes(stores, runs));
   app.route("/api", sessionRoutes(stores, runs, claims));
   app.route("/api", claimRoutes(claims));
+  app.route("/api", spendRoutes(stores));
   app.route(
     "/api",
     maintenanceRoutes(stores, config, compaction, workspaceKinds, logger),
