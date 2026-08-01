@@ -256,11 +256,43 @@ lineage a session-authored refusal reads is written by the store, not by an
 API); approval-gated destruction (§6.6) — an agent may delete today, and
 recoverability is the answer principle 10 gives._
 
-### Epic 2.3 — Durability and portability (`server`, `db`)
+### Epic 2.3 — Durability and portability (`server`, `db`) — _done_
 
-- [ ] All state in the single portable store; survives restart; backup/move story (§12)
-- [ ] Reset and cleanup verbs: arrangement / derived state / everything — each stating what it removes first (§12)
-- [ ] Version compaction **job** implementing the §15-3 rule (windowed, pin-aware) — the schema and the predicate land in Epic 1.1; this epic owns only scheduling and blob sweeping
+- [x] All state in the single portable store; survives restart; backup/move story (§12)
+- [x] Reset and cleanup verbs: arrangement / derived state / everything — each stating what it removes first (§12)
+- [x] Version compaction **job** implementing the §15-3 rule (windowed, pin-aware) — the schema and the predicate land in Epic 1.1; this epic owns only scheduling and blob sweeping
+
+_Landed as `Maintenance` in `@plotroom/db` plus `apps/server`'s
+`maintenance/`. The portability claim is tested rather than asserted:
+`durability.integration.test.ts` copies `plotroom.db` and `blobs/` to a
+differently-named directory, starts a second server on a different port, and
+asserts the snapshot, the arrangement, and the content are identical.
+`GET /api/maintenance/state` is where that story is data — it names the one
+directory to back up, what is inside it, and the derived directories
+deliberately **excluded** (`workspaces/`, `git-cache/`, `runtime/`), each with
+its reason; a provisioned git worktree records absolute paths, so copying one
+somewhere else would move something already broken.
+
+The cleanup verbs are a plan and an execution, never one call:
+`GET /api/reset/plan?scope=` states what would go, and `POST /api/reset`
+without `confirm: true` answers with that same plan and removes nothing — so
+the plan is the contract (§12). `arrangement` clears authored positions and
+touches no directory; `derived` reverts provisioned workspaces to
+unprovisioned and deletes the checkouts and the mirror cache, keeping every
+record; `everything` empties the store and says how many rows and blobs that
+is first. Both halves — rows and directories — are reported in one answer.
+
+The compaction job schedules the sweep and decides nothing else: the rules stay
+`isCompactable` / `isRunCompactable` in `@plotroom/core`, and
+`Maintenance.compact` sequences runs → versions → blob sweep in that order,
+because run compaction is what releases a version's `run_referenced` flag and
+version compaction is what drops blob references. Timers are injected
+(`PLOTROOM_COMPACTION_INTERVAL_SECONDS`, default 6h, `0` disables the schedule
+without disabling `POST /api/maintenance/compact`), the first sweep is after one
+interval rather than at startup so a restart loop cannot sweep repeatedly, and a
+failed sweep is logged and dropped rather than taken as a reason to stop
+serving. Pinned and run-referenced content is never a candidate, asserted at
+both levels.
 
 ---
 
@@ -274,7 +306,7 @@ recoverability is the answer principle 10 gives._
 
 - [x] xyflow integration; nodes DOM-based (plugin renderers + a11y later, §11)
 - [x] Rigid-body push: custom drag handling + collision/push solver over node extents; chains propagate; at-rest stays put (§5)
-- [x] Durable placement across restarts; derived initial arrangement; "reset arrangement" as the only auto-layout verb (§5)
+- [x] Durable placement across restarts; derived initial arrangement; "reset arrangement" as the only auto-layout verb (§5) — _server-side durability landed with Epic 2.3 (positions on `nodes`, `PATCH /api/arrangement`, `POST /api/reset` with `scope: "arrangement"`); the renderer still writes to `localStorage` until it adopts those endpoints_
 - [x] Selection as the route: selected node reflected in the address; one navigation primitive for click/palette/queue/deep-link (§5)
 
 _Landed unstyled per the design gate (fleet rule 5), against fixture data in
@@ -448,8 +480,8 @@ the predicate's own reason and never reaches the live graph. Canvas state
 ### Epic 4.2 — Context assembly and the run (`runs`)
 
 - [x] Assembly: ordered edges → assembled content, with content-budget warnings; hard cap opt-in per command; never silent truncation (§3.5, principle 12)
-- [ ] Run preview: exactly what will execute + cost estimate + spend cap acceptance, before anything starts (§4.1)
-- [ ] Cost estimates state their basis and render as ranges — "based on N prior runs" / "no history; input size only" — never a bare number (§4.1)
+- [x] Run preview: exactly what will execute + cost estimate + spend cap acceptance, before anything starts (§4.1)
+- [x] Cost estimates state their basis and render as ranges — "based on N prior runs" / "no history; input size only" — never a bare number (§4.1)
 - [x] Completion proof is point-in-time: proven at submission, never silently revoked; later condition regression surfaces as drift/attention on done work (§3.5, principle 3) — _proof is written once at submission and nothing re-evaluates it; the drift/attention half of the sentence is Phase 6's feed_
 - [x] Run-one; producing-session completion loop: submission checked against world conditions, failing condition returned as feedback, session continues within budget (§3.5, principle 3)
 - [x] Open sessions: end by user; feed downstream via promote or transcript wiring (§3.5) — _end-by-user is a verb and refuses on a producing session; the transcript is a versioned object, so wiring it downstream is the ordinary context gesture, and the panel that offers it is Epic 5.1's_
@@ -501,21 +533,50 @@ The event vocabulary grew two entities — `session_observation` (one appended
 record, stamped per session) and `session_transcript` (a published version) —
 and a `session` event now carries its derived status beside the record.
 
-Deferred, honestly: **run preview and cost estimates** (stage 2) — nothing
-renders what will execute before it does, so the §4.1 preview contract is not
-kept yet; **Epic 2.3** durability/compaction is untouched; a session has no
-`resume`/`fork`/`delete` endpoint; injection as a human gesture is Epic 5.2
-(the ledger exists and only the completion loop writes to it); `runs.status`
-has no `interrupted` member, so an interrupted run is recorded as `stopped`
-with the reason attached and the session carries the distinction (widening the
-CHECK needs a table rebuild, which belongs with Epic 2.3's schema work); a
-session's cost basis is `runtime-reported` or nothing, because there is no
-pricing table until Epic 6.2; the workspace repository is configured
-(`PLOTROOM_WORKSPACE_REPO`) rather than discovered, and the in-repository setup
-declaration still has no reader, so the settings override is the only source;
-and no test runs a real pi session through the server — pi's adapter is unit
-tested in `core` and its permission gate is spike-verified against pi 0.83.0,
-but the end-to-end spine proof is the scripted runtime._
+Deferred, honestly: a session has no `resume`/`fork`/`delete` endpoint;
+injection as a human gesture is Epic 5.2 (the ledger exists and only the
+completion loop writes to it); a session's cost basis is `runtime-reported` or
+nothing, because there is no pricing table until Epic 6.2; the workspace
+repository is configured (`PLOTROOM_WORKSPACE_REPO`) rather than discovered, and
+the in-repository setup declaration still has no reader, so the settings
+override is the only source; and no test runs a real pi session through the
+server — pi's adapter is unit tested in `core` and its permission gate is
+spike-verified against pi 0.83.0, but the end-to-end spine proof is the scripted
+runtime._
+
+_Landed (Batch 2, stage 2 — the preview). `RunStore.plan` is the one description
+of what a run would be: ordered inputs, the assembled bytes, the configuration,
+and every refusal **collected rather than thrown**. `start()` reads that same
+plan and refuses on the first blocker, so "exactly what will execute" is
+literal — a test asserts the preview's body is byte-identical to what §15-1 then
+records — and a preview cannot say a run is ready while the run refuses.
+`GET /api/commands/:id/preview` is a read in the strong sense: it provisions no
+workspace, starts no runtime, records nothing, and needs no repository
+configured. It reports the workspace's readiness from the record (including
+"the first run will provision one") rather than by touching git, and it is the
+endpoint that answers "why can't I run this".
+
+`estimateRunCost` in `@plotroom/core` is the estimate, and a bare number has no
+representation in its type: there is a basis, a range, and a sentence.
+`prior-runs` prices from this **definition's** own priced history — which is
+what §15-1 pays off, and per definition because the same recipe run in two
+workstreams is the same evidence — and a run whose runtime reported no cost
+contributes nothing rather than averaging a zero in. With no priced history the
+basis is `input-size-only`, the range is `null` (not zero), and the description
+says so. The suggested spend cap is the most expensive prior run, and there is
+no suggestion at all when there is no history. `POST /api/runs` takes
+`spendCapMicros`, recorded on the run beside what it then cost (migration 8);
+enforcement remains Phase 6's.
+
+Also in stage 2: **durable placement**. Node positions are columns on `nodes`
+(migration 8), `PATCH /api/nodes/:id/position` and `PATCH /api/arrangement`
+move one or a whole selection in one transaction, the snapshot and every `node`
+event carry `position` (null meaning "no authored position", which is what
+`deriveInitialArrangement` fills in), and an arrangement survives both a restart
+and a state-directory move. Track B still stores placement in `localStorage`;
+switching it to these endpoints is its own change and is deliberately not made
+here. Deferred: nothing renders the preview yet (Track B), and continue-vs-fresh
+preview is Batch 3 (§4.3)._
 
 ### Epic 4.3 — Workspaces (`workspaces`) — _done (domain + git kind)_
 

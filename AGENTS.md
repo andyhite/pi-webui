@@ -113,7 +113,24 @@ backup and movement:
   marker can be drawn and the content reloaded. Nothing is silently deleted.
 - Migrations are embedded in `src/migrations.ts` (append-only, never edit a
   shipped one), not read from disk — a packaged build cannot ship without its
-  schema.
+  schema. A migration that must change a CHECK constraint sets
+  `rebuildsTable: true`, and the runner then does SQLite's documented rebuild
+  properly: foreign keys off **before** the transaction begins (the pragma is a
+  no-op inside one, and a `DROP TABLE` with them on cascades every child row
+  away), then back on plus `PRAGMA foreign_key_check`. Migration 9 is the
+  worked example, and its test upgrades a seeded store to prove no child row is
+  lost.
+- **Durability and cleanup** live in `Maintenance` (`packages/db`) and
+  `apps/server/src/maintenance/`. The portable unit is the state directory's
+  `plotroom.db` plus `blobs/`; `workspaces/`, `git-cache/`, and `runtime/` sit
+  inside it but are derived and excluded from the backup story, which
+  `GET /api/maintenance/state` states rather than leaves to be inferred. Every
+  reset verb is a plan and an execution: an unconfirmed `POST /api/reset`
+  answers with the plan and removes nothing. The compaction job schedules the
+  sweep (injected timers, `PLOTROOM_COMPACTION_INTERVAL_SECONDS`, `0` disables
+  the schedule but never the endpoint) and decides nothing — the rules stay the
+  predicates in `@plotroom/core`, and the sweep order is runs → versions →
+  blobs, because each step is what releases the next one's references.
 
 **Objects and versions** live in `objects` / `object_versions`. External
 identity is uniquely indexed so a re-read reconciles rather than duplicating;
@@ -176,6 +193,17 @@ than conventions, so no call site can get them wrong:
 The transcript is content, not a table: it is projected from the log
 (`session-transcript.ts`) and versioned through `ObjectStore` when the
 checkpoint rule says to (`publishesVersion` — a turn never publishes).
+
+**The run preview** (§4.1) is `RunStore.plan`, and `start()` reads the same plan
+rather than a second description of it — a preview that could disagree with the
+run it previews is worse than no preview. Refusals are _collected_ there and
+thrown only by the run path, because the preview's job is to say what is
+missing. Cost estimates go through `estimateRunCost`, whose type cannot express
+a bare number: a basis, a range that is `null` when nothing has ever been
+priced, and a sentence. Estimates are priced per **definition**, matching
+retention's grain, and a run whose runtime reported no cost is no evidence about
+money. `runs.spend_cap_micros` records what the operator accepted; Phase 6
+enforces it.
 
 There is deliberately **no `latest` column anywhere**: `RunStore.resolve`
 orders by `runs.ordinal`, so `output@n` is the general address and `latest` is
@@ -350,3 +378,5 @@ Decided (recorded as they were made):
 - Retention policy defaults: last 20 runs per definition, 30-day version window (Epic 1.4, recorded in the development plan's Epic 1.4 note).
 - **A second, scripted session runtime ships beside the pi adapter** (Epic 4.1/4.2). It replays a declared script of observations and is registered only when the operator selects it (`PLOTROOM_RUNTIME=scripted`), so a default installation has no such adapter to name. It exists because the run spine — observation log, phase reducer, accounting, WS events, completion loop — must be provable without a model, and it exercises that exact path rather than a parallel one. The Playwright milestone gate scripts it (`apps/server/src/runtime/scripted.ts` documents the format).
 - **A submission is a tool call** (`plotroom_submit_outcome`), not a private channel: the scripted runtime emits it, Epic 4.5's agent tool surface exposes the same name, and PlotRoom answers by checking the declared world conditions itself — so completion is proven identically however it was asked for.
+- **Cost estimates are priced per definition, from priced runs only, and never rendered as a bare number** (Epic 4.2, §4.1). `estimateRunCost` returns a basis, a range, and a sentence; the range is `null` — not zero — when nothing in that definition's history recorded a cost, and a run whose runtime reported none contributes no evidence about money. The suggested spend cap is the most expensive prior run, and there is no suggestion at all without history.
+- **Compaction interval default: 6 hours** (`PLOTROOM_COMPACTION_INTERVAL_SECONDS`), first sweep after one interval rather than at startup, and `0` disables the schedule while leaving `POST /api/maintenance/compact` available. Decided in Epic 2.3: often enough that the store does not grow unbounded between restarts, rare enough that the sweep is never what the operator notices, and a restart loop must not be able to sweep on every boot.
