@@ -1130,14 +1130,33 @@ function CanvasInner({
     return ids;
   }, [selectedNodeId, hoveredNodeId]);
 
+  // The canvas container's own size, kept live via ResizeObserver rather
+  // than read once off `getBoundingClientRect()` inside a memo keyed on
+  // `viewport` — a window resize with the viewport otherwise unchanged
+  // (no pan, no zoom) never re-ran that memo, so the reserved region below
+  // went stale exactly when the container actually changed size.
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      setContainerSize({
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
   // Reserved regions (§5, "never obscure the minimap or controls"): the
   // unstyled `<MiniMap>` renders bottom-right at xyflow's own default
   // footprint (200x150, 15px panel margin) — revisit alongside `<Controls>`
   // once the design package lands and either gets its own chrome.
   const bubbleReservedRegions = useMemo<ReservedRegion[]>(() => {
-    const box = containerRef.current?.getBoundingClientRect();
-    const width = box?.width ?? 0;
-    const height = box?.height ?? 0;
+    const { width, height } = containerSize;
     if (width === 0 || height === 0) return [];
     return [
       {
@@ -1148,7 +1167,7 @@ function CanvasInner({
         height: MINIMAP_HEIGHT,
       },
     ];
-  }, [viewport]);
+  }, [containerSize]);
 
   // Screen-space extents for every *visible* box node currently on screen
   // (reserved regions above are screen-anchored, so bubbles must place in
