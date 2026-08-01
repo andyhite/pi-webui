@@ -43,6 +43,7 @@ import "@xyflow/react/dist/style.css";
 import type { NodeExtent, Point } from "../solver/push.js";
 import { solvePush } from "../solver/push.js";
 import type { Placements } from "../placement/store.js";
+import { deriveInitialArrangement } from "../placement/derive.js";
 import { zoomLevelForScale } from "../zoom/level.js";
 import type { ZoomLevel, ZoomThresholds } from "../zoom/level.js";
 import {
@@ -65,6 +66,7 @@ import {
   clearTombstones,
   withoutTombstoned,
 } from "./tombstones.js";
+import { remotelyDeletedIds, withConfirmed } from "./reconcile.js";
 
 export interface CanvasNodeInput {
   readonly id: string;
@@ -541,11 +543,37 @@ function CanvasInner({
     return map;
   }, [nodeInputs]);
 
+  // Derived initial arrangement (spec §5, Epic 3.1's remaining leftover): a
+  // node with no *stored* placement still lands somewhere sensible, derived
+  // from the graph's own structure, rather than whatever literal
+  // `defaultPosition` its host happened to hand-write. A stored placement
+  // always wins (arranging by hand never costs an earlier placement); this
+  // is strictly the fallback for a node nobody has ever moved.
+  const derivedPlacements = useMemo(
+    () =>
+      deriveInitialArrangement(
+        nodeInputs.map((input) => ({
+          id: input.id,
+          ...(input.containerId ? { containerId: input.containerId } : {}),
+        })),
+        edgeInputs.map((input) => ({
+          source: input.source,
+          target: input.target,
+        })),
+        containers.map((container) => ({ id: container.id })),
+      ),
+    [nodeInputs, edgeInputs, containers],
+  );
+  const effectivePlacements: Placements = useMemo(
+    () => ({ ...derivedPlacements, ...placements }),
+    [derivedPlacements, placements],
+  );
+
   const buildNodes = useCallback((): CanvasNode[] => {
     const containerNodes: ContainerNode[] = containers.map((container) => ({
       id: container.id,
       type: "container" as const,
-      position: placements[container.id] ?? container.defaultPosition,
+      position: effectivePlacements[container.id] ?? container.defaultPosition,
       style: { width: CONTAINER_WIDTH, height: CONTAINER_HEIGHT },
       data: {
         label: container.label,
@@ -558,7 +586,7 @@ function CanvasInner({
       toBoxNode(input, {
         zoomLevel,
         selectedNodeId,
-        placements,
+        placements: effectivePlacements,
         collapsedContainerIds: effectiveCollapsedContainerIds,
         ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
         ...(warningsByNodeId ? { warningsByNodeId } : {}),
@@ -570,7 +598,7 @@ function CanvasInner({
   }, [
     containers,
     nodeInputs,
-    placements,
+    effectivePlacements,
     effectiveCollapsedContainerIds,
     onToggleContainer,
     onDropDefinitionOnTicket,
@@ -609,6 +637,16 @@ function CanvasInner({
   const tombstonedNodeIds = useRef<Set<string>>(new Set());
   const tombstonedEdgeIds = useRef<Set<string>>(new Set());
 
+  // Live deletion reconciliation (Phase 3 polish, the Batch 1 finding): a
+  // node/edge deleted by *another* client must disappear from an already-
+  // open canvas too, not just fail to be resurrected. `confirmed*Ids` tracks
+  // every id this canvas has ever seen named by the host's own arrays, so
+  // the sync effects below can tell "the host deleted this" (confirmed, now
+  // missing) apart from "this is only a local, not-yet-confirmed gesture"
+  // (never confirmed at all) — see reconcile.ts.
+  const confirmedNodeIds = useRef<Set<string>>(new Set());
+  const confirmedEdgeIds = useRef<Set<string>>(new Set());
+
   // `nodes`/`edges` seed the canvas once; drag positions and undo live only
   // in this internal state afterward. A one-gesture flow (creating a
   // workstream by drop, for example) still needs its result to show up on
@@ -619,6 +657,22 @@ function CanvasInner({
   // by this effect re-running for an unrelated reason.
   useEffect(() => {
     setNodes((current) => {
+      const incomingIds = [
+        ...containers.map((container) => container.id),
+        ...nodeInputs.map((input) => input.id),
+      ];
+      confirmedNodeIds.current = withConfirmed(
+        confirmedNodeIds.current,
+        incomingIds,
+      );
+      const removeIds = new Set(
+        remotelyDeletedIds(
+          current.map((node) => node.id),
+          incomingIds,
+          confirmedNodeIds.current,
+        ),
+      );
+
       const present = new Set(current.map((node) => node.id));
       const newContainers: ContainerNode[] = withoutTombstoned(
         containers.filter((container) => !present.has(container.id)),
@@ -626,7 +680,8 @@ function CanvasInner({
       ).map((container) => ({
         id: container.id,
         type: "container" as const,
-        position: placements[container.id] ?? container.defaultPosition,
+        position:
+          effectivePlacements[container.id] ?? container.defaultPosition,
         style: { width: CONTAINER_WIDTH, height: CONTAINER_HEIGHT },
         data: {
           label: container.label,
@@ -641,21 +696,27 @@ function CanvasInner({
         toBoxNode(input, {
           zoomLevel,
           selectedNodeId,
-          placements,
+          placements: effectivePlacements,
           collapsedContainerIds: effectiveCollapsedContainerIds,
           ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
           ...(warningsByNodeId ? { warningsByNodeId } : {}),
         }),
       );
-      if (newContainers.length === 0 && newBoxNodes.length === 0)
+      if (
+        removeIds.size === 0 &&
+        newContainers.length === 0 &&
+        newBoxNodes.length === 0
+      ) {
         return current;
+      }
       // Parents must precede children in xyflow's node array.
-      return [...current, ...newContainers, ...newBoxNodes];
+      const survivors = current.filter((node) => !removeIds.has(node.id));
+      return [...survivors, ...newContainers, ...newBoxNodes];
     });
   }, [
     containers,
     nodeInputs,
-    placements,
+    effectivePlacements,
     effectiveCollapsedContainerIds,
     onToggleContainer,
     onDropDefinitionOnTicket,
@@ -686,6 +747,19 @@ function CanvasInner({
 
   useEffect(() => {
     setEdges((current) => {
+      const incomingIds = edgeInputs.map((input) => input.id);
+      confirmedEdgeIds.current = withConfirmed(
+        confirmedEdgeIds.current,
+        incomingIds,
+      );
+      const removeIds = new Set(
+        remotelyDeletedIds(
+          current.map((edge) => edge.id),
+          incomingIds,
+          confirmedEdgeIds.current,
+        ),
+      );
+
       const present = new Set(current.map((edge) => edge.id));
       const additions = withoutTombstoned(
         edgeInputs.filter((input) => !present.has(input.id)),
@@ -695,7 +769,9 @@ function CanvasInner({
         source: input.source,
         target: input.target,
       }));
-      return additions.length === 0 ? current : [...current, ...additions];
+      if (removeIds.size === 0 && additions.length === 0) return current;
+      const survivors = current.filter((edge) => !removeIds.has(edge.id));
+      return [...survivors, ...additions];
     });
   }, [edgeInputs, setEdges]);
 
