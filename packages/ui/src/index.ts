@@ -37,3 +37,4 @@ export * from "./data-source/types.js";
 export * from "./data-source/board-state.js";
 export * from "./data-source/build-snapshot.js";
 export * from "./data-source/api.js";
+export * from "./data-source/actions.js";

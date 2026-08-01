@@ -80,7 +80,7 @@ async function fetchObjectContent(
       try {
         const response = await http.get<{
           content: { renderings: { agentContent: string } };
-        }>(`/api/objects/${id}`);
+        }>(`/api/objects/${encodeURIComponent(id)}`);
         return [id, response.content.renderings.agentContent];
       } catch {
         // The object may have been removed since it was wired; an honest
