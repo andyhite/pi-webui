@@ -65,6 +65,57 @@ describe("raising a structured question (§6.4)", () => {
     expect(raised.refusal.reason).toBe("duplicate_option");
   });
 
+  it("refuses two options that read the same", () => {
+    // The label is what a human picks and what a runtime's select returns, so
+    // twins are indistinguishable in the answer — and each would erase the other
+    // from the paths not taken, both here and in the `plotroom_ask` extension,
+    // which filters the picked label out of the list.
+    const raised = raiseQuestion({
+      id: "q-0",
+      sessionId: SESSION,
+      text: "pick",
+      options: [
+        { id: "opt-1", label: "add a column", detail: "cheap" },
+        { id: "opt-2", label: "add a column", detail: "expensive" },
+      ],
+      at: 1_000,
+    });
+
+    expect(raised.ok).toBe(false);
+    if (raised.ok) return;
+    expect(raised.refusal.reason).toBe("duplicate_option");
+    expect(raised.refusal.message).toContain("paths not taken");
+  });
+
+  it("refuses labels that differ only in surrounding whitespace", () => {
+    const raised = raiseQuestion({
+      id: "q-0",
+      sessionId: SESSION,
+      text: "pick",
+      options: [
+        { id: "opt-1", label: "rebuild", detail: null },
+        { id: "opt-2", label: "  rebuild ", detail: null },
+      ],
+      at: 1_000,
+    });
+
+    expect(raised.ok).toBe(false);
+    if (raised.ok) return;
+    expect(raised.refusal.reason).toBe("duplicate_option");
+  });
+
+  it("keeps options whose labels differ", () => {
+    expect(
+      raiseQuestion({
+        id: "q-0",
+        sessionId: SESSION,
+        text: "pick",
+        options: optionsFromLabels(["rebuild the table", "add a column"]),
+        at: 1_000,
+      }).ok,
+    ).toBe(true);
+  });
+
   it("defaults to options-only: free-form is opt-in", () => {
     expect(ask().freeForm).toBe("none");
   });

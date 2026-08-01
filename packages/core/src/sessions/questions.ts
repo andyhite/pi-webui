@@ -25,8 +25,10 @@ import type { RequestOutcome, RuntimeRequestId } from "./runtime.js";
  *    except a picked option.
  * 2. **A deadline can only escalate attention.** `QuestionAttention.onElapsed`
  *    is the literal type `"escalate-attention"`, so `"answer"`, `"proceed"`, and
- *    `"default"` are type errors. Elapsing produces an attention level, and
- *    `escalation()` returns no answer because it cannot construct one.
+ *    `"default"` are type errors. Elapsing produces an attention level and
+ *    nothing else: `questionAttention` is the only function here that reads a
+ *    clock, and its return type is `QuestionAttentionLevel`, which cannot carry
+ *    an answer.
  * 3. **Answering requires an author, and `Author` has no system variant.** Every
  *    answer records the human who picked it (`answerQuestion` refuses a session
  *    author outright — a session answering its own question would be principle
@@ -110,7 +112,10 @@ export interface SessionQuestion {
 export const QUESTION_REFUSAL_REASONS = [
   /** No options: a question with nothing to pick is prose, not a question. */
   "no_options",
-  /** Two options sharing an id — an answer would be ambiguous. */
+  /**
+   * Two options sharing an id, or reading the same — either way an answer would
+   * be ambiguous, since a runtime answers with the label and PlotRoom with the id.
+   */
   "duplicate_option",
   /** The answer names an option the question never offered. */
   "unknown_option",
@@ -169,15 +174,33 @@ export function raiseQuestion(
     );
   }
 
-  const seen = new Set<string>();
+  // Both halves of an option have to be unique, and for different reasons.
+  //
+  // The **id** is what an answer names, so a repeat makes the answer ambiguous.
+  // The **label** is what a human reads and what a runtime's select returns —
+  // `questionOutcome` settles the blocked request with the label, and the
+  // `plotroom_ask` extension computes paths-not-taken by filtering the picked
+  // label out of the list. Two identical labels therefore pick each other's
+  // option and delete each other from the paths not taken (§6.4), and there is no
+  // reading of a question with two identical choices that is worth preserving.
+  const seenIds = new Set<string>();
+  const seenLabels = new Set<string>();
   for (const option of input.options) {
-    if (seen.has(option.id)) {
+    if (seenIds.has(option.id)) {
       return refuse(
         "duplicate_option",
         `two options share the id ${JSON.stringify(option.id)}; an answer naming it would be ambiguous`,
       );
     }
-    seen.add(option.id);
+    const label = option.label.trim();
+    if (seenLabels.has(label)) {
+      return refuse(
+        "duplicate_option",
+        `two options read ${JSON.stringify(option.label)}; a runtime answers with the label, so the two would be indistinguishable and each would erase the other from the paths not taken (§6.4)`,
+      );
+    }
+    seenIds.add(option.id);
+    seenLabels.add(label);
   }
 
   return {
