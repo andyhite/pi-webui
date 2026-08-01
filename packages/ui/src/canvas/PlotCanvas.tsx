@@ -190,6 +190,14 @@ export interface PlotCanvasProps {
    * (mechanics only; offline/fixture hosts can choose not to wire it).
    */
   readonly onRunCommand?: (commandNodeId: string) => void;
+  /**
+   * Command node ids with a run already in flight (§4.1, principle 9 at the
+   * gesture level): the run button disables for exactly these, so a
+   * double-click cannot fire a second initiation key before the first
+   * request has settled. The host owns the set (e.g. over `run-guard.ts`'s
+   * pure `beginRun`/`endRun`) — this only renders it.
+   */
+  readonly runningCommandNodeIds?: ReadonlySet<string>;
 }
 
 /** The drag payload a command-definition drag source sets (host's palette). */
@@ -213,6 +221,8 @@ type BoxNodeData = {
   warnings: readonly string[];
   /** Set on a command node when the host wired the run gesture (§4.1). */
   onRun?: () => void;
+  /** True while this command node's run is already in flight (§4.1). */
+  runInFlight: boolean;
 };
 
 type BoxNode = Node<BoxNodeData, "box">;
@@ -293,8 +303,8 @@ function BoxNodeView({ data, id, selected }: NodeProps<BoxNode>) {
         <div>(drop a command definition here)</div>
       ) : null}
       {data.role === "command" && data.onRun ? (
-        <button type="button" onClick={data.onRun}>
-          run
+        <button type="button" onClick={data.onRun} disabled={data.runInFlight}>
+          {data.runInFlight ? "running…" : "run"}
         </button>
       ) : null}
       {data.zoomLevel !== "workstream" ? <div>id: {id}</div> : null}
@@ -500,6 +510,7 @@ function toBoxNode(
     ) => void;
     readonly warningsByNodeId?: ReadonlyMap<string, readonly string[]>;
     readonly onRunCommand?: (commandNodeId: string) => void;
+    readonly runningCommandNodeIds?: ReadonlySet<string>;
   },
 ): BoxNode {
   return {
@@ -520,6 +531,7 @@ function toBoxNode(
       routeSelected: input.id === ctx.selectedNodeId,
       acceptsDefinitionDrop: input.acceptsDefinitionDrop ?? false,
       warnings: ctx.warningsByNodeId?.get(input.id) ?? [],
+      runInFlight: ctx.runningCommandNodeIds?.has(input.id) ?? false,
       ...(ctx.onDropDefinitionOnTicket
         ? {
             onDropDefinition: (definitionId: string) =>
@@ -554,6 +566,7 @@ function CanvasInner({
   onDropPaletteEntry,
   warningsByNodeId,
   onRunCommand,
+  runningCommandNodeIds,
 }: PlotCanvasProps) {
   const { zoom } = useViewport();
   const zoomLevel = zoomLevelForScale(zoom, zoomThresholds);
@@ -629,6 +642,7 @@ function CanvasInner({
         ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
         ...(warningsByNodeId ? { warningsByNodeId } : {}),
         ...(onRunCommand ? { onRunCommand } : {}),
+        ...(runningCommandNodeIds ? { runningCommandNodeIds } : {}),
       }),
     );
 
@@ -643,6 +657,7 @@ function CanvasInner({
     onDropDefinitionOnTicket,
     warningsByNodeId,
     onRunCommand,
+    runningCommandNodeIds,
     zoomLevel,
     selectedNodeId,
   ]);
@@ -766,6 +781,7 @@ function CanvasInner({
           ...(onDropDefinitionOnTicket ? { onDropDefinitionOnTicket } : {}),
           ...(warningsByNodeId ? { warningsByNodeId } : {}),
           ...(onRunCommand ? { onRunCommand } : {}),
+          ...(runningCommandNodeIds ? { runningCommandNodeIds } : {}),
         }),
       );
       if (
@@ -788,6 +804,7 @@ function CanvasInner({
     onDropDefinitionOnTicket,
     warningsByNodeId,
     onRunCommand,
+    runningCommandNodeIds,
     zoomLevel,
     selectedNodeId,
     setNodes,
@@ -812,12 +829,13 @@ function CanvasInner({
     );
   }, [warningsByNodeId, setNodes]);
 
-  // A node's label/running state can change after it is already placed — a
-  // command node's latest run status arriving well after the drop that
-  // created it, a session's derived phase moving on (§3.6) — unlike the
-  // additive effect above (which only ever seeds these once, on first
-  // add), this keeps every already-placed node's label/running in sync with
-  // its current `CanvasNodeInput`.
+  // A node's label/running/run-in-flight state can change after it is
+  // already placed — a command node's latest run status arriving well after
+  // the drop that created it, a session's derived phase moving on (§3.6), a
+  // run gesture's guard flipping while the request is outstanding (§4.1) —
+  // unlike the additive effect above (which only ever seeds these once, on
+  // first add), this keeps every already-placed node's label/running/
+  // run-in-flight in sync with its current `CanvasNodeInput`/guard state.
   useEffect(() => {
     const byId = new Map(nodeInputs.map((input) => [input.id, input]));
     setNodes((current) =>
@@ -826,16 +844,21 @@ function CanvasInner({
         const input = byId.get(node.id);
         if (!input) return node;
         const running = input.running ?? false;
-        if (node.data.label === input.label && node.data.running === running) {
+        const runInFlight = runningCommandNodeIds?.has(node.id) ?? false;
+        if (
+          node.data.label === input.label &&
+          node.data.running === running &&
+          node.data.runInFlight === runInFlight
+        ) {
           return node;
         }
         return {
           ...node,
-          data: { ...node.data, label: input.label, running },
+          data: { ...node.data, label: input.label, running, runInFlight },
         };
       }),
     );
-  }, [nodeInputs, setNodes]);
+  }, [nodeInputs, runningCommandNodeIds, setNodes]);
 
   useEffect(() => {
     setEdges((current) => {

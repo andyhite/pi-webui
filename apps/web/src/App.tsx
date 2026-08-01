@@ -19,6 +19,7 @@ import {
   NotePanel,
   PaletteRail,
   PlotCanvas,
+  beginRun,
   browserWebSocketFactory,
   createApiActions,
   createApiGraphDataSource,
@@ -34,6 +35,7 @@ import {
   deriveGraphWarnings,
   deriveInitialArrangement,
   dragOutMember,
+  endRun,
   expandCollection,
   pruneMember,
   useSelectionRoute,
@@ -124,6 +126,13 @@ export function App() {
   // spec §5) — "reset arrangement" also bumps this counter so the canvas
   // applies the fresh positions to nodes already on screen, exactly once.
   const [arrangementEpoch, setArrangementEpoch] = useState(0);
+  // The run gesture's client-side guard (§4.1, principle 9 at the gesture
+  // level): a command node id stays in this set for exactly as long as its
+  // POST /api/runs is outstanding, so a double-click cannot mint a second
+  // initiation key before the first request settles — see run-guard.ts.
+  const [runsInFlight, setRunsInFlight] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const { selectedNodeId, select } = useSelectionRoute();
 
   const [graph, setGraph] = useState<GraphSnapshot | null>(null);
@@ -457,15 +466,37 @@ export function App() {
                 });
               });
           }}
+          runningCommandNodeIds={runsInFlight}
           onRunCommand={(commandNodeId) => {
             if (!LIVE) {
               log(`offline mode: running ${commandNodeId} was not started`);
               return;
             }
+            // The gesture-level guard (§4.1, principle 9): a double-click
+            // before the first request settles must not mint a second
+            // initiation key. Checked and applied via one state update, so
+            // two clicks handled in the same tick cannot both read "not yet
+            // in flight".
+            let guardedIn = false;
+            setRunsInFlight((current) => {
+              const guard = beginRun(current, commandNodeId);
+              guardedIn = guard.allowed;
+              return guard.inFlight;
+            });
+            if (!guardedIn) {
+              log(
+                `run already in flight for ${commandNodeId}; ignoring the extra click`,
+              );
+              return;
+            }
+
             const commandNode = graph.nodes.find(
               (node) => node.id === commandNodeId,
             );
-            if (!commandNode?.refId) return;
+            if (!commandNode?.refId) {
+              setRunsInFlight((current) => endRun(current, commandNodeId));
+              return;
+            }
             // The client's own idea of "this gesture" (principle 9): a retry
             // with the same key would get the same run and session back,
             // never a second one — a fresh key per click is exactly one run
@@ -474,6 +505,7 @@ export function App() {
             void actions
               .runCommand({ commandId: commandNode.refId, initiationKey })
               .then((result) => {
+                setRunsInFlight((current) => endRun(current, commandNodeId));
                 if (!result.ok) {
                   log(
                     `refused: ${result.refusal.reason} - ${result.refusal.message}`,

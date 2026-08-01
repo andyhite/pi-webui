@@ -179,6 +179,8 @@ function runStatusLabel(run: Run): string {
       return "out of budget";
     case "stopped":
       return "stopped";
+    case "interrupted":
+      return "interrupted";
   }
 }
 
