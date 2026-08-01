@@ -613,6 +613,41 @@ lands with Epic 4.2's run path; and `checkClaimContinuation` keeps Epic 4.3's
 conservative verdict whenever the ledger is not complete for the interval, so
 narrowing only takes effect once run-time recording exists._
 
+**Adversarial review round (post-landing).** Three defects reached `main`-ready
+state with 164 tests passing, which is worth recording because each one hid in a
+place tests were not looking:
+
+- **A deny policy let the operator's grant stomp a live holder.** The evaluation
+  returned `denied` before blockers were computed, and `grant` — which
+  legitimately overrides a deny — never saw them. Availability is now decided
+  before policy is consulted at all, and no evaluation variant hides its
+  blockers.
+- **Deadlock was endured when the cycle formed by churn.** Cycle detection ran
+  only at wait insertion, so a promotion that moved one waiter's blockers onto a
+  freshly granted holder closed a loop nobody requested. `findAnyWaitCycle` plus
+  a sweep after every blocker-set update refuses the newest wait, same rule as
+  insertion; the invariants suite asserts the wait graph is acyclic every step.
+- **Waitlist grants were immortal.** An unspecified lease was stored as null and
+  passed through at grant time, where null means never-expires. Unspecified and
+  explicit are now different types, `makeClaim` has no value meaning forever, and
+  `violatesLeasePolicy` states that only the root claim is immortal.
+
+Two safety-adjacent fixes rode along: `checkWrite` is **lapse-aware** (an unswept
+expired claim authorizes nothing) with `request`/`grant` sweeping before they
+grant, so a stale row can never sit beside a new claim; and canonicalization
+**normalizes to NFC before folding case**, because macOS hands over decomposed
+filenames while everything else composes them — two byte strings that print
+identically would otherwise have been two claims on one physical file.
+
+Follow-up, recorded rather than done: **audit attribution for an ancestor-policy
+carve-out.** When a grant is authorized by a policy an _ancestor_ declared, the
+claim records `grantedBy` as the immediate authority's holder and does not name
+which policy allowed it, so an audit cannot reconstruct why a sub-claim inside
+someone's subtree was legitimate without re-evaluating the whole chain. The
+verdict is correct today (deny wins at any depth, and the extent check bounds
+it); what is missing is provenance. Non-blocking — it lands with whichever epic
+first needs a claim audit trail._
+
 ### Epic 4.5 — Agent tool surface (`tools`) — _done (domain; server mounting pending Track A)_
 
 - [x] Every human gesture exposed as an agent tool over the same API vocabulary (principle 8) — one catalog in `core`, pinned to the server's mounted routes by a test in both directions
@@ -645,6 +680,41 @@ _field_ names are declarations checked by review rather than pinned, because the
 request schemas live in `apps/server` (zod) and `core` cannot import them — when
 those schemas move into `core`, the catalog derives from them; and the propose‑
 and‑accept records are shapes until proposals are persisted._
+
+**Review round additions.** `session_dispatch` was declared reflexivity `none`,
+which made §4.1's rule — a session may not run, resume, or re-run work inside its
+own initiation chain — inexpressible. It is lineage-checked now, and the
+resolution that makes delegation and §4.1 both true is carried as data:
+`requires.targetResolution` states per tool how `sessionsAffected` must resolve,
+the catalog test refuses a lineage-checked tool that leaves it unsaid, and the
+claim tools carry §3.4's exemption verbatim (**never** the waiting session, or the
+parent-to-child grant the claim model is built on would be refused).
+
+**Track A's run-spine needs, folded in** (all three in `core/src/sessions/`):
+
+- **World-condition feedback** is its own `TranscriptEntry` kind rather than an
+  `injection` with a system author: nobody authored it, and widening `Author`
+  would have let an unattributed _context_ edge typecheck everywhere — the schema
+  reserves `system` for provenance edges and forbids it on context edges. It names
+  the failed condition ids, counts toward the size budget, is never a release
+  candidate, and changes nothing about the checkpoint rule.
+- **Proven completion is a core rule**: `EndClassificationContext` carries
+  `CompletionEvidence` and `checkProvenCompletion` is the predicate both the run
+  loop and `classifyEnd` read. Absent evidence is not proof — a reported
+  completion with none is recorded as a failure that says so, because silence
+  would mark unchecked work as done (principle 3). **Track A must pass evidence
+  to record a completion.**
+- **`ended-by-user` carries an author**, set by `classifyEnd` from PlotRoom's
+  context (the runtime only sees its input close). Optional, defaulting to the
+  operator through `endedBy`, because requiring it would break an `apps/web`
+  fixture this track does not own.
+
+Cross-track follow-ups this created, for the orchestrator to schedule: **Track B**
+should render the new `feedback` entry kind (`buildTurnItems` in
+`packages/ui/src/sessions/transcript-view.ts` switches without a default, so
+feedback is currently dropped from the view — their own principle-12 comment says
+it should not be), and may tighten `ended-by-user`'s author to required with a
+one-line fixture change._
 
 ---
 
