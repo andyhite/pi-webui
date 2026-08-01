@@ -4,6 +4,7 @@ import type { NodeExtent } from "../solver/push.js";
 import type { BubbleSource } from "./model.js";
 import {
   DEFAULT_GLOBAL_BUBBLE_CAP,
+  UNATTACHED_BUBBLE_NODE_ID,
   computeBubblePlacements,
   type BubblePlacement,
   type ReservedRegion,
@@ -75,6 +76,39 @@ describe("computeBubblePlacements", () => {
     const nodes = [node("n1")];
     const placements = computeBubblePlacements(nodes, [], new Set(["n1"]));
     expect(placements).toHaveLength(0);
+  });
+
+  it("a source whose nodeId matches no node extent collapses into a deterministic unattached badge, never vanishing", () => {
+    const nodes = [node("n1")];
+    const orphaned = source({
+      id: "orphaned",
+      nodeId: "node-not-on-canvas",
+    });
+    const placements = computeBubblePlacements(
+      nodes,
+      [orphaned],
+      new Set(["n1", "node-not-on-canvas"]),
+    );
+
+    expect(placements).toHaveLength(1);
+    const badge = collapsedFor(placements, UNATTACHED_BUBBLE_NODE_ID);
+    expect(badge).toBeDefined();
+    expect(badge!.sourceIds).toEqual(["orphaned"]);
+    expect(badge!.rect).toEqual({ x: 0, y: 0, width: 20, height: 20 });
+  });
+
+  it("unattached sources from several nodes all fold into the one deterministic badge", () => {
+    const nodes = [node("n1")];
+    const a = source({ id: "a", nodeId: "missing-1" });
+    const b = source({ id: "b", nodeId: "missing-2" });
+    const placements = computeBubblePlacements(
+      nodes,
+      [a, b],
+      new Set(["n1", "missing-1", "missing-2"]),
+    );
+
+    const badge = collapsedFor(placements, UNATTACHED_BUBBLE_NODE_ID);
+    expect([...(badge?.sourceIds ?? [])].sort()).toEqual(["a", "b"]);
   });
 
   it("never obscures a reserved region — falls back to the opposite anchor", () => {

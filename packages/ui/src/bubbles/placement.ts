@@ -24,6 +24,14 @@
  *   selected first, then by recency (`updatedAt` descending), then by id for
  *   a stable tie-break; anything past the cap folds into its node's
  *   collapsed badge exactly like an unfocused source would.
+ * - **Never silently drops a source** (principle 12): a source whose
+ *   `nodeId` matches no entry in `nodes` at all — a stale id, a race
+ *   between a node leaving the canvas and its source arriving — folds into
+ *   one deterministic `UNATTACHED_BUBBLE_NODE_ID` badge, fixed at the
+ *   canvas origin, rather than vanishing with no trace. The caller
+ *   (`PlotCanvas`) computes an absolute extent for every visible node,
+ *   contained ones included, so this path is expected to be unreachable in
+ *   practice — it exists so "unreachable" is provable, not assumed.
  *
  * Coordinates are whatever space the caller passes for `nodes` and
  * `reservedRegions` — PlotCanvas passes screen space (post pan/zoom) because
@@ -69,6 +77,14 @@ export interface BubblePlacementOptions {
 }
 
 export const DEFAULT_GLOBAL_BUBBLE_CAP = 6;
+/**
+ * The sentinel `nodeId` a `collapsed` placement carries when its sources
+ * matched no node extent at all (see the file doc comment's "never
+ * silently drops a source" bullet). Not a real node id — a host renders
+ * this placement the same as any other collapsed badge, just not attached
+ * to anything on screen.
+ */
+export const UNATTACHED_BUBBLE_NODE_ID = "__unattached__";
 const DEFAULT_GAP = 6;
 const LINE_HEIGHT = 16;
 const BUBBLE_PADDING = 8;
@@ -130,8 +146,14 @@ export function computeBubblePlacements(
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
 
   const byNode = new Map<string, BubbleSource[]>();
+  const unattachedSourceIds: string[] = [];
   for (const source of sources) {
-    if (!nodesById.has(source.nodeId)) continue; // nothing to attach to
+    if (!nodesById.has(source.nodeId)) {
+      // Never silently drops a source (principle 12) — folded into the
+      // deterministic unattached badge below instead of vanishing.
+      unattachedSourceIds.push(source.id);
+      continue;
+    }
     const bucket = byNode.get(source.nodeId) ?? [];
     bucket.push(source);
     byNode.set(source.nodeId, bucket);
@@ -219,6 +241,15 @@ export function computeBubblePlacements(
       nodeId,
       rect: badgeRect(node),
       sourceIds,
+    });
+  }
+
+  if (unattachedSourceIds.length > 0) {
+    placements.push({
+      kind: "collapsed",
+      nodeId: UNATTACHED_BUBBLE_NODE_ID,
+      rect: { x: 0, y: 0, width: BADGE_SIZE, height: BADGE_SIZE },
+      sourceIds: unattachedSourceIds,
     });
   }
 
