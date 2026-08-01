@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { humanAuthor, sessionAuthor } from "../author.js";
-import { waitForEdges } from "./deadlock.js";
+import { findAnyWaitCycle, waitForEdges } from "./deadlock.js";
 import { createClaimManager, type ClaimManager } from "./manager.js";
 import {
   rootClaimOf,
   type Claim,
+  type ClaimEffect,
   type ClaimOutcome,
   type ClaimState,
 } from "./model.js";
@@ -37,9 +38,17 @@ function setup() {
   return { clock, manager, state: declared.state };
 }
 
-function must<T>(outcome: ClaimOutcome<T>): { state: ClaimState; result: T } {
+function must<T>(outcome: ClaimOutcome<T>): {
+  state: ClaimState;
+  result: T;
+  effects: readonly ClaimEffect[];
+} {
   if (!outcome.ok) throw new Error(`refused: ${outcome.refusal.message}`);
-  return { state: outcome.state, result: outcome.result };
+  return {
+    state: outcome.state,
+    result: outcome.result,
+    effects: outcome.effects,
+  };
 }
 
 function hold(
@@ -121,6 +130,55 @@ describe("wait-for cycles", () => {
     expect(closing.ok).toBe(false);
     if (closing.ok) return;
     expect(closing.refusal.reason).toBe("would_deadlock");
+  });
+
+  it("refuses the newest wait when promotion churn closes the cycle", () => {
+    // Adversarial repro: no request closes this loop, a *promotion* does. Cycle
+    // detection ran only at insertion, so both waits stood forever — B waiting
+    // for A to release `y`, A waiting for B to release `w` — which is precisely
+    // the endured deadlock §3.4 forbids.
+    const { manager, state, clock } = setup();
+    let current = hold(manager, state, A, "y");
+    current = hold(manager, current, C, "w");
+
+    // B queues behind A for `y`, and ahead of A for `w`.
+    current = must(
+      manager.request(current, { sessionId: B, path: "y", at: clock.tick(1) }),
+    ).state;
+    current = must(
+      manager.request(current, { sessionId: B, path: "w", at: clock.tick(1) }),
+    ).state;
+    const aWaits = must(
+      manager.request(current, { sessionId: A, path: "w", at: clock.tick(1) }),
+    );
+    expect(aWaits.result.kind).toBe("waiting");
+    expect(findAnyWaitCycle(waitForEdges(aWaits.state))).toBeNull();
+
+    // C ends. B is first in line for `w`, so B is granted it — and A's wait moves
+    // onto B, closing A -> B -> A.
+    const ended = must(manager.endSession(aWaits.state, C, clock.tick(1)));
+
+    expect(findAnyWaitCycle(waitForEdges(ended.state))).toBeNull();
+    const refused = ended.effects.filter(
+      (effect) => effect.kind === "deadlock-refused",
+    );
+    expect(refused).toHaveLength(1);
+    const [only] = refused;
+    if (only?.kind !== "deadlock-refused")
+      throw new Error("expected a refusal");
+    // The newest wait goes, exactly as at insertion, and says what to yield.
+    expect(only.wait.sessionId).toBe(A);
+    expect(only.message).toContain("y");
+    expect(only.message).toContain("yield one of those");
+    expect(
+      ended.effects.some(
+        (effect) =>
+          effect.kind === "wait-removed" && effect.reason === "deadlock",
+      ),
+    ).toBe(true);
+
+    // B keeps its place in the queue for `y`; only the newest wait was refused.
+    expect(ended.state.waits.map((wait) => wait.sessionId)).toEqual([B]);
   });
 
   it("does not refuse a chain of waits that is not a cycle", () => {

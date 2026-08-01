@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { humanAuthor, sessionAuthor } from "../author.js";
 import type { SessionId } from "../ids.js";
+import { findAnyWaitCycle, waitForEdges } from "./deadlock.js";
 import { createClaimManager, type ClaimManager } from "./manager.js";
 import {
   authorityFor,
@@ -201,6 +202,17 @@ function assertInvariants(
     );
   }
 
+  // §3.4: "deadlock is detected, not endured" — no reachable state may contain a
+  // standing wait-for cycle, however it was reached. Insertion refuses one;
+  // promotion and approval churn sweep one; this assertion is what says the whole
+  // class cannot come back.
+  const cycle = findAnyWaitCycle(waitForEdges(state));
+  expect(
+    cycle?.map((edge) => `${edge.from}->${edge.to} on ${edge.path.display}`) ??
+      null,
+    `${trail} :: standing wait-for cycle`,
+  ).toBeNull();
+
   // Policies never outlive their declaring claim, and never exceed its extent.
   for (const policy of state.policies) {
     const declaring = claimById(state, policy.declaredByClaimId);
@@ -212,10 +224,14 @@ function assertInvariants(
 }
 
 describe("claim invariants over random operation sequences", () => {
-  for (const seed of [1, 7, 42, 1337, 20_250_801]) {
+  // Seeds 5, 50, and 60 are here because they reach the churn-formed wait-for
+  // cycle (`findAnyWaitCycle` catches them with the deadlock sweep removed) —
+  // kept named so the acyclicity invariant demonstrably has teeth rather than
+  // passing vacuously.
+  for (const seed of [1, 5, 7, 42, 50, 60, 1337, 20_250_801]) {
     it(`holds for seed ${seed}`, () => {
-      const run = drive(seed, 120);
-      expect(run.steps.length).toBe(120);
+      const run = drive(seed, 250);
+      expect(run.steps.length).toBe(250);
     });
   }
 

@@ -1,4 +1,5 @@
 import type { SessionId } from "../ids.js";
+import type { ClaimWaitId } from "./ids.js";
 import type { Claim, ClaimState, ClaimWait } from "./model.js";
 import { claimById, claimWaitReason, type ClaimWaitReason } from "./model.js";
 import { describePath, type ClaimPath } from "./paths.js";
@@ -16,11 +17,19 @@ import { describePath, type ClaimPath } from "./paths.js";
  * must approve. The operator is never a node in it: they never wait, so no cycle
  * can run through them, which is also why force-release is always available as
  * the escape hatch.
+ *
+ * A cycle can form two ways, and both are covered: at **insertion**, when a new
+ * wait closes a loop (refused outright, so the state never contains it), and by
+ * **churn**, when a promotion hands a path to one waiter and another waiter's
+ * blocker set moves onto it. `findAnyWaitCycle` is what makes the second case
+ * detectable at all — there is no candidate edge to check, only a standing graph.
  */
 
 export interface WaitEdge {
   readonly from: SessionId;
   readonly to: SessionId;
+  /** The wait this edge came from, so a cycle can name which waits are in it. */
+  readonly waitId: ClaimWaitId;
   /** The path being waited on, so the message can name it. */
   readonly path: ClaimPath;
   readonly reason: ClaimWaitReason;
@@ -56,6 +65,7 @@ export function edgesForWait(
     edges.push({
       from: wait.sessionId,
       to: blocker.holder.sessionId,
+      waitId: wait.id,
       path: wait.path,
       reason,
     });
@@ -86,6 +96,41 @@ export function findWaitCycle(
     if (path) return path;
   }
   return null;
+}
+
+/**
+ * Any cycle standing in the graph as it is, with no candidate to hang the search
+ * on.
+ *
+ * This is the churn case: `findWaitCycle` can only answer "would adding this
+ * close a loop", and a promotion that moves a blocker set closes loops without
+ * adding anything. Every edge is tried as a seed, so a cycle anywhere is found.
+ */
+export function findAnyWaitCycle(
+  edges: readonly WaitEdge[],
+): readonly WaitEdge[] | null {
+  for (const seed of edges) {
+    const cycle = findWaitCycle(
+      edges.filter((edge) => edge !== seed),
+      [seed],
+    );
+    if (cycle) return cycle;
+  }
+  return null;
+}
+
+/** The waits a cycle runs through, in the cycle's own order. */
+export function waitsInCycle(
+  cycle: readonly WaitEdge[],
+): readonly ClaimWaitId[] {
+  const seen = new Set<ClaimWaitId>();
+  const ids: ClaimWaitId[] = [];
+  for (const edge of cycle) {
+    if (seen.has(edge.waitId)) continue;
+    seen.add(edge.waitId);
+    ids.push(edge.waitId);
+  }
+  return ids;
 }
 
 /** Depth-first search for a way from `seed.to` back to `seed.from`. */

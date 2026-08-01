@@ -156,7 +156,29 @@ export type ClaimEffect =
   | {
       readonly kind: "wait-removed";
       readonly waitId: ClaimWaitId;
-      readonly reason: "granted" | "withdrawn" | "session-ended" | "refused";
+      readonly reason:
+        | "granted"
+        | "withdrawn"
+        | "session-ended"
+        | "refused"
+        /** Keeping it would deadlock; the `deadlock-refused` effect says how. */
+        | "deadlock";
+    }
+  /**
+   * A standing wait was refused because the wait-for graph had closed a cycle
+   * around it — the churn case, where a promotion moved a blocker set rather than
+   * a request closing the loop (§3.4). Carries the actionable message the session
+   * needs, and is always followed by the `wait-removed` that takes the row out.
+   */
+  | {
+      readonly kind: "deadlock-refused";
+      readonly wait: ClaimWait;
+      readonly message: string;
+      readonly cycle: readonly {
+        readonly from: SessionId;
+        readonly to: SessionId;
+        readonly path: string;
+      }[];
     }
   /**
    * A claim request outside every standing policy: PlotRoom raises an approval

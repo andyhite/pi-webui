@@ -1,7 +1,15 @@
 import type { Author } from "../author.js";
 import type { Clock } from "../clock.js";
 import type { SessionId, WorkstreamId } from "../ids.js";
-import { describeDeadlock, edgesForWait, findWaitCycle } from "./deadlock.js";
+import {
+  describeDeadlock,
+  edgesForWait,
+  findAnyWaitCycle,
+  findWaitCycle,
+  waitForEdges,
+  waitsInCycle,
+  type WaitEdge,
+} from "./deadlock.js";
 import type { PathWrite } from "./divergence.js";
 import {
   newClaimId,
@@ -593,7 +601,79 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
       }
     }
 
+    // Promotion is exactly what closes a cycle with nobody requesting anything:
+    // handing a path to one waiter moves another waiter's blocker set onto it.
+    // Sweeping here is what makes "deadlock is detected, not endured" true for
+    // the churn case and not only at insertion.
+    const swept = breakDeadlocks(current);
+    return {
+      state: swept.state,
+      effects: [...effects, ...swept.effects],
+    };
+  }
+
+  /**
+   * Refuse standing wait-for cycles until the graph is acyclic.
+   *
+   * The **newest** wait in each cycle is the one that goes, matching §3.4's rule
+   * for the insertion case ("refuses the newest claim"): whoever asked last is
+   * who can most cheaply ask again. It leaves with the same actionable message a
+   * refused request gets, named from its own perspective — "you hold X, yield one
+   * of those" rather than a diagram of the loop.
+   */
+  function breakDeadlocks(state: ClaimState): {
+    readonly state: ClaimState;
+    readonly effects: readonly ClaimEffect[];
+  } {
+    let current = state;
+    const effects: ClaimEffect[] = [];
+
+    // Bounded by the number of waits: every pass removes exactly one.
+    for (let pass = 0; pass <= state.waits.length; pass += 1) {
+      const cycle = findAnyWaitCycle(waitForEdges(current));
+      if (cycle === null) break;
+
+      const newest = newestWaitIn(current, cycle);
+      if (newest === undefined) break;
+
+      // Re-derive the cycle starting at the wait being refused, so the message
+      // names what *that* session holds.
+      const others = current.waits
+        .filter((wait) => wait.id !== newest.id)
+        .flatMap((wait) => edgesForWait(current, wait));
+      const fromNewest =
+        findWaitCycle(others, edgesForWait(current, newest)) ?? cycle;
+
+      current = withoutWait(current, newest.id);
+      effects.push(
+        {
+          kind: "deadlock-refused",
+          wait: newest,
+          message: describeDeadlock(fromNewest, current.claims),
+          cycle: fromNewest.map((edge) => ({
+            from: edge.from,
+            to: edge.to,
+            path: edge.path.display,
+          })),
+        },
+        { kind: "wait-removed", waitId: newest.id, reason: "deadlock" },
+      );
+    }
+
     return { state: current, effects };
+  }
+
+  /** Newest by when it joined the queue; the id breaks a tie so this is total. */
+  function newestWaitIn(
+    state: ClaimState,
+    cycle: readonly WaitEdge[],
+  ): ClaimWait | undefined {
+    const ids = new Set(waitsInCycle(cycle));
+    return state.waits
+      .filter((wait) => ids.has(wait.id))
+      .sort(
+        (a, b) => b.since - a.since || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+      )[0];
   }
 
   /**
@@ -1043,11 +1123,35 @@ export function createClaimManager(options: ClaimManagerOptions): ClaimManager {
     };
     if (evaluation.blockers.length > 0) {
       const next = withWait(withoutWait(state, wait.id), authorized);
+      // Answering rewrites the blocker set, which can close a cycle as surely as
+      // a promotion can: an approval edge becomes a held-path edge, and the loop
+      // that was waiting on a human answer is now waiting on a session.
+      const swept = breakDeadlocks(next);
+      const survived = swept.state.waits.find(
+        (candidate) => candidate.id === authorized.id,
+      );
+      const effects: readonly ClaimEffect[] = [
+        { kind: "wait-updated", wait: authorized },
+        ...swept.effects,
+      ];
+      if (survived === undefined) {
+        // The answer was honoured and then the wait had to go; the refusal effect
+        // carries the reason, and the caller sees it as a refusal too.
+        const refusal = swept.effects.find(
+          (effect) => effect.kind === "deadlock-refused",
+        );
+        return refuse(
+          "would_deadlock",
+          refusal && refusal.kind === "deadlock-refused"
+            ? refusal.message
+            : "granting this would deadlock",
+        );
+      }
       return {
         ok: true,
-        state: next,
-        effects: [{ kind: "wait-updated", wait: authorized }],
-        result: waitResult(next, authorized),
+        state: swept.state,
+        effects,
+        result: waitResult(swept.state, survived),
       };
     }
 
