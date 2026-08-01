@@ -1,14 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import type { NodeId } from "@plotroom/core";
 import { humanAuthor } from "@plotroom/core";
 import type {
-  CanvasNodeInput,
-  Collection,
   CommandPaletteItem,
   ContextInputRow,
+  Collection,
   GraphSnapshot,
   Note,
-  PaletteEntry,
   Placements,
 } from "@plotroom/ui";
 import {
@@ -19,34 +16,30 @@ import {
   NotePanel,
   PaletteRail,
   PlotCanvas,
+  browserWebSocketFactory,
+  createApiActions,
+  createApiGraphDataSource,
   createFixtureGraphDataSource,
+  createHttpClient,
   createNote,
   createPanelRegistry,
   createWebStoragePlacementStore,
-  createWorkstreamFromDrop,
   definePanel,
   deriveGraphWarnings,
   dragOutMember,
   expandCollection,
   pruneMember,
-  unplacedEntries,
   useSelectionRoute,
 } from "@plotroom/ui";
+import type { WarningGraphNode } from "@plotroom/ui";
 
-import {
-  FIXTURE_COLLECTION,
-  FIXTURE_CONTAINERS,
-  FIXTURE_CONTEXT_INPUTS,
-  FIXTURE_EDGES,
-  FIXTURE_NODES,
-  FIXTURE_PALETTE_ENTRIES,
-  toWarningGraphNodes,
-} from "./fixtures.js";
+import { FIXTURE_COLLECTION, FIXTURE_SNAPSHOT } from "./fixtures.js";
 
 /**
  * Placement is durable across reloads (spec §5). localStorage stands in for
- * the server API (Phase 2); the canvas only ever sees the PlacementStore
- * interface, so the swap will not touch it.
+ * a server-side placement store (none exists — position is client-owned,
+ * not part of `PlacedNode`); the canvas only ever sees the `PlacementStore`
+ * interface, so a future swap would not touch it.
  */
 const placementStore = createWebStoragePlacementStore(
   window.localStorage,
@@ -54,23 +47,28 @@ const placementStore = createWebStoragePlacementStore(
 );
 
 /**
- * The graph data seam (Epic 3.0): the canvas is fed by a `GraphDataSource`,
- * never by fixtures directly. Stage 2 (Sync 2) swaps this one call for
- * `createApiGraphDataSource(httpClient)` — nothing downstream of `load()`
- * changes.
+ * The graph data seam (Epic 3.0, Sync 2): the canvas is fed by a
+ * `GraphDataSource`, never by fixtures directly. Live by default; set
+ * `VITE_USE_FIXTURES=1` for tests or offline dev — the fixture source
+ * satisfies the exact same `GraphSnapshot` shape (`fixtures.ts`), so nothing
+ * downstream of `subscribe()` cares which one is in play. Offline mode is
+ * read-only: gestures that would mutate the board log why they didn't,
+ * rather than silently doing nothing.
  */
-const graphDataSource = createFixtureGraphDataSource({
-  nodes: FIXTURE_NODES,
-  edges: FIXTURE_EDGES,
-  containers: FIXTURE_CONTAINERS,
-});
+const LIVE = import.meta.env.VITE_USE_FIXTURES !== "1";
+
+const httpClient = createHttpClient((path, init) => fetch(path, init));
+
+const graphDataSource = LIVE
+  ? createApiGraphDataSource({
+      http: httpClient,
+      createSocket: browserWebSocketFactory(),
+    })
+  : createFixtureGraphDataSource(FIXTURE_SNAPSHOT);
+
+const actions = createApiActions(httpClient);
 
 const now = () => Date.now();
-
-/** Content kinds the palette places directly on drop (§5); commands aren't. */
-function roleForPaletteEntry(entry: PaletteEntry): "content" | "session" {
-  return entry.kind === "session" ? "session" : "content";
-}
 
 export function App() {
   const [placements, setPlacements] = useState<Placements | null>(null);
@@ -81,11 +79,6 @@ export function App() {
   const [collapsedContainerIds, setCollapsedContainerIds] = useState<
     Set<string>
   >(() => new Set());
-
-  // §3.5: edge order is assembly order, rearrangeable by drag.
-  const [contextInputs, setContextInputs] = useState<
-    readonly ContextInputRow[]
-  >(FIXTURE_CONTEXT_INPUTS);
 
   const initialNote = useMemo(
     () =>
@@ -98,61 +91,50 @@ export function App() {
     [],
   );
 
-  // §3.1: a collection expands, prunes, and drags members out.
+  // §3.1: a collection expands, prunes, and drags members out. There is no
+  // collection membership model server-side yet (an open decision, per
+  // docs/AGENTS.md), so this stays a fixture-shaped demo either way.
   const [collection, setCollection] = useState<Collection>(() => ({
     ...FIXTURE_COLLECTION,
     expanded: false,
   }));
 
-  // §3.5/§3.3: one gesture — dropping a command definition onto a bare
-  // ticket — creates a workstream. The result is logged rather than
-  // spliced into the fixture graph as new nodes, which would need real
-  // command-node content this epic's fixtures don't model yet (Track A's
-  // command schema, Epic 1.4, has not landed).
   const [gestureLog, setGestureLog] = useState<readonly string[]>([]);
-
-  // Palette entries the operator has dragged onto the canvas (§5): once
-  // placed they leave the rail and become plain canvas nodes.
-  const [droppedNodes, setDroppedNodes] = useState<readonly CanvasNodeInput[]>(
-    [],
-  );
-  const [placedEntryIds, setPlacedEntryIds] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
+  function log(entry: string): void {
+    setGestureLog((current) => [...current, entry]);
+  }
 
   useEffect(() => {
     let cancelled = false;
     void placementStore.load().then((loaded) => {
       if (!cancelled) setPlacements(loaded);
     });
-    void graphDataSource.load().then((loaded) => {
-      if (!cancelled) setGraph(loaded);
+    const unsubscribe = graphDataSource.subscribe((snapshot) => {
+      if (!cancelled) setGraph(snapshot);
     });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, []);
 
-  const attentionNodeIds = useMemo(() => ["ticket-off-screen"], []);
+  const attentionNodeIds = useMemo<readonly string[]>(() => [], []);
 
-  const allNodes = useMemo<readonly CanvasNodeInput[]>(
-    () => [...(graph?.nodes ?? []), ...droppedNodes],
-    [graph, droppedNodes],
-  );
-
-  // Graph warnings (§5): pure derivation over the graph, re-run whenever it
-  // changes. Never a refusal — read here and in the editor surface below.
-  const warnings = useMemo(
-    () =>
-      deriveGraphWarnings(
-        toWarningGraphNodes(allNodes),
-        (graph?.edges ?? []).map((edge) => ({
-          from: edge.source,
-          to: edge.target,
-        })),
-      ),
-    [allNodes, graph],
-  );
+  // Graph warnings (§5): pure derivation over the live graph, re-run
+  // whenever it changes. Never a refusal — read here and in the editor
+  // surface (the Warnings panel) below.
+  const warnings = useMemo(() => {
+    if (!graph) return [];
+    const warningNodes: WarningGraphNode[] = graph.nodes.map((node) => ({
+      id: node.id,
+      role: node.role,
+      ...graph.warningFacts.get(node.id),
+    }));
+    return deriveGraphWarnings(
+      warningNodes,
+      graph.edges.map((edge) => ({ from: edge.source, to: edge.target })),
+    );
+  }, [graph]);
 
   const warningsByNodeId = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -164,17 +146,12 @@ export function App() {
     return map;
   }, [warnings]);
 
-  const paletteEntries = useMemo(
-    () => unplacedEntries(FIXTURE_PALETTE_ENTRIES, placedEntryIds),
-    [placedEntryIds],
-  );
-
   // Command palette (§11): one keyboard entry point for navigation and
   // every verb. Navigation items always resolve through `select` — the same
   // selection-as-route primitive the canvas click uses (§5).
   const commandPaletteItems = useMemo<readonly CommandPaletteItem[]>(
     () => [
-      ...allNodes.map((node): CommandPaletteItem => ({
+      ...(graph?.nodes ?? []).map((node): CommandPaletteItem => ({
         id: `nav-${node.id}`,
         label: node.label,
         kind: "navigate",
@@ -182,8 +159,23 @@ export function App() {
       })),
       { id: "verb-clear-log", label: "clear gesture log", kind: "verb" },
     ],
-    [allNodes],
+    [graph],
   );
+
+  // Ordered context inputs into the selected command (§3.5), read from the
+  // live graph and persisted on reorder via POST /api/nodes/:id/context/order.
+  const contextInputs = useMemo<readonly ContextInputRow[]>(() => {
+    if (!graph || !selectedNodeId) return [];
+    const labelOf = new Map(graph.nodes.map((node) => [node.id, node.label]));
+    return graph.contextEdges
+      .filter((edge) => edge.to === selectedNodeId)
+      .sort((a, b) => a.ordinal - b.ordinal)
+      .map((edge) => ({
+        id: edge.id,
+        ordinal: edge.ordinal,
+        label: labelOf.get(edge.from) ?? edge.from,
+      }));
+  }, [graph, selectedNodeId]);
 
   const panelRegistry = useMemo(() => {
     const registry = createPanelRegistry();
@@ -223,7 +215,7 @@ export function App() {
     <div style={{ display: "flex", width: "100vw", height: "100vh" }}>
       <div style={{ width: 240, borderRight: "1px solid black", padding: 8 }}>
         <h2>palette (§5)</h2>
-        <PaletteRail entries={paletteEntries} />
+        <PaletteRail entries={graph.paletteEntries} />
       </div>
 
       <div style={{ width: "100%", height: "100%" }}>
@@ -235,7 +227,7 @@ export function App() {
           }}
         />
         <PlotCanvas
-          nodes={allNodes}
+          nodes={graph.nodes}
           edges={graph.edges}
           containers={graph.containers}
           collapsedContainerIds={collapsedContainerIds}
@@ -252,6 +244,7 @@ export function App() {
           }
           placements={placements}
           onPlacementsChange={(next) => {
+            setPlacements(next);
             void placementStore.save(next);
           }}
           selectedNodeId={selectedNodeId}
@@ -259,44 +252,87 @@ export function App() {
           attentionNodeIds={attentionNodeIds}
           warningsByNodeId={warningsByNodeId}
           onBatchAction={(action, ids) => {
-            setGestureLog((log) => [
-              ...log,
-              `batch ${action}: ${ids.join(", ")}`,
-            ]);
+            log(`batch ${action}: ${ids.join(", ")}`);
           }}
           onCreateFromDrag={(sourceId, option) => {
-            setGestureLog((log) => [
-              ...log,
-              `create ${option.kind} from ${sourceId}`,
-            ]);
-          }}
-          onDropDefinitionOnTicket={(ticketNodeId) => {
-            const result = createWorkstreamFromDrop(
-              ticketNodeId as NodeId,
-              `command-${crypto.randomUUID()}` as NodeId,
-              humanAuthor,
-              now(),
+            log(
+              `create ${option.kind} from ${sourceId} (not yet wired to /api)`,
             );
-            setGestureLog((log) => [
-              ...log,
-              `workstream ${result.workstreamId} created from ${ticketNodeId}, ` +
-                `command ${result.commandNodeId} wired with an authored context edge`,
-            ]);
+          }}
+          onWireContext={(from, to) => {
+            if (!LIVE) {
+              log(`offline mode: wiring ${from} -> ${to} was not saved`);
+              return;
+            }
+            void actions.addContextEdge({ from, to }).then((result) => {
+              if (!result.ok) {
+                log(
+                  `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                );
+              }
+            });
+          }}
+          onDropDefinitionOnTicket={(ticketNodeId, definitionId) => {
+            if (!LIVE) {
+              log(
+                `offline mode: dropping definition ${definitionId} onto ${ticketNodeId} was not saved`,
+              );
+              return;
+            }
+            const ticket = graph.nodes.find((node) => node.id === ticketNodeId);
+            if (!ticket?.refId) return;
+            void (async () => {
+              const workstream = await actions.createWorkstream(ticket.refId);
+              if (!workstream.ok) {
+                log(
+                  `refused: ${workstream.refusal.reason} - ${workstream.refusal.message}`,
+                );
+                return;
+              }
+              const command = await actions.instantiateCommand({
+                definitionId,
+                workstreamId: workstream.value.workstreamId,
+                context: [ticketNodeId],
+              });
+              if (!command.ok) {
+                log(
+                  `refused: ${command.refusal.reason} - ${command.refusal.message}`,
+                );
+                return;
+              }
+              log(
+                `workstream ${workstream.value.workstreamId} created from ${ticketNodeId}, ` +
+                  `command ${command.value.commandId} wired with an authored context edge`,
+              );
+            })();
           }}
           onDropPaletteEntry={(entryId, position) => {
-            const entry = FIXTURE_PALETTE_ENTRIES.find((e) => e.id === entryId);
-            if (!entry) return;
-            setDroppedNodes((current) => [
-              ...current,
-              {
-                id: entry.id,
-                label: entry.label,
-                role: roleForPaletteEntry(entry),
-                ...(entry.kind === "session" ? { running: false } : {}),
-                defaultPosition: position,
-              },
-            ]);
-            setPlacedEntryIds((current) => new Set([...current, entryId]));
+            if (!LIVE) {
+              log(`offline mode: dropping ${entryId} was not saved`);
+              return;
+            }
+            const entry = graph.paletteEntries.find((e) => e.id === entryId);
+            if (!entry || entry.kind === "command_definition") return;
+            const role = entry.kind === "session" ? "session" : "content";
+            void actions
+              .placeNode({
+                role,
+                refId: entryId,
+                ...(role === "session" ? { running: false } : {}),
+              })
+              .then((result) => {
+                if (!result.ok) {
+                  log(
+                    `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                  );
+                  return;
+                }
+                setPlacements((current) => {
+                  const next = { ...current, [result.value.nodeId]: position };
+                  void placementStore.save(next);
+                  return next;
+                });
+              });
           }}
         />
       </div>
@@ -311,11 +347,32 @@ export function App() {
         }}
       >
         <section>
-          <h2>context inputs into command-implement (§3.5)</h2>
-          <ContextInputList
-            edges={contextInputs}
-            onReorder={setContextInputs}
-          />
+          <h2>context inputs into the selected command (§3.5)</h2>
+          {selectedNodeId ? (
+            <ContextInputList
+              edges={contextInputs}
+              onReorder={(reordered) => {
+                if (!LIVE) {
+                  log("offline mode: reordering context was not saved");
+                  return;
+                }
+                void actions
+                  .reorderContext(
+                    selectedNodeId,
+                    reordered.map((edge) => edge.id),
+                  )
+                  .then((result) => {
+                    if (!result.ok) {
+                      log(
+                        `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                      );
+                    }
+                  });
+              }}
+            />
+          ) : (
+            <div>select a command to see its context inputs</div>
+          )}
         </section>
 
         <section>
@@ -345,10 +402,7 @@ export function App() {
                       const result = dragOutMember(collection, memberId);
                       setCollection(result.collection);
                       if (result.draggedId) {
-                        setGestureLog((log) => [
-                          ...log,
-                          `dragged out ${result.draggedId}`,
-                        ]);
+                        log(`dragged out ${result.draggedId}`);
                       }
                     }}
                   >
