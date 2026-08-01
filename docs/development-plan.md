@@ -709,6 +709,23 @@ parent-to-child grant the claim model is built on would be refused).
   operator through `endedBy`, because requiring it would break an `apps/web`
   fixture this track does not own.
 
+The run spine landing mid-review made the catalog test earn its keep twice: it
+failed the moment twelve `runs`/`sessions` endpoints existed without tools, which
+is principle 8 drifting in the direction nobody notices (the UI gains a gesture an
+agent does not). Those tools are in the catalog now — and `session_dispatch` is
+gone rather than pending, because `POST /api/runs` with a session actor _is_
+delegation and a second way to start a session is what principle 5 forbids. What
+makes a run a delegation is therefore the actor: **Track A records the
+`session_delegated` provenance edge and attributes the child's spend up the
+initiating chain from it** (`planDelegation`, `attributeSpend`).
+
+Also aligned with main rather than re-litigated: an **open** session's `completed`
+claim is refused as a failure, matching the decision already landed in the run
+driver (`fix(sessions): refuse any unproven completion claim`) — an open session
+has no declared outcome, so the claim is more unfounded rather than less. The rule
+now lives in `checkProvenCompletion`, so the driver's own conversion can be
+deleted in favour of passing `CompletionEvidence`.
+
 Cross-track follow-ups this created, for the orchestrator to schedule: **Track B**
 should render the new `feedback` entry kind (`buildTurnItems` in
 `packages/ui/src/sessions/transcript-view.ts` switches without a default, so
