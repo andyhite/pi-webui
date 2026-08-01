@@ -49,6 +49,7 @@ export * from "./sessions/drafts.js";
 export * from "./sessions/export.js";
 export * from "./sessions/canvas-node.js";
 export * from "./sessions/ConversationPanel.js";
+export * from "./sessions/StopControls.js";
 export * from "./diff/types.js";
 export * from "./diff/tree.js";
 export * from "./diff/data-source.js";
