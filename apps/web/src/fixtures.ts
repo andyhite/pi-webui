@@ -8,10 +8,15 @@
  */
 
 import {
+  EMPTY_INJECTIONS,
   humanAuthor,
   INHERIT_APP_TOOLS,
+  markDelivered,
   phaseFacts,
+  queueInjection,
   startSession,
+  type InjectionLedger,
+  type NodeId,
   type Session,
   type SessionPhase,
   type SessionStatus,
@@ -25,6 +30,7 @@ import {
   type ContextEdgeFact,
   type ContextInputRow,
   type GraphSnapshot,
+  type OpenQuestion,
   type PaletteEntry,
   type PaletteTicketEntry,
   type ScriptedTurnDelivery,
@@ -439,6 +445,56 @@ export const FIXTURE_RELEASED_CONTENT: ReadonlyMap<string, string> = new Map([
  * — read-only file tree + patches, fed until a real workspace/diff server
  * API exists.
  */
+/**
+ * Structured questions as bubbles (spec §6.4): no stream carries an open
+ * question yet (`bubbles/question-source.ts`'s doc comment states the exact
+ * gap), so this is the fixture a `QuestionDataSource` answers today —
+ * rendered as a bubble on `session-running`'s node.
+ */
+export const FIXTURE_OPEN_QUESTIONS: readonly OpenQuestion[] = [
+  {
+    id: "question-1",
+    nodeId: FIXTURE_SESSION_RUNNING.id,
+    text: "the ticket is ambiguous about auth scope — include refresh tokens?",
+    options: ["yes, include refresh tokens", "no, access tokens only"],
+    raisedAt: 1_700_000_200,
+    answeredValue: null,
+  },
+];
+
+/**
+ * An injection ledger fixture (spec §6.5): one entry still queued, one
+ * already delivered, so the bubble layer's distinct queued/delivered
+ * rendering has something real to show. No injection endpoint exists yet
+ * (Track A/C, Batch 3), so this is the only source until then.
+ */
+export const FIXTURE_INJECTIONS: InjectionLedger = (() => {
+  let ledger = EMPTY_INJECTIONS;
+  // The session's own node id and its session id are the same string
+  // (`sessionCanvasNode` sets both to `session.id`), but the two are
+  // distinctly branded (`NodeId` vs `SessionId`) — this cast states that
+  // fixture fact rather than widening either brand.
+  const sessionNodeId = FIXTURE_SESSION_RUNNING.id as unknown as NodeId;
+  ledger = queueInjection(ledger, {
+    id: "injection-queued",
+    sessionId: FIXTURE_SESSION_RUNNING.id,
+    author: humanAuthor,
+    nodeId: sessionNodeId,
+    text: "stop grepping, the answer is in docs/architecture.md",
+    queuedAt: 1_700_000_300,
+  });
+  ledger = queueInjection(ledger, {
+    id: "injection-delivered",
+    sessionId: FIXTURE_SESSION_RUNNING.id,
+    author: humanAuthor,
+    nodeId: sessionNodeId,
+    text: "use the existing route table, don't rewrite it",
+    queuedAt: 1_700_000_100,
+  });
+  ledger = markDelivered(ledger, "injection-delivered", 1_700_000_150);
+  return ledger;
+})();
+
 export const FIXTURE_WORKSPACE_DIFF: WorkspaceDiff = {
   workspaceId: "workspace-oxy-2982",
   files: [

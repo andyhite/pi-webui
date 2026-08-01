@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { humanAuthor } from "@plotroom/core";
-import type { SessionId } from "@plotroom/core";
+import type { SessionId, SessionPhase, Transcript } from "@plotroom/core";
 import type {
+  BubbleSource,
   CommandPaletteItem,
   ContextInputRow,
   Collection,
   GraphSnapshot,
   Note,
+  OpenQuestion,
   Placements,
 } from "@plotroom/ui";
 import {
@@ -24,7 +26,9 @@ import {
   createApiActions,
   createApiGraphDataSource,
   createApiSessionDataSource,
+  createFixtureDiffDataSource,
   createFixtureGraphDataSource,
+  createFixtureQuestionDataSource,
   createFixtureSessionDataSource,
   createHttpClient,
   createNote,
@@ -32,8 +36,11 @@ import {
   createWebStoragePlacementStore,
   createWebStorageSessionDraftsStore,
   definePanel,
+  deriveCommandBubbleSources,
   deriveGraphWarnings,
   deriveInitialArrangement,
+  deriveInjectionBubbleSources,
+  deriveSessionBubbleSources,
   dragOutMember,
   endRun,
   expandCollection,
@@ -44,6 +51,8 @@ import type { WarningGraphNode } from "@plotroom/ui";
 
 import {
   FIXTURE_COLLECTION,
+  FIXTURE_INJECTIONS,
+  FIXTURE_OPEN_QUESTIONS,
   FIXTURE_RELEASED_CONTENT,
   FIXTURE_SESSIONS,
   FIXTURE_SESSION_STATUSES,
@@ -109,6 +118,36 @@ const sessionDataSource = LIVE
  */
 const SEND_DISABLED_REASON =
   "session injection has no server endpoint yet (Batch 3 scope)";
+
+/**
+ * The Diff panel's data seam (spec §11, Epic 5.1 finish): no
+ * workspace/diff server endpoint exists on `main` yet (`diff/data-source.ts`
+ * states the exact swap point), so this is fixture-fed either way — unlike
+ * the graph/session seams above, there is no live implementation to switch
+ * to yet.
+ */
+const diffDataSource = createFixtureDiffDataSource(
+  new Map([[FIXTURE_WORKSPACE_DIFF.workspaceId, FIXTURE_WORKSPACE_DIFF]]),
+);
+
+/**
+ * Structured questions as bubbles (§6.4): no stream carries an open
+ * question yet (`bubbles/question-source.ts` states the exact gap), so
+ * this fixture is what answers one today, live or fixture-fed graph alike.
+ */
+const questionDataSource = createFixtureQuestionDataSource(
+  FIXTURE_OPEN_QUESTIONS,
+);
+
+/**
+ * The transcript checkpoint gesture (§3.6, §6.1) has a real server endpoint
+ * already (`POST /api/sessions/:id/checkpoint`) — live, not fixture-gated,
+ * because unlike injection this one shipped with Track A's session routes.
+ * Offline/fixture mode still names why it cannot act.
+ */
+const CHECKPOINT_DISABLED_REASON = LIVE
+  ? undefined
+  : "offline mode: checkpointing was not saved";
 
 /** Drafts and prompt history persist per session (§6.2), the same durable-store seam as placement. */
 const sessionDraftsStore = createWebStorageSessionDraftsStore(
@@ -190,6 +229,119 @@ export function App() {
   }, []);
 
   const attentionNodeIds = useMemo<readonly string[]>(() => [], []);
+
+  // Speech bubbles (§5): session sayings/tool-in-flight are fed live off
+  // the same `SessionDataSource` the Conversation panel already uses — one
+  // subscription per session-role node currently on the graph, kept live
+  // exactly the way `subscribeSession`/`subscribeTranscript` already are
+  // elsewhere. Structured questions and injections have no live stream yet
+  // (see `bubbles/question-source.ts`, `FIXTURE_INJECTIONS`), so those stay
+  // fixture-fed until Track A/C land the endpoints.
+  const sessionNodeIds = useMemo(
+    () =>
+      (graph?.nodes ?? []).filter((n) => n.role === "session").map((n) => n.id),
+    [graph],
+  );
+  const [sessionBubbleData, setSessionBubbleData] = useState<
+    ReadonlyMap<string, { transcript: Transcript; phase: SessionPhase }>
+  >(new Map());
+
+  useEffect(() => {
+    const unsubscribes = sessionNodeIds.map((nodeId) => {
+      const sessionId = nodeId as SessionId;
+      let transcript: Transcript = { sessionId, turns: [] };
+      let phase: SessionPhase = { kind: "idle" };
+      function apply(): void {
+        setSessionBubbleData((current) => {
+          const next = new Map(current);
+          next.set(nodeId, { transcript, phase });
+          return next;
+        });
+      }
+      const unsubscribeTranscript = sessionDataSource.subscribeTranscript(
+        sessionId,
+        (event) => {
+          transcript = event.transcript;
+          apply();
+        },
+      );
+      const unsubscribeSession = sessionDataSource.subscribeSession(
+        sessionId,
+        (detail) => {
+          phase = detail.status.phase;
+          apply();
+        },
+      );
+      return () => {
+        unsubscribeTranscript();
+        unsubscribeSession();
+      };
+    });
+    return () => {
+      for (const unsubscribe of unsubscribes) unsubscribe();
+    };
+  }, [sessionNodeIds]);
+
+  const [openQuestions, setOpenQuestions] = useState<readonly OpenQuestion[]>(
+    [],
+  );
+  useEffect(
+    () => questionDataSource.subscribe((open) => setOpenQuestions(open)),
+    [],
+  );
+
+  const bubbleSources = useMemo<readonly BubbleSource[]>(() => {
+    if (!graph) return [];
+    const commandInputs = graph.nodes
+      .filter((n) => n.role === "command")
+      .map((n) => ({
+        nodeId: n.id,
+        assembledContent: graph.warningFacts.get(n.id)?.assembledContent ?? "",
+        updatedAt: 0,
+      }));
+    const commandSources = deriveCommandBubbleSources(commandInputs);
+
+    const sessionSources = sessionNodeIds.flatMap((nodeId) => {
+      const data = sessionBubbleData.get(nodeId);
+      if (!data) return [];
+      return deriveSessionBubbleSources({
+        nodeId,
+        transcript: data.transcript,
+        phase: data.phase,
+        now: now(),
+      });
+    });
+
+    // Fixture-fed (§6.5, see `diffDataSource`'s sibling note above): rendered
+    // on whichever session node(s) the fixture ledger names, live graph or
+    // not.
+    const injectedNodeIds = new Set(
+      [...FIXTURE_INJECTIONS.values()].map((entry) => entry.nodeId as string),
+    );
+    const injectionSources = sessionNodeIds.flatMap((nodeId) =>
+      injectedNodeIds.has(nodeId)
+        ? deriveInjectionBubbleSources(nodeId, FIXTURE_INJECTIONS)
+        : [],
+    );
+
+    const questionSources: BubbleSource[] = openQuestions.map((question) => ({
+      id: `${question.nodeId}:question:${question.id}`,
+      nodeId: question.nodeId,
+      kind: "question",
+      text: question.text,
+      options: question.options,
+      answeredValue: question.answeredValue,
+      updatedAt: question.raisedAt,
+      wantsAttention: question.answeredValue === null,
+    }));
+
+    return [
+      ...commandSources,
+      ...sessionSources,
+      ...injectionSources,
+      ...questionSources,
+    ];
+  }, [graph, sessionNodeIds, sessionBubbleData, openQuestions]);
 
   // Graph warnings (§5): pure derivation over the live graph, re-run
   // whenever it changes. Never a refusal — read here and in the editor
@@ -292,6 +444,22 @@ export function App() {
               dataSource={sessionDataSource}
               draftsStore={sessionDraftsStore}
               sendDisabledReason={SEND_DISABLED_REASON}
+              checkpointDisabledReason={CHECKPOINT_DISABLED_REASON}
+              onCheckpointTranscript={(sessionId) => {
+                void actions.checkpointTranscript(sessionId).then((result) => {
+                  if (!result.ok) {
+                    log(
+                      `refused: ${result.refusal.reason} - ${result.refusal.message}`,
+                    );
+                    return;
+                  }
+                  log(
+                    result.value.publication === null
+                      ? `checkpoint ${sessionId}: nothing new to publish`
+                      : `checkpoint ${sessionId}: published version ${result.value.publication.ordinal} (through turn ${result.value.publication.throughTurn})`,
+                  );
+                });
+              }}
               onWireAsContext={(sessionId, turnOrdinal, item) =>
                 log(
                   `wire as context: session ${sessionId} turn ${turnOrdinal} (${item.kind}) — not yet wired`,
@@ -308,7 +476,12 @@ export function App() {
         id: "diff",
         title: "Diff",
         initialState: null,
-        render: () => <DiffPanel diff={FIXTURE_WORKSPACE_DIFF} />,
+        render: () => (
+          <DiffPanel
+            workspaceId={FIXTURE_WORKSPACE_DIFF.workspaceId}
+            dataSource={diffDataSource}
+          />
+        ),
       }),
     );
     return registry;
@@ -362,6 +535,12 @@ export function App() {
           edges={graph.edges}
           containers={graph.containers}
           arrangementEpoch={arrangementEpoch}
+          bubbleSources={bubbleSources}
+          onAnswerQuestion={(source, option) => {
+            const questionId = source.id.split(":question:").at(-1);
+            if (!questionId) return;
+            void questionDataSource.answer(questionId, option);
+          }}
           collapsedContainerIds={collapsedContainerIds}
           onToggleContainer={(containerId) =>
             setCollapsedContainerIds((current) => {
