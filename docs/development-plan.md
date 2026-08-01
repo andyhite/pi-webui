@@ -2472,6 +2472,84 @@ before landing.
 | B     | Renderer contribution points; Filesystem plugin; plugin health UI                                                    |
 | C     | Epic 7.1 contract freeze + permissions; port git onto the contract; GitHub then Jira; Epic 7.4 standing instructions |
 
+_Track B, Stage 1 (renderer contribution points + plugin health UI): **landed.**
+Built against the draft contract types (`packages/plugin-sdk/src/draft/`,
+`docs/plugin-contract-draft.md`) — none of which are frozen yet, so nothing
+here claims Epic 7.1 is done; that box stays Track C's to tick._
+
+_A client-side `ContributionRegistry` (`packages/ui/src/plugins/
+contribution-registry.ts`) resolves card renderers (compact/expanded, with a
+fallback to the host's own generic rendering — a throwing or missing
+renderer degrades to that same fallback, never a broken card), the content
+delta hook ("what's new", kind-specific), and palette/command-palette
+entries, all keyed off a manifest-shaped `DraftPluginManifest`. Panels adapt
+onto the existing `PanelRegistry` through the exact same `register` call the
+in-box panels use (`plugins/panel-adapter.tsx`). `plugins/in-box-modules.ts`
+is the v1 "in-box plugins compile into the app" seam — a static list, empty
+for this batch, that every in-box plugin (Filesystem, GitHub, Jira,
+Coding/git) will register a manifest into via the same `registerManifest`
+call a dynamically-loaded third-party plugin would use once that loader
+exists (**dynamic remote loading is explicitly deferred** — recorded in both
+`in-box-modules.ts` and here, not silently dropped)._
+
+_Wired into the live data path, not just tested in isolation:
+`createApiGraphDataSource` now takes an optional `registry` and resolves a
+card view per content-node object (`api.ts`'s `resolvePluginCardViews`),
+`buildGraphSnapshot` carries a node's concept `kind` and any resolved
+`cardView` through to `CanvasNodeInput`, and `PlotCanvas`'s `BoxNodeView`
+renders a plugin's declarative title/lines/actions in place of the generic
+label when one is present — a fixture manifest proves the whole path in
+`api.test.ts` and `contribution-registry.test.ts`. Production behavior is
+unchanged today: `IN_BOX_PLUGIN_MODULES` is empty, so `cardView` is never
+set and every node renders exactly as before. One deviation for Track C to
+know about: core's `ObjectKind` spells the pull request kind `"pull_request"`
+(`packages/core/src/objects.ts`) but the draft's `DraftConceptKind` spells it
+`"pull-request"` (`DRAFT_CONCEPT_KINDS`), even though the draft's own doc
+comment says it mirrors core's kinds — `api.ts`'s `toDraftConceptKind`
+translates at the boundary for now; Epic 7.1's freeze should reconcile the
+two names rather than carry the translation forward._
+
+_The plugin health panel (`plugins/HealthPanel.tsx`, registered as the dock
+rail's "Plugins" panel) names §10.2's states verbatim — lifecycle
+(`loading`/`ready`/`unavailable`/`disabled`, each with a reason once it
+degrades — `types.ts`'s `applyLifecycleEvent` is the pure transition rule)
+and integration health (`connected`/`misconfigured`/`failing`/`out-of-date`).
+Both are fixture-fed (`FIXTURE_PLUGIN_HEALTH` in `apps/web/src/fixtures.ts`,
+four rows covering every lifecycle/integration combination) because neither
+has a live source yet: Epic 7.1's host (`packages/plugin-sdk/src/host.ts`)
+speaks only load/ping/dispose, with no lifecycle event stream and no
+enable/disable/remove verbs, and Epic 7.2's integration substrate (Track A)
+hasn't landed. The panel's own enable/disable/remove buttons call
+`createUnavailableLifecycleActions`, which refuses every verb with a stated
+`reason: "not-implemented"` — honest, not a silent no-op and not a fabricated
+success._
+
+_Tests: 25 new (`plugins/contribution-registry.test.ts`,
+`plugins/types.test.ts`, `plugins/health-data-source.test.ts`,
+`plugins/lifecycle-actions.test.ts`) plus 4 more in `data-source/
+build-snapshot.test.ts` and 2 in `data-source/api.test.ts` covering the live
+wiring end to end with a fixture manifest — 439 total in `@plotroom/ui`, all
+green. Root `pnpm verify` and all 4 e2e tests (3 spec files) re-run green
+after this lands._
+
+_**Track B's Stage 2 plan** (this batch, once resumed): the Filesystem
+plugin itself, ported onto the draft contract through this exact seam —
+`IN_BOX_PLUGIN_MODULES` gains a `{ pluginId: "filesystem", manifest }` entry
+(a concept producer for `"document"` reading a configured root, a card
+renderer for browse/drag per §9.4, no workspace kind since filesystem writes
+are plain file operations, not git). Blocked on two sync points named in the
+task: **Track C's frozen host** (enable/disable/remove, a real lifecycle
+event stream, and Epic 7.1's contract freeze itself — building a plugin
+against a draft that can still change shape is the wrong order) and **Track
+A's integration substrate** (Epic 7.2's refresh modes and scoping
+declaration, which Filesystem's producer needs to be more than a fixture).
+The gate once Stage 2 lands: a real Filesystem manifest registered in
+`IN_BOX_PLUGIN_MODULES`, its card renderer exercised by a live
+browse-and-drag e2e leg (extending `milestone.spec.ts` or a new spec —
+decided when Stage 2 starts, against whatever the host and substrate
+actually shipped), and the plugin health panel showing Filesystem's real
+lifecycle instead of `FIXTURE_PLUGIN_HEALTH`'s stand-in row._
+
 **Weeks 24–26 — Ship (Phase 8)**
 
 | Track | Work                                                                                                 |
