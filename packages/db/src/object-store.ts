@@ -286,6 +286,19 @@ export class ObjectStore {
   }
 
   /**
+   * Every live object (Epic 2.2's snapshot read): the converse of
+   * {@link deleted}, and what a client that replayed every `object` event
+   * from scratch would end up holding.
+   */
+  live(): ObjectRow[] {
+    return this.state.db
+      .select()
+      .from(objects)
+      .where(isNull(objects.deletedAt))
+      .all();
+  }
+
+  /**
    * Mark versions consumed by a run. Run-referenced versions are retained so
    * any two runs stay comparable forever (§4.4, §15 invariant 1).
    */

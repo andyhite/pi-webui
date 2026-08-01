@@ -504,6 +504,33 @@ export class GraphStore {
     });
   }
 
+  /**
+   * Every node the board draws (Epic 2.2's snapshot read): the converse of
+   * {@link deletedNodes}, and what a client that replayed every `node`
+   * event from scratch would end up holding.
+   */
+  liveNodes(): NodeRow[] {
+    return this.state.db
+      .select()
+      .from(nodes)
+      .where(isNull(nodes.deletedAt))
+      .all();
+  }
+
+  /**
+   * Every edge the board draws, context and provenance alike — the converse
+   * of {@link deletedEdges} (provenance is never soft-deleted, so it is
+   * always included).
+   */
+  liveEdges(): EdgeRow[] {
+    return this.state.db
+      .select()
+      .from(edges)
+      .where(isNull(edges.deletedAt))
+      .orderBy(edges.toNode, edges.ordinal)
+      .all();
+  }
+
   /** What the undo verb can put back (principle 10). */
   deletedNodes(): NodeRow[] {
     return this.state.db

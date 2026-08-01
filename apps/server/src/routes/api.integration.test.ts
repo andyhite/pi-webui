@@ -922,3 +922,247 @@ describe("the stream carries the whole change, not part of it", () => {
     expect(events).toEqual([]);
   });
 });
+
+describe("the board snapshot (Epic 2.2's deferred item, landed)", () => {
+  it("reflects every collection the canvas needs, in the shared vocabulary", async () => {
+    const { workstream, noteId, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+    const edge = await ok("/edges", {
+      method: "POST",
+      body: { from: noteNode, to: command.node },
+    });
+
+    const snapshot = await ok("/snapshot");
+
+    expect(list(snapshot, "workstreams").map((row) => at(row, "id"))).toContain(
+      workstream,
+    );
+    expect(list(snapshot, "nodes").map((row) => at(row, "id"))).toEqual(
+      expect.arrayContaining([noteNode, command.node, command.outputNode]),
+    );
+    expect(list(snapshot, "edges").map((row) => at(row, "id"))).toContain(
+      str(edge, "edge.id"),
+    );
+    expect(list(snapshot, "objects").map((row) => at(row, "id"))).toContain(
+      noteId,
+    );
+    expect(
+      list(snapshot, "commandDefinitions").map((row) => at(row, "id")),
+    ).toContain(command.definitionId);
+    expect(list(snapshot, "commands").map((row) => at(row, "id"))).toContain(
+      command.commandId,
+    );
+    expect(list(snapshot, "outputs").map((row) => at(row, "id"))).toContain(
+      command.outputId,
+    );
+
+    // Objects carry the same card-level shape and current version id the
+    // per-entity GET does (`toPlotObject`), not a snapshot-only cutdown.
+    const object = list(snapshot, "objects").find(
+      (row) => at(row, "id") === noteId,
+    );
+    expect(at(object, "latestVersionId")).toEqual(expect.any(String));
+
+    // Output placeholders carry publish/bind state (§3.5).
+    const output = list(snapshot, "outputs").find(
+      (row) => at(row, "id") === command.outputId,
+    );
+    expect(at(output, "publishedAt")).toBeNull();
+    expect(at(output, "boundObjectId")).toBeNull();
+
+    expect(typeof at(snapshot, "seq")).toBe("number");
+    expect(at(snapshot, "seq")).toBeGreaterThan(0);
+  });
+
+  it("omits every kind of deleted or removed entity", async () => {
+    const { workstream, noteId, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+    const edgeId = str(
+      await ok("/edges", {
+        method: "POST",
+        body: { from: noteNode, to: command.node },
+      }),
+      "edge.id",
+    );
+    const otherDefinition = str(
+      await ok("/command-definitions", {
+        method: "POST",
+        body: {
+          name: "Scratch",
+          instruction: "Do a thing.",
+          model: "fixture-model",
+          effort: "low",
+          lifecycle: "open",
+        },
+      }),
+      "definition.id",
+    );
+
+    await ok(`/edges/${edgeId}`, { method: "DELETE" });
+    await ok(`/command-definitions/${otherDefinition}`, { method: "DELETE" });
+
+    const afterEdgeAndDefinition = await ok("/snapshot");
+    expect(
+      list(afterEdgeAndDefinition, "edges").map((row) => at(row, "id")),
+    ).not.toContain(edgeId);
+    expect(
+      list(afterEdgeAndDefinition, "commandDefinitions").map((row) =>
+        at(row, "id"),
+      ),
+    ).not.toContain(otherDefinition);
+
+    // An object's deletion takes its node and wires down with it, and a
+    // deleted workstream stops appearing too — the snapshot matches what
+    // the WS stream already announced for each (Epic 2.1).
+    await ok(`/objects/${noteId}`, { method: "DELETE" });
+    await ok(`/workstreams/${workstream}`, { method: "DELETE" });
+
+    const after = await ok("/snapshot");
+    expect(list(after, "objects").map((row) => at(row, "id"))).not.toContain(
+      noteId,
+    );
+    expect(list(after, "nodes").map((row) => at(row, "id"))).not.toContain(
+      noteNode,
+    );
+    expect(
+      list(after, "workstreams").map((row) => at(row, "id")),
+    ).not.toContain(workstream);
+
+    // A deleted command's own row drops out of `commands`, even though its
+    // wires (and its placeholder's content node) stay on the board — the
+    // two-state rule leaves nothing silently unblocked (§3.5).
+    await ok(`/commands/${command.commandId}`, { method: "DELETE" });
+    const afterCommand = await ok("/snapshot");
+    expect(
+      list(afterCommand, "commands").map((row) => at(row, "id")),
+    ).not.toContain(command.commandId);
+    expect(list(afterCommand, "outputs").map((row) => at(row, "id"))).toContain(
+      command.outputId,
+    );
+  });
+
+  it("preserves assembly order for a target's context edges (§3.5)", async () => {
+    const { workstream, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+    const second = await ok("/notes", {
+      method: "POST",
+      body: { title: "second", body: "more", workstreamId: workstream },
+    });
+    const secondNode = str(
+      await ok("/nodes", {
+        method: "POST",
+        body: {
+          role: "content",
+          refId: str(second, "object.id"),
+          workstreamId: workstream,
+        },
+      }),
+      "node.id",
+    );
+
+    const first = str(
+      await ok("/edges", {
+        method: "POST",
+        body: { from: noteNode, to: command.node },
+      }),
+      "edge.id",
+    );
+    const later = str(
+      await ok("/edges", {
+        method: "POST",
+        body: { from: secondNode, to: command.node },
+      }),
+      "edge.id",
+    );
+
+    await ok(`/nodes/${command.node}/context/order`, {
+      method: "POST",
+      body: { edgeIds: [later, first] },
+    });
+
+    const snapshot = await ok("/snapshot");
+    const targetEdges = list(snapshot, "edges").filter(
+      (row) => at(row, "to") === command.node,
+    );
+
+    expect(targetEdges.map((row) => at(row, "id"))).toEqual([later, first]);
+    expect(targetEdges.map((row) => at(row, "ordinal"))).toEqual([1, 2]);
+  });
+
+  it("stays consistent with the WS stream across a mutation race", async () => {
+    const { workstream, noteNode } = await board();
+    const command = await producingCommand(workstream, "Implement");
+
+    // Connect first and buffer, exactly the pattern documented next to the
+    // route: a client that fetched the snapshot before connecting could
+    // miss an event published in the gap.
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+      headers: { origin },
+    });
+    const buffered: DomainEvent[] = [];
+
+    await new Promise<void>((resolve, reject) => {
+      ws.on("error", reject);
+      ws.on("message", (data) => {
+        const message = JSON.parse(data.toString()) as {
+          type: string;
+          event?: DomainEvent;
+        };
+        if (message.type === "hello") resolve();
+        if (message.type === "event" && message.event) {
+          buffered.push(message.event);
+        }
+      });
+    });
+
+    // The mutation and the snapshot fetch race each other; the invariant
+    // under test has to hold whichever one the server happens to serialize
+    // first.
+    const [, snapshot] = await Promise.all([
+      ok("/edges", {
+        method: "POST",
+        body: { from: noteNode, to: command.node },
+      }),
+      ok("/snapshot"),
+    ]);
+
+    // A round trip plus a tick, so the buffered ws has whatever it is going
+    // to get for this mutation.
+    await ok("/health");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    ws.close();
+
+    const seq = at(snapshot, "seq") as number;
+    const edgesById = new Map<string, unknown>(
+      list(snapshot, "edges").map((row) => [at(row, "id") as string, row]),
+    );
+
+    // Drop anything the snapshot already reflects; apply the rest, in order
+    // — exactly the resync recipe documented next to the route.
+    for (const event of buffered) {
+      if (event.seq <= seq) continue;
+      if (event.entity !== "edge") continue;
+      if (event.verb === "created") edgesById.set(event.edge.id, event.edge);
+      if (event.verb === "deleted") edgesById.delete(event.edgeId);
+    }
+
+    // Scoped to what `/context` itself answers — context edges into this
+    // one target — since the snapshot's `edges` collection (like the WS
+    // stream) also carries provenance edges the endpoint under test does not.
+    const reconstructed = new Set(
+      [...edgesById.values()]
+        .filter(
+          (row) =>
+            at(row, "kind") === "context" && at(row, "to") === command.node,
+        )
+        .map((row) => at(row, "id") as string),
+    );
+    const actual = new Set(
+      list(await ok(`/nodes/${command.node}/context`), "inputs").map(
+        (row) => at(row, "id") as string,
+      ),
+    );
+
+    expect(reconstructed).toEqual(actual);
+  });
+});

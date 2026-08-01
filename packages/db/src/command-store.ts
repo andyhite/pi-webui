@@ -444,6 +444,16 @@ export class CommandStore {
     return toOutput(row);
   }
 
+  /**
+   * Every output placeholder (Epic 2.2's snapshot read), across every
+   * command whether live or deleted: a placeholder is never removed from the
+   * board by a command's deletion, only marked broken (§3.5), so there is no
+   * `deletedAt` on this row for a "live" query to filter on.
+   */
+  allOutputs(): CommandOutput[] {
+    return this.state.db.select().from(commandOutputs).all().map(toOutput);
+  }
+
   bindState(outputId: string): OutputBindState {
     return outputBindState(this.output(outputId));
   }
@@ -564,6 +574,19 @@ export class CommandStore {
       .select()
       .from(commands)
       .where(isNotNull(commands.deletedAt))
+      .all();
+  }
+
+  /**
+   * Every live command instance (Epic 2.2's snapshot read): the converse of
+   * {@link deletedCommands}, and what a client that replayed every `command`
+   * event from scratch would end up holding.
+   */
+  liveCommands(): CommandRow[] {
+    return this.state.db
+      .select()
+      .from(commands)
+      .where(isNull(commands.deletedAt))
       .all();
   }
 

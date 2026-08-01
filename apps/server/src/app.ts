@@ -19,6 +19,7 @@ import { healthRoutes } from "./routes/health.js";
 import { logLevelRoutes } from "./routes/log-level.js";
 import { objectRoutes } from "./routes/objects.js";
 import { restorableRoutes } from "./routes/restorable.js";
+import { snapshotRoutes } from "./routes/snapshot.js";
 import { workstreamRoutes } from "./routes/workstreams.js";
 import { serveRenderer } from "./static/serve.js";
 import { mountWsRoute } from "./ws/route.js";
@@ -65,6 +66,7 @@ export function configureApp(app: Hono, deps: AppDependencies): void {
   app.route("/api", graphRoutes(stores));
   app.route("/api", commandRoutes(stores));
   app.route("/api", restorableRoutes(stores));
+  app.route("/api", snapshotRoutes(stores));
 
   mountWsRoute({ app, path: "/ws", upgradeWebSocket, bus, logger });
 
