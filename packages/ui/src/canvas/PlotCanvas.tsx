@@ -141,6 +141,13 @@ export interface PlotCanvasProps {
   ) => void;
   readonly createMenuOptions?: readonly CreateMenuOption[];
   /**
+   * A context edge was drawn between two existing, already-legal nodes
+   * (§3.5, §3.7) — the host authors it (e.g. `POST /api/edges`); the local
+   * xyflow edge always draws immediately regardless, since illegal
+   * connections are refused mid-drag and never reach here at all.
+   */
+  readonly onWireContext?: (from: string, to: string) => void;
+  /**
    * A command definition was dropped onto a bare ticket (§3.5): dropping a
    * definition onto a bare ticket creates a workstream in one gesture.
    * `definitionId` is exactly what the drag source set as the
@@ -503,6 +510,7 @@ function CanvasInner({
   onBatchAction,
   onCreateFromDrag,
   createMenuOptions = CREATE_MENU_OPTIONS,
+  onWireContext,
   onDropDefinitionOnTicket,
   onDropPaletteEntry,
   warningsByNodeId,
@@ -768,8 +776,9 @@ function CanvasInner({
       const to = graphNodes.get(connection.target);
       if (!from || !to || !checkConnection(from, to).legal) return;
       setEdges((current) => addEdge(connection, current));
+      onWireContext?.(connection.source, connection.target);
     },
-    [graphNodes, setEdges],
+    [graphNodes, setEdges, onWireContext],
   );
 
   // Drag-to-empty-canvas create menu (§5): filtered to what the dragged
