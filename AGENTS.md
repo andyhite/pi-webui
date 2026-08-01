@@ -519,11 +519,37 @@ Record answers here as they are decided; do not assume.
 - Collection membership model (the `collection` kind has no members yet) — the
   only schema gap left in Phase 1's model: workstreams, nodes, edges, commands,
   runs, sessions, and workspaces are landed (see "Persistence notes").
-- Plugin distribution and permission-grant UX
 - Styling approach for the UI package
 - Versioning and release process
 
 Decided (recorded as they were made):
+
+- **Plugin distribution and permission-grant UX** (Epic 7.1). Three answers, and the
+  third is the one that mattered. **Distribution v1 is in-box packages plus a
+  configured plugins directory** — one subdirectory per plugin, scanned on an
+  operator gesture rather than on a timer (principle 2), with the plugin's id taken
+  from its manifest and never from the directory name, which the operator can
+  rename. "From a source the user configures" is **deferred and recorded as
+  deferred**: it needs fetching, verification, and an update path that must not
+  silently widen permissions, and inventing those under a freeze would have been
+  three decisions nobody reviewed. **Grants are operator-only acts**, made through
+  the API or configuration at install/enable time; there is no agent tool that
+  grants a permission, for the same reason there is none that raises a budget
+  (principle 1). And **a plugin's runtime reach for an ungranted permission raises
+  through the existing approvals channel** (§6.6) rather than through a bespoke
+  plugin dialog: the host refuses the call carrying a `PermissionRaise` whose field
+  names are `ApprovalAsk`'s, so the ask reaches every attention surface and the
+  outbound routes that already exist, answerable without opening anything. The call
+  stays **blocked** meanwhile, like a question — a refusal sent alongside the raise
+  would settle it before anybody was asked — and a permission already **denied**
+  raises nothing, because it was answered. Bespoke grant UX (an install-time dialog,
+  a trusted-publisher tier, what an update that widens a request does) waits for the
+  design package; the five questions the draft recorded are still the right
+  questions. Full network/filesystem **sandboxing is future work and is documented as
+  such** in `docs/plugin-contract.md`: v1 enforces credentials and core capabilities
+  at the host boundary and treats network and filesystem scopes as declared trust,
+  because a declaration the operator reads as a boundary when it is a promise is
+  worse than no declaration.
 
 - **Electron packaging/updater tooling: electron-builder** (with electron-updater). Decided W6–7 under the operator's standing autonomous-judgment directive; applied in Epic 8.4. Rationale: mature updater story and config-driven multi-platform targets fit Epic 8.4's "installers per platform + updater" scope with the least assembly.
 - Retention policy defaults: last 20 runs per definition, 30-day version window (Epic 1.4, recorded in the development plan's Epic 1.4 note).

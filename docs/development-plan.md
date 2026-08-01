@@ -2155,32 +2155,54 @@ discover on a refetch. It stays operator-only. Deferred: nothing renders any of 
 
 ### Epic 7.1 — Plugin contract and host (`plugin-sdk`)
 
-- [ ] Contract: concept producers, write actions, agent tools, content renderers (incl. deltas), card renderers, panels, palette entries, workspace kinds, condition checks, notification routes, command definitions, themes (§10.1)
-- [x] worker_threads host with failure isolation (throw/hang/load-fail → plugin unavailable, reported) (§10.2) — _skeleton landed early (W1–3): load/health/ping/dispose with isolation tests; the contract surface freezes here in Phase 7_
-- [ ] Declared permissions granted by the user; no silent reach; credentials never exposed to sessions or other plugins (§10.2, §9.3)
-- [ ] Contract versioning with refusal/warning; install/enable/disable/remove without restart; plugin health surface (§10.2)
-- [ ] Enforced: plugins cannot author intent — tools act as the calling session (§10.2, principle 1)
-- [ ] Distribution: in-box, from directory, from configured source (§10.2) — record permission-grant UX decision in AGENTS.md
+- [x] Contract: concept producers, write actions, agent tools, content renderers (incl. deltas), card renderers, panels, palette entries, workspace kinds, condition checks, notification routes, command definitions, themes (§10.1) — _frozen at `CONTRACT_VERSION = 1`; see [`plugin-contract.md`](plugin-contract.md)_
+- [x] worker_threads host with failure isolation (throw/hang/load-fail → plugin unavailable, reported) (§10.2) — _skeleton landed early (W1–3); the freeze replaced ping with typed invocation, and added conformance/version refusal and bounded restarts to the same isolation model_
+- [x] Declared permissions granted by the user; no silent reach; credentials never exposed to sessions or other plugins (§10.2, §9.3) — _enforced at the host boundary: per-call injection for granted names only, redaction of injected values out of every result, refusal (with a §6.6 raise) otherwise. **Grant persistence and routing the raise into the queue is server wiring, Track A.** Network/filesystem scopes are declared trust, not a sandbox, and the contract doc says so_
+- [x] Contract versioning with refusal/warning; install/enable/disable/remove without restart (§10.2) — _`checkContractVersion` at load and `PluginRegistry`'s four verbs with a health/event shape. **The health surface itself — `GET /api/plugins` and the panel — is Tracks A and B**_
+- [x] Enforced: plugins cannot author intent — tools act as the calling session (§10.2, principle 1) — _the actor is host-supplied per call, `CoreId`-typed so a plugin cannot construct one, null for every non-tool invocation, and a tool call without one is refused; the worker's whole reach is two enumerated injected capabilities, neither of which authors an edge_
+- [ ] Distribution: in-box, from directory, from configured source (§10.2) — _in-box and directory landed; **"from a configured source" is deliberately deferred** (fetch, verification, and an update path that cannot silently widen permissions — three decisions a freeze should not invent). The permission-grant UX decision is recorded in AGENTS.md_
 
-_**A draft of the contract surface landed in Batch 4 (Track C), and nothing here is
-ticked for it** — drafting is not the epic, and a checked box would say the contract
-exists. It is `packages/plugin-sdk/src/draft/` (exported as `draft.*`, one runtime
-value, a status string) plus [`plugin-contract-draft.md`](plugin-contract-draft.md).
-`CONTRACT_VERSION` is still `0` and the host still speaks only load/ping/dispose:
-nothing is wired and nothing is frozen._
+_**Landed (Batch 5, Track C, Stage 1): the freeze.** The draft is gone —
+`packages/plugin-sdk/src/contract/` is the v1 contract, exported from the package
+root, and [`plugin-contract.md`](plugin-contract.md) replaces the draft doc with the
+deviations from it listed in one section, because Track A built the substrate against
+the draft in parallel. `CONTRACT_VERSION = 1`. The host runs a real bundle: it loads
+a manifest, refuses or warns on its contract version, refuses a nonconformant one,
+and dispatches seven typed invocation kinds (concept read, write action, tool call,
+condition check, content render, content delta, card render) with timeouts. An
+in-repo fixture plugin contributes to all twelve points and the isolation matrix is
+tested case by case — throw, hang, load failure, non-manifest, nonconformant, future
+contract version, crash-and-restart — each degrading that plugin to `unavailable`
+with a reason while a healthy plugin beside it keeps answering._
 
-_Why early: every §10.1 contribution point already has a **native implementation**,
-and Epic 7.3 ports the in-box four onto the public contract. A contract drawn without
-reading those implementations fails at the port — at the end of Phase 7, when the
-shape is hardest to change. Each draft interface therefore names its native
-counterpart (write actions ← write-intents + reversibility; workspace kinds ← core's
-`workspaces/`; condition checks ← the world-condition registry), so the freeze is a
-reconciliation. Three gaps are recorded in the doc rather than papered over:
-`DraftCardView` is the weakest shape (§10.1's "in-canvas interactive surfaces" needs
-a real renderer contribution to test it), the versioning **rule** is not drafted (only
-a number to compare), and the lifecycle verbs are host-side and out of scope for a
-contribution contract. The permission-grant UX stays an **open operator decision**,
-with the five questions that need answers written down where they can be answered._
+_Three things the freeze decided rather than described. **The reconciliation went the
+other way for workspace kinds**: the draft's four methods became core's contract
+narrowed to JSON (opaque config, multi-root units, provisioning cost and typed
+failures, readiness states, a fingerprint instead of a verdict), because the git kind
+is the port that has to work and a shape it cannot express is the wrong shape.
+**Permissions are declared per contribution, not per plugin**, so the gate has
+something to check at the moment of the call. And **a handler's last argument is a
+host-supplied context** — `invocationId`, `actor`, `credentials`, `grants`, `log` —
+which is the whole of a plugin's reach, enumerated, with nothing in it that authors an
+edge (principle 1)._
+
+_Deferred honestly, and written down in the contract doc rather than implied:
+network/filesystem **sandboxing** (v1 declares and displays those scopes; it does not
+confine a worker), **distribution from a configured source**, dispatch for panels,
+palette entries, notification routes and workspace-kind methods (declared, not yet
+called — the callers arrive with Epics 7.2/7.3), and `probeAncestry` for divergence._
+
+_**What Track A mounts** (§8 of the contract doc has the code): one `PluginRegistry`
+with `grantsFor`, a credential resolver, and `onEvent` onto the one event stream;
+operator-only routes for install / enable / disable / remove / grant, with no agent
+tool for any of them (principle 1); a persisted grant row per (plugin, permission)
+whose removal is a delete, not a third state; and a catch on `PluginCallRefusedError`
+that turns a non-null `raise` into a §6.6 approval — its fields are `ApprovalAsk`'s —
+against the calling session, re-invoking when it settles. **What Track B renders**:
+`card.render` answering a declarative `CardView` (compact and expanded; an action with
+a `writeActionId` goes through §6.6 like any UI write), `content.render` /
+`content.delta` answering `RenderedContent` whose `truncated` is displayed rather than
+hidden, and panels/palette entries as declarations until their dispatch lands._
 
 ### Epic 7.2 — Integration substrate (`integrations`)
 
