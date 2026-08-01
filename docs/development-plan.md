@@ -128,15 +128,47 @@ production API). The run factory was a placeholder until Epic 1.4 landed the
 schema; `makeRun` now returns the real domain `Run`, so a fixture cannot be
 built without the assembled content and configuration §15-1 requires._
 
-### Epic 1.5 — Sessions and drift (`sessions`, `graph`)
+### Epic 1.5 — Sessions and drift (`sessions`, `graph`) — _done_
 
-- [ ] Session entity: phases, per-session launch choices, accounting fields, end states including out-of-budget as distinct from failure (§3.6)
-- [ ] Transcript as content: versioned, delta = new turns; bounded with recoverable release markers (§3.6, §6.1)
-- [ ] Live-transcript checkpoint rule: consumers drift on session end or explicit checkpoint, never per turn (§3.6)
-- [ ] **Interrupted** as a distinct end state for crash/restart with sessions in flight — not stopped, not failed; resumable like any session (§3.6, principle 11)
-- [ ] Drift derivation: consumed-version tracking; transitive, per-consumer, cross-workstream flags; drift is a state, never an action (§3.2, §4.5)
-- [ ] Triage verbs on attention items: acknowledge (advance baseline), snooze, mute (§4.5)
-- [ ] Soft-delete/recoverability for all authored state, agent deletions included (principle 10)
+- [x] Session entity: phases, per-session launch choices, accounting fields, end states including out-of-budget as distinct from failure (§3.6)
+- [x] Transcript as content: versioned, delta = new turns; bounded with recoverable release markers (§3.6, §6.1)
+- [x] Live-transcript checkpoint rule: consumers drift on session end or explicit checkpoint, never per turn (§3.6)
+- [x] **Interrupted** as a distinct end state for crash/restart with sessions in flight — not stopped, not failed; resumable like any session (§3.6, principle 11)
+- [x] Drift derivation: consumed-version tracking; transitive, per-consumer, cross-workstream flags; drift is a state, never an action (§3.2, §4.5)
+- [x] Triage verbs on attention items: acknowledge (advance baseline), snooze, mute (§4.5)
+- [x] Soft-delete/recoverability for all authored state, agent deletions included (principle 10)
+
+_Landed as `@plotroom/core`'s `sessions/` subtree: `end-states` (the closed
+taxonomy — completed, ended-by-user, stopped, out-of-budget, failed,
+interrupted — behind one exhaustive `endStateFacts`, so out-of-budget is the
+only outcome a retry may not blindly re-run and interrupted is neither),
+`session`, `accounting` (turns/elapsed/last-activity/tokens plus a cost that
+names its basis and a context-window meter that says reported or estimated),
+`transcript` (three renderings, delta = new turns, largest-old-first release
+behind reloadable markers, export that rehydrates or reports what it could
+not), `checkpoint` (the rule as `publishesVersion` — a turn returns false),
+`drift` (`deriveDrift`: direct and transitive, per consumer, cross-workstream,
+pure), `triage`, and `deletion`. On top of them the Epic 4.1 seam: the
+`runtime` adapter surface with `classifyEnd`, a `phases` reducer folded from
+the observation log (silence surfaces as health, never as a wrong phase), the
+queued→delivered `injection` ledger, `fork` planning with transcript-prefix
+seeding, and adapter v1 for the pi coding agent.
+
+C6 is verified rather than asserted: pi's tool layer **enforces** PlotRoom's
+per-call decision — a `tool_call` handler blocks the call and `ctx.ui.confirm`
+puts the host in the path over RPC — proved end-to-end against pi 0.83.0 by
+`permission-gate.spike.test.ts` (denied call, no side effect; allowed call,
+side effect), opt-in via `PLOTROOM_PI_SPIKE=1` so the default run stays
+hermetic. Adapter order therefore stands.
+
+Deferred, honestly: nothing is persisted yet — the schema for sessions,
+transcripts, and drift lands with the server (Phase 2), so these are domain
+entities only; spawning pi (`PiConnect`) is server-owned, keeping `core` free
+of transport, with `buildPiArgs` as the contract the spike exercises against
+the real binary; `SessionStatus` answers phase-level attention only, so Phase
+6's attention feeds must join `endStateFacts` to surface an interrupted or
+out-of-budget session; and pi has been renamed to `@earendil-works/pi-coding-agent`
+(0.83.0) while decision 0001 still cites the old package name._
 
 ---
 
