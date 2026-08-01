@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  humanAuthor,
   DEFAULT_COMPACTION_POLICY,
   DEFAULT_RUN_RETENTION_POLICY,
-  humanAuthor,
+  INHERIT_APP_TOOLS,
   type CommandId,
 } from "@plotroom/core";
 import {
@@ -19,6 +20,7 @@ import { CommandStore } from "./command-store.js";
 import { GraphStore } from "./graph-store.js";
 import { ObjectStore } from "./object-store.js";
 import { RunRefused, RunStore } from "./run-store.js";
+import { SessionStore } from "./session-store.js";
 import { WorkstreamStore } from "./workstream-store.js";
 
 let dir: string;
@@ -99,6 +101,25 @@ function produced(title = "PR") {
     workstreamId,
   });
   return { name: "pull_request", ...written };
+}
+
+/**
+ * A session for the initiation rows to point at. `run_initiations.session_id`
+ * is a real foreign key, so a settled claim cannot name a session that never
+ * existed — the same reason `run_inputs.version_id` is one (§15-1).
+ */
+function session() {
+  return new SessionStore(state, clock.now).start({
+    workstreamId,
+    mode: "open",
+    launch: {
+      model: "fixture-model",
+      effort: "medium",
+      toolPermissions: INHERIT_APP_TOOLS,
+    },
+    initiatedBy: humanAuthor,
+    runtime: { adapterId: "scripted", ref: "native-1" },
+  }).session;
 }
 
 describe("§15 invariant 1: run history records full content and configuration", () => {
@@ -640,5 +661,85 @@ describe("run-history retention (§4.4)", () => {
       .versions(runs.run(run.id).inputs[0]!.objectId)
       .find((each) => each.id === runs.run(run.id).inputs[0]!.versionId);
     expect(version?.pinned).toBe(true);
+  });
+});
+
+describe("idempotent initiation (principle 9)", () => {
+  it("hands a retry the settled claim, and refuses a key reused elsewhere", () => {
+    const command = wired(["input"]);
+    const other = wired(["input"]);
+
+    expect(runs.claimInitiation("gesture", command.command.id).state).toBe(
+      "claimed",
+    );
+
+    const { run } = runs.start({ commandId: command.command.id });
+    runs.settleInitiation("gesture", run.id, session().id);
+
+    const replay = runs.claimInitiation("gesture", command.command.id);
+    expect(replay.state).toBe("settled");
+    expect(replay.state === "settled" ? replay.initiation.runId : null).toBe(
+      run.id,
+    );
+
+    expect(() => runs.claimInitiation("gesture", other.command.id)).toThrow(
+      RunRefused,
+    );
+  });
+
+  it("frees a claim no attempt can still hold, and keeps settled ones", () => {
+    const command = wired(["input"]);
+    const { run } = runs.start({ commandId: command.command.id });
+
+    runs.claimInitiation("settled-gesture", command.command.id);
+    runs.settleInitiation("settled-gesture", run.id, session().id);
+    // A process that died between claiming and settling leaves this behind; it
+    // would otherwise refuse that gesture forever.
+    runs.claimInitiation("stranded-gesture", command.command.id);
+
+    expect(runs.releaseUnsettledInitiations()).toEqual(["stranded-gesture"]);
+
+    expect(runs.initiation("stranded-gesture")).toBeUndefined();
+    expect(runs.initiation("settled-gesture")?.runId).toBe(run.id);
+    // Idempotent: a second boot finds nothing left to free.
+    expect(runs.releaseUnsettledInitiations()).toEqual([]);
+  });
+});
+
+describe("the content-budget verdict is recomputed, never remembered (§15-1)", () => {
+  it("gives a finished run the same warning it started with", () => {
+    const definition = define({
+      budget: {
+        modelWindowTokens: 40,
+        warnAtFraction: 0.5,
+        hardCapTokens: null,
+      },
+    });
+    const command = wired(["x".repeat(400)], definition.id);
+
+    const { run, warning } = runs.start({ commandId: command.command.id });
+
+    expect(warning).toMatch(/close to the model's 40-token/);
+    // Both inputs are on the run (§15-1), so the answer is the run's own, not a
+    // second opinion about it — and it survives the definition being edited.
+    commands.edit(definition.id, {
+      budget: {
+        modelWindowTokens: 1_000_000,
+        warnAtFraction: 0.99,
+        hardCapTokens: null,
+      },
+    });
+
+    expect(runs.assemblyWarning(run.id)).toBe(warning);
+    expect(runs.contentBudget(run.id).state).toBe("warn");
+  });
+
+  it("reports no warning for a run that was comfortably inside the window", () => {
+    const command = wired(["short input"]);
+    const { run, warning } = runs.start({ commandId: command.command.id });
+
+    expect(warning).toBeNull();
+    expect(runs.assemblyWarning(run.id)).toBeNull();
+    expect(runs.contentBudget(run.id).state).toBe("ok");
   });
 });

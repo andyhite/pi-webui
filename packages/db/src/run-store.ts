@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   checkContentBudget,
   checkSubmission,
@@ -11,6 +11,7 @@ import {
   DEFAULT_RUN_RETENTION_POLICY,
   ZERO_COST,
   type AssembledInput,
+  type BudgetCheck,
   type Clock,
   type CommandDefinitionId,
   type CommandId,
@@ -470,6 +471,33 @@ export class RunStore {
       .run();
   }
 
+  /**
+   * At process start, no attempt can genuinely still be in flight: the attempt
+   * that claimed a key died with the process that was making it. An unsettled
+   * claim left behind by a crash would otherwise refuse that key forever, which
+   * turns idempotency into a trap rather than a guarantee (principle 9).
+   *
+   * Deliberately keyed on "unsettled" and not on age: a settled row is what a
+   * retry replays and is never touched, and there is no live attempt to race.
+   */
+  releaseUnsettledInitiations(): readonly string[] {
+    const stranded = this.state.db
+      .select({ key: runInitiations.initiationKey })
+      .from(runInitiations)
+      .where(isNull(runInitiations.settledAt))
+      .all()
+      .map((row) => row.key);
+
+    if (stranded.length === 0) return [];
+
+    this.state.db
+      .delete(runInitiations)
+      .where(isNull(runInitiations.settledAt))
+      .run();
+
+    return stranded;
+  }
+
   initiation(key: string): RunInitiationRow | undefined {
     return this.state.db
       .select()
@@ -508,6 +536,31 @@ export class RunStore {
    */
   assembledContent(runId: string): string {
     return this.blobs.text(this.runRow(runId).assembledBlobId);
+  }
+
+  /**
+   * The content-budget verdict for a run that already exists, recomputed rather
+   * than remembered.
+   *
+   * §15-1 makes this exact: both inputs are recorded on the run — the assembled
+   * content byte for byte and the budget inside the configuration it ran under —
+   * and it is the same `checkContentBudget` {@link start} asked, so the answer is
+   * the one that run was started with, not a second opinion about it. That is why
+   * there is no `warning` column: a stored copy of a derivable fact is a second
+   * source of truth waiting to disagree.
+   */
+  contentBudget(runId: string): BudgetCheck {
+    const row = this.runRow(runId);
+    return checkContentBudget(
+      estimateTokens(this.blobs.text(row.assembledBlobId)),
+      this.configuration(row).budget,
+    );
+  }
+
+  /** The warning §3.5 requires assembly to give, or null when there was none. */
+  assemblyWarning(runId: string): string | null {
+    const budget = this.contentBudget(runId);
+    return budget.state === "warn" ? budget.message : null;
   }
 
   /** Every run of a command, oldest first: the n in output@n is the ordinal. */
