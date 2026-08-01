@@ -245,4 +245,179 @@ export const migrations: readonly Migration[] = [
         ON workstream_events (workstream_id, created_at);
     `,
   },
+  {
+    id: 5,
+    name: "commands_and_runs",
+    sql: `
+      -- A command definition is reusable, editable *content*, not code
+      -- (§3.5): created, duplicated, and organized by the user, shipped
+      -- first-party in the box, and shippable inside plugins.
+      CREATE TABLE command_definitions (
+        id               TEXT PRIMARY KEY,
+        name             TEXT NOT NULL,
+        instruction      TEXT NOT NULL,
+        model            TEXT NOT NULL,
+        effort           TEXT NOT NULL CHECK (effort IN ('low', 'medium', 'high')),
+        permissions_json TEXT NOT NULL,
+        -- Where the user wants to be asked (§3.5, §6.6). Stored as declared;
+        -- the effective set is computed, because irreversibility always asks.
+        ask_points_json  TEXT NOT NULL,
+        lifecycle        TEXT NOT NULL CHECK (lifecycle IN ('producing', 'open')),
+        -- The expected outcome: a named, typed object, optionally with
+        -- structure and with world conditions (§3.5).
+        outcome_json     TEXT,
+        parameters_json  TEXT NOT NULL,
+        budget_json      TEXT NOT NULL,
+        source           TEXT NOT NULL CHECK (source IN ('builtin', 'user', 'plugin')),
+        -- Organization is authored: a user-named folder, or the top level.
+        folder           TEXT,
+        duplicated_from  TEXT REFERENCES command_definitions (id),
+        created_at       INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at       INTEGER NOT NULL DEFAULT (unixepoch()),
+        deleted_at       INTEGER,
+        -- The two lifecycles, enforced rather than described: producing work
+        -- declares what it will produce, open work cannot pretend to (§3.5).
+        CHECK (
+          (lifecycle = 'producing' AND outcome_json IS NOT NULL) OR
+          (lifecycle = 'open'      AND outcome_json IS NULL)
+        )
+      );
+
+      CREATE INDEX command_definitions_folder_idx
+        ON command_definitions (folder, name);
+
+      -- A command node: a definition plus its wiring (§3.5). workstream_id is
+      -- NOT NULL because a command never leaves its workstream (§3.3).
+      CREATE TABLE commands (
+        id            TEXT PRIMARY KEY,
+        definition_id TEXT NOT NULL REFERENCES command_definitions (id),
+        workstream_id TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+        -- Soft delete: authored state is recoverable (principle 10).
+        deleted_at    INTEGER
+      );
+
+      CREATE INDEX commands_workstream_idx ON commands (workstream_id);
+      CREATE INDEX commands_definition_idx ON commands (definition_id);
+
+      -- Parameter bindings (§3.5). A derived default is a *proposal the user
+      -- confirms, never a guess applied silently* — so the two states are
+      -- distinguished in the schema, and a proposal cannot carry the
+      -- confirmation that would make a reader treat it as a value.
+      CREATE TABLE command_parameter_bindings (
+        command_id   TEXT NOT NULL REFERENCES commands (id) ON DELETE CASCADE,
+        name         TEXT NOT NULL,
+        state        TEXT NOT NULL CHECK (state IN ('proposed', 'confirmed')),
+        value_json   TEXT NOT NULL,
+        -- Where the proposal came from, so the user can judge it.
+        derived_from TEXT,
+        confirmed_at INTEGER,
+        PRIMARY KEY (command_id, name),
+        CHECK (
+          (state = 'proposed'  AND derived_from IS NOT NULL AND confirmed_at IS NULL) OR
+          (state = 'confirmed' AND confirmed_at IS NOT NULL)
+        )
+      );
+
+      -- Output pre-wiring (§3.5): a producing command's output exists before
+      -- any run as a typed placeholder, and binds to what was produced after.
+      CREATE TABLE command_outputs (
+        id              TEXT PRIMARY KEY,
+        command_id      TEXT NOT NULL REFERENCES commands (id) ON DELETE CASCADE,
+        name            TEXT NOT NULL,
+        kind            TEXT NOT NULL,
+        structure_json  TEXT,
+        -- publish marks a placeholder world-visible *before* a run, which is
+        -- the product's only cross-workstream dependency. Distinct from
+        -- promote, which lifts an existing object after the fact (§3.2).
+        published_at    INTEGER,
+        bound_object_id TEXT REFERENCES objects (id),
+        bound_run_id    TEXT REFERENCES runs (id),
+        bound_at        INTEGER,
+        -- The pre-bind half of the two-state rule: deleting the producing
+        -- command leaves a visibly broken placeholder, never a silent
+        -- unblock (§3.5).
+        broken_at       INTEGER,
+        created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+        UNIQUE (command_id, name),
+        CHECK (
+          (bound_object_id IS NULL     AND bound_at IS NULL) OR
+          (bound_object_id IS NOT NULL AND bound_at IS NOT NULL)
+        ),
+        -- Post-bind, what crosses is the object and the command dependency has
+        -- evaporated, so a bound output can never become broken.
+        CHECK (broken_at IS NULL OR bound_object_id IS NULL)
+      );
+
+      CREATE INDEX command_outputs_command_idx ON command_outputs (command_id);
+
+      -- Section 15 invariant 1: run history records the FULL assembled content
+      -- and the configuration it ran under. Both are NOT NULL, because a run
+      -- recorded without them is exactly the uncomparable history the
+      -- invariant exists to prevent (§3.7, §4.4).
+      CREATE TABLE runs (
+        id                 TEXT PRIMARY KEY,
+        command_id         TEXT NOT NULL REFERENCES commands (id) ON DELETE CASCADE,
+        -- Recorded on the run because retention is per definition (§4.4).
+        definition_id      TEXT NOT NULL REFERENCES command_definitions (id),
+        -- Section 15 invariant 4: the n in output@n. 1-based per command, and
+        -- the general address. There is deliberately no 'latest' column
+        -- anywhere in this schema — latest is resolved by ordering runs.
+        ordinal            INTEGER NOT NULL,
+        status             TEXT NOT NULL CHECK (status IN
+                             ('running', 'completed', 'failed', 'out_of_budget', 'stopped')),
+        assembled_blob_id  TEXT NOT NULL REFERENCES blobs (id),
+        assembled_hash     TEXT NOT NULL,
+        assembled_bytes    INTEGER NOT NULL,
+        config_json        TEXT NOT NULL,
+        -- What it cost, so cross-run outcomes are answerable (§4.4, §8).
+        input_tokens       INTEGER NOT NULL DEFAULT 0,
+        output_tokens      INTEGER NOT NULL DEFAULT 0,
+        cost_micros        INTEGER NOT NULL DEFAULT 0,
+        -- Proof is point-in-time: what held at submission, written once and
+        -- never silently revoked (§3.5).
+        outcome_proof_json TEXT,
+        failure_reason     TEXT,
+        -- Pinning is the human's word for "never compact this" (§4.4).
+        pinned             INTEGER NOT NULL DEFAULT 0,
+        started_at         INTEGER NOT NULL DEFAULT (unixepoch()),
+        ended_at           INTEGER,
+        UNIQUE (command_id, ordinal)
+      );
+
+      CREATE INDEX runs_definition_idx ON runs (definition_id, started_at);
+      CREATE INDEX runs_retention_idx ON runs (pinned, started_at);
+
+      -- The exact ordered content that went in (§15 invariant 1). The version
+      -- foreign key is the teeth of invariant 3's interplay: a version a run
+      -- consumed cannot be deleted while the run exists, so compaction can
+      -- never quietly eat run history.
+      CREATE TABLE run_inputs (
+        run_id       TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+        ordinal      INTEGER NOT NULL,
+        node_id      TEXT,
+        object_id    TEXT NOT NULL REFERENCES objects (id),
+        version_id   TEXT NOT NULL REFERENCES object_versions (id),
+        content_hash TEXT NOT NULL,
+        bytes        INTEGER NOT NULL,
+        PRIMARY KEY (run_id, ordinal)
+      );
+
+      CREATE INDEX run_inputs_version_idx ON run_inputs (version_id);
+
+      -- Section 15 invariant 4: outputs are addressed per run. Resolving
+      -- 'latest' is a query over runs.ordinal, so a new run never rewrites
+      -- what output@1 means.
+      CREATE TABLE run_outputs (
+        run_id     TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+        name       TEXT NOT NULL,
+        object_id  TEXT NOT NULL REFERENCES objects (id),
+        version_id TEXT NOT NULL REFERENCES object_versions (id),
+        PRIMARY KEY (run_id, name)
+      );
+
+      CREATE INDEX run_outputs_name_idx ON run_outputs (name, run_id);
+      CREATE INDEX run_outputs_version_idx ON run_outputs (version_id);
+    `,
+  },
 ];

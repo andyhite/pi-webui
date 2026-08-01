@@ -2,6 +2,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import {
   checkAuthoring,
   checkConnection,
+  checkOutputCrossing,
   checkScope,
   newEdgeId,
   newNodeId,
@@ -13,6 +14,7 @@ import {
   type GraphNode,
   type NodeId,
   type NodeRole,
+  type OutputCrossingFacts,
   type ProvenanceKind,
   type ScopeRefusal,
   type SessionId,
@@ -20,6 +22,8 @@ import {
 } from "@plotroom/core";
 import type { PlotroomDatabase } from "./client.js";
 import {
+  commandOutputs,
+  commands,
   edges,
   nodes,
   objects,
@@ -125,6 +129,17 @@ export class GraphStore {
     return row;
   }
 
+  /** The node standing for a subject, unique per (role, refId) by index. */
+  nodeFor(role: NodeRole, refId: string): NodeRow {
+    const row = this.state.db
+      .select()
+      .from(nodes)
+      .where(and(eq(nodes.role, role), eq(nodes.refId, refId)))
+      .get();
+    if (!row) throw new Error(`no ${role} node for ${refId}`);
+    return row;
+  }
+
   setRunning(nodeId: string, running: boolean): void {
     this.state.db
       .update(nodes)
@@ -157,6 +172,20 @@ export class GraphStore {
         (toRow.workstreamId ?? null) as WorkstreamId | null,
       );
       if (!scopeCheck.legal) throw new ConnectionRefused(scopeCheck.refusal);
+    }
+
+    // Publishing is what lets an output placeholder cross workstreams, and a
+    // placeholder whose command was deleted before producing anything is
+    // refused outright rather than treated as quietly wireable (§3.5).
+    const crossing = this.outputCrossingOf(fromRow.refId);
+    if (crossing) {
+      const crossingCheck = checkOutputCrossing(
+        crossing,
+        (toRow.workstreamId ?? null) as WorkstreamId | null,
+      );
+      if (!crossingCheck.legal) {
+        throw new ConnectionRefused(crossingCheck.refusal);
+      }
     }
 
     const authoring = checkAuthoring(
@@ -458,6 +487,34 @@ export class GraphStore {
       kind: "object",
       scope: row.scope,
       workstreamId: (row.workstreamId ?? null) as WorkstreamId | null,
+    };
+  }
+
+  /**
+   * The crossing facts for a content node standing for a command's output
+   * placeholder, when it is one. Ordinary content has no row here and is
+   * governed by the object scope rule instead.
+   */
+  private outputCrossingOf(refId: string): OutputCrossingFacts | null {
+    const row = this.state.db
+      .select({
+        workstreamId: commands.workstreamId,
+        publishedAt: commandOutputs.publishedAt,
+        boundObjectId: commandOutputs.boundObjectId,
+        brokenAt: commandOutputs.brokenAt,
+      })
+      .from(commandOutputs)
+      .innerJoin(commands, eq(commands.id, commandOutputs.commandId))
+      .where(eq(commandOutputs.id, refId))
+      .get();
+
+    if (!row) return null;
+
+    return {
+      workstreamId: row.workstreamId as WorkstreamId,
+      published: row.publishedAt !== null,
+      bound: row.boundObjectId !== null,
+      broken: row.brokenAt !== null,
     };
   }
 

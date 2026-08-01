@@ -275,6 +275,214 @@ export const sessionLineage = sqliteTable(
   (table) => [index("session_lineage_parent_idx").on(table.initiatedBy)],
 );
 
+/**
+ * Spec §3.5: reusable, editable content, not code. `outcomeJson` is present
+ * exactly when the lifecycle is producing — the two lifecycles are a schema
+ * constraint, not a convention (see migration 5).
+ */
+export const commandDefinitions = sqliteTable(
+  "command_definitions",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    instruction: text("instruction").notNull(),
+    model: text("model").notNull(),
+    effort: text("effort", { enum: ["low", "medium", "high"] }).notNull(),
+    permissionsJson: text("permissions_json").notNull(),
+    askPointsJson: text("ask_points_json").notNull(),
+    lifecycle: text("lifecycle", { enum: ["producing", "open"] }).notNull(),
+    outcomeJson: text("outcome_json"),
+    parametersJson: text("parameters_json").notNull(),
+    budgetJson: text("budget_json").notNull(),
+    source: text("source", { enum: ["builtin", "user", "plugin"] }).notNull(),
+    /** Organization is authored: a user-named folder, or the top level. */
+    folder: text("folder"),
+    duplicatedFrom: text("duplicated_from"),
+    createdAt: integer("created_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer("updated_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+    deletedAt: integer("deleted_at"),
+  },
+  (table) => [
+    index("command_definitions_folder_idx").on(table.folder, table.name),
+  ],
+);
+
+/** A command node: a definition plus its wiring, inside one workstream (§3.5). */
+export const commands = sqliteTable(
+  "commands",
+  {
+    id: text("id").primaryKey(),
+    definitionId: text("definition_id")
+      .notNull()
+      .references(() => commandDefinitions.id),
+    /** NOT NULL: a command never leaves its workstream (§3.3). */
+    workstreamId: text("workstream_id")
+      .notNull()
+      .references(() => workstreams.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+    deletedAt: integer("deleted_at"),
+  },
+  (table) => [
+    index("commands_workstream_idx").on(table.workstreamId),
+    index("commands_definition_idx").on(table.definitionId),
+  ],
+);
+
+/**
+ * Spec §3.5: a derived default is a proposal the user confirms, never a guess
+ * applied silently. A `proposed` row carries no `confirmedAt`, which is what
+ * stops a reader from treating a proposal as a value.
+ */
+export const commandParameterBindings = sqliteTable(
+  "command_parameter_bindings",
+  {
+    commandId: text("command_id")
+      .notNull()
+      .references(() => commands.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    state: text("state", { enum: ["proposed", "confirmed"] }).notNull(),
+    valueJson: text("value_json").notNull(),
+    derivedFrom: text("derived_from"),
+    confirmedAt: integer("confirmed_at"),
+  },
+  (table) => [primaryKey({ columns: [table.commandId, table.name] })],
+);
+
+/**
+ * Spec §3.5: a producing command's output exists before any run as a typed
+ * placeholder and binds to what was produced after. `publishedAt` is the
+ * publish verb; promoting the produced object is the other one (§3.2).
+ */
+export const commandOutputs = sqliteTable(
+  "command_outputs",
+  {
+    id: text("id").primaryKey(),
+    commandId: text("command_id")
+      .notNull()
+      .references(() => commands.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    kind: text("kind").notNull(),
+    structureJson: text("structure_json"),
+    publishedAt: integer("published_at"),
+    boundObjectId: text("bound_object_id").references(() => objects.id),
+    boundRunId: text("bound_run_id"),
+    boundAt: integer("bound_at"),
+    /** Set when a pre-bind producer was deleted: visibly broken, never gone. */
+    brokenAt: integer("broken_at"),
+    createdAt: integer("created_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex("command_outputs_unique_name_idx").on(
+      table.commandId,
+      table.name,
+    ),
+    index("command_outputs_command_idx").on(table.commandId),
+  ],
+);
+
+/**
+ * Spec §15 invariant 1: the full assembled content AND the configuration.
+ * Both are NOT NULL — a run that could exist without them is the uncomparable
+ * record the invariant exists to prevent.
+ *
+ * Spec §15 invariant 4: `ordinal` is the n in output@n. No column here records
+ * which run is latest; that is resolved by ordering.
+ */
+export const runs = sqliteTable(
+  "runs",
+  {
+    id: text("id").primaryKey(),
+    commandId: text("command_id")
+      .notNull()
+      .references(() => commands.id, { onDelete: "cascade" }),
+    definitionId: text("definition_id")
+      .notNull()
+      .references(() => commandDefinitions.id),
+    ordinal: integer("ordinal").notNull(),
+    status: text("status", {
+      enum: ["running", "completed", "failed", "out_of_budget", "stopped"],
+    }).notNull(),
+    assembledBlobId: text("assembled_blob_id")
+      .notNull()
+      .references(() => blobs.id),
+    assembledHash: text("assembled_hash").notNull(),
+    assembledBytes: integer("assembled_bytes").notNull(),
+    configJson: text("config_json").notNull(),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    costMicros: integer("cost_micros").notNull().default(0),
+    outcomeProofJson: text("outcome_proof_json"),
+    failureReason: text("failure_reason"),
+    pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
+    startedAt: integer("started_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+    endedAt: integer("ended_at"),
+  },
+  (table) => [
+    uniqueIndex("runs_ordinal_idx").on(table.commandId, table.ordinal),
+    index("runs_definition_idx").on(table.definitionId, table.startedAt),
+    index("runs_retention_idx").on(table.pinned, table.startedAt),
+  ],
+);
+
+/**
+ * The exact ordered content that went in (§15 invariant 1). The version
+ * foreign key is what makes §15 invariant 3's interplay enforced rather than
+ * hoped for: a version a run consumed cannot be deleted while the run exists.
+ */
+export const runInputs = sqliteTable(
+  "run_inputs",
+  {
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    ordinal: integer("ordinal").notNull(),
+    nodeId: text("node_id"),
+    objectId: text("object_id")
+      .notNull()
+      .references(() => objects.id),
+    versionId: text("version_id")
+      .notNull()
+      .references(() => objectVersions.id),
+    contentHash: text("content_hash").notNull(),
+    bytes: integer("bytes").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.ordinal] }),
+    index("run_inputs_version_idx").on(table.versionId),
+  ],
+);
+
+/** Spec §15 invariant 4: one row per produced output, per run. */
+export const runOutputs = sqliteTable(
+  "run_outputs",
+  {
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    objectId: text("object_id")
+      .notNull()
+      .references(() => objects.id),
+    versionId: text("version_id")
+      .notNull()
+      .references(() => objectVersions.id),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.name] }),
+    index("run_outputs_name_idx").on(table.name, table.runId),
+  ],
+);
+
 export type NodeRow = typeof nodes.$inferSelect;
 export type WorkstreamRow = typeof workstreams.$inferSelect;
 export type WorkstreamEventRow = typeof workstreamEvents.$inferSelect;
@@ -284,3 +492,11 @@ export type BlobRow = typeof blobs.$inferSelect;
 export type BlobRefRow = typeof blobRefs.$inferSelect;
 export type ObjectRow = typeof objects.$inferSelect;
 export type ObjectVersionRow = typeof objectVersions.$inferSelect;
+export type CommandDefinitionRow = typeof commandDefinitions.$inferSelect;
+export type CommandRow = typeof commands.$inferSelect;
+export type CommandParameterBindingRow =
+  typeof commandParameterBindings.$inferSelect;
+export type CommandOutputRow = typeof commandOutputs.$inferSelect;
+export type RunRow = typeof runs.$inferSelect;
+export type RunInputRow = typeof runInputs.$inferSelect;
+export type RunOutputRow = typeof runOutputs.$inferSelect;

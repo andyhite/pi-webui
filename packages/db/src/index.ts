@@ -21,4 +21,5 @@ export * from "./search.js";
 export * from "./object-store.js";
 export * from "./graph-store.js";
 export * from "./workstream-store.js";
+export * from "./command-store.js";
 export { migrations, type Migration } from "./migrations.js";
