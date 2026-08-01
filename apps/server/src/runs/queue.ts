@@ -107,6 +107,9 @@ export interface InitiateScopeResult {
 export class RunQueueService {
   #draining = false;
 
+  /** A drain requested while one was in flight; see {@link drain}. */
+  #drainAgain = false;
+
   constructor(private readonly deps: RunQueueDeps) {}
 
   /* --------------------------------------------------------------- previews */
@@ -544,22 +547,32 @@ export class RunQueueService {
    * failing in exactly the way it exists to prevent.
    */
   async drain(): Promise<void> {
-    if (this.#draining) return;
+    // A drain that arrives while one is running is *recorded*, not dropped. The
+    // window is small and real: the last running session can end just after the
+    // in-flight drain has taken its final look at the queue, and swallowing that
+    // call would leave the queue wedged with a free slot and nobody to notice.
+    if (this.#draining) {
+      this.#drainAgain = true;
+      return;
+    }
     this.#draining = true;
 
     try {
-      for (;;) {
-        const running = this.runningCount();
-        if (running >= this.deps.concurrencyLimit) return;
+      do {
+        this.#drainAgain = false;
 
-        const next = this.deps.stores.queue.waiting()[0];
-        if (next === undefined) return;
+        for (;;) {
+          const running = this.runningCount();
+          if (running >= this.deps.concurrencyLimit) break;
 
-        const admitted = await this.admit(next.entry);
-        // A re-ask does not free the loop to try the same entry again; it moved
-        // out of `queued`, so the next iteration sees whatever is behind it.
-        if (!admitted) continue;
-      }
+          const next = this.deps.stores.queue.waiting()[0];
+          if (next === undefined) break;
+
+          // A re-ask does not free the loop to retry the same entry: it moved out
+          // of `queued`, so the next iteration sees whatever is behind it.
+          await this.admit(next.entry);
+        }
+      } while (this.#drainAgain);
     } finally {
       this.#draining = false;
     }
