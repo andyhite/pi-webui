@@ -55,6 +55,27 @@ export interface TranscriptEvent {
   readonly transcript: Transcript;
 }
 
+/**
+ * One entry in a session's injection ledger (§6.5) — queued, delivered, or
+ * refused. The loosened shape `bubbles/derive-sources.ts`'s
+ * `InjectionLedgerEntryLike` also accepts; kept as its own named type here so
+ * a caller reading `GET /api/sessions/:id/injections` has a name for what it
+ * got back, not just a structural match.
+ */
+export interface InjectionLedgerEntry {
+  readonly id: string;
+  readonly text: string;
+  readonly queuedAt: number;
+  readonly deliveredAt: number | null;
+  readonly refusedAt: number | null;
+}
+
+export interface InjectionsEvent {
+  readonly sessionId: SessionId;
+  /** The session's complete current ledger — idempotent to reapply, same as `TranscriptEvent`. */
+  readonly injections: readonly InjectionLedgerEntry[];
+}
+
 export interface SessionDataSource {
   /** A one-shot, point-in-time read — no event stream involved (mirrors `GraphDataSource.load`). */
   loadList(): Promise<readonly Session[]>;
@@ -78,6 +99,23 @@ export interface SessionDataSource {
   subscribeTranscript(
     sessionId: SessionId,
     onEvent: (event: TranscriptEvent) => void,
+  ): Unsubscribe;
+  /** A one-shot read of one session's injection ledger (§6.5). */
+  loadInjections(
+    sessionId: SessionId,
+  ): Promise<readonly InjectionLedgerEntry[]>;
+  /**
+   * Live queued→delivered updates (§6.5). Unlike `subscribeTranscript`
+   * (which refetches on that session's own `session_observation`/
+   * `session_transcript` events), delivery rides the session's `session`
+   * `updated` event — the driver's `markDelivered` changes the session's own
+   * derived status, not its observation log, so that is the event that
+   * means "the ledger for this session may have changed" (the same
+   * refetch-on-relevant-event recipe, a different relevant event).
+   */
+  subscribeInjections(
+    sessionId: SessionId,
+    onEvent: (event: InjectionsEvent) => void,
   ): Unsubscribe;
 }
 
@@ -138,6 +176,10 @@ export function createApiSessionDataSource(
     string,
     Set<(event: TranscriptEvent) => void>
   >();
+  const injectionListeners = new Map<
+    string,
+    Set<(event: InjectionsEvent) => void>
+  >();
 
   function notifySession(sessionId: string): void {
     const detail = sessions.get(sessionId);
@@ -155,6 +197,15 @@ export function createApiSessionDataSource(
     }
   }
 
+  async function refetchInjections(sessionId: string): Promise<void> {
+    const listeners = injectionListeners.get(sessionId);
+    if (!listeners || listeners.size === 0) return;
+    const injections = await loadInjectionsOnce(http, sessionId);
+    for (const listener of listeners) {
+      listener({ sessionId: sessionId as SessionId, injections });
+    }
+  }
+
   function applyBufferedEvent(event: DomainEvent): void {
     if (event.entity === "session") {
       const next = new Map(sessions);
@@ -167,9 +218,13 @@ export function createApiSessionDataSource(
         });
       }
       sessions = next;
-      notifySession(
-        event.verb === "deleted" ? event.sessionId : event.session.id,
-      );
+      const sessionId =
+        event.verb === "deleted" ? event.sessionId : event.session.id;
+      notifySession(sessionId);
+      // Delivery rides the session's own updated event, not its observation
+      // log (the driver's markDelivered changes derived status, never an
+      // observation) — see subscribeInjections's own doc comment.
+      if (event.verb === "updated") void refetchInjections(sessionId);
       return;
     }
     if (
@@ -232,7 +287,13 @@ export function createApiSessionDataSource(
   }
 
   function stopIfIdle(): void {
-    if (sessionListeners.size > 0 || transcriptListeners.size > 0) return;
+    if (
+      sessionListeners.size > 0 ||
+      transcriptListeners.size > 0 ||
+      injectionListeners.size > 0
+    ) {
+      return;
+    }
     socket?.close();
     socket = null;
     started = false;
@@ -294,6 +355,29 @@ export function createApiSessionDataSource(
         stopIfIdle();
       };
     },
+
+    loadInjections(
+      sessionId: SessionId,
+    ): Promise<readonly InjectionLedgerEntry[]> {
+      return loadInjectionsOnce(http, sessionId);
+    },
+
+    subscribeInjections(sessionId, onEvent): Unsubscribe {
+      let listeners = injectionListeners.get(sessionId);
+      if (!listeners) {
+        listeners = new Set();
+        injectionListeners.set(sessionId, listeners);
+      }
+      listeners.add(onEvent);
+      ensureStarted();
+      void refetchInjections(sessionId);
+
+      return () => {
+        listeners?.delete(onEvent);
+        if (listeners?.size === 0) injectionListeners.delete(sessionId);
+        stopIfIdle();
+      };
+    },
   };
 }
 
@@ -306,6 +390,17 @@ async function loadTranscriptOnce(
     readonly turns: Transcript["turns"];
   }>(`/api/sessions/${encodeURIComponent(sessionId)}/transcript`);
   return { sessionId: response.sessionId as SessionId, turns: response.turns };
+}
+
+async function loadInjectionsOnce(
+  http: HttpClient,
+  sessionId: string,
+): Promise<readonly InjectionLedgerEntry[]> {
+  const response = await http.get<{
+    readonly sessionId: string;
+    readonly injections: readonly InjectionLedgerEntry[];
+  }>(`/api/sessions/${encodeURIComponent(sessionId)}/injections`);
+  return response.injections;
 }
 
 /* -------------------------------------------------------- fixture (Stage 1/tests) */
@@ -333,6 +428,8 @@ export interface FixtureSessionDataSourceOptions {
   readonly schedule?: (fn: () => void, delayMs: number) => void;
   /** Keyed `${sessionId}:${callId}` — what `loadReleasedContent` returns. */
   readonly releasedContent?: ReadonlyMap<string, string>;
+  /** Fixture ledger per session; a session with none has an empty ledger. */
+  readonly injections?: ReadonlyMap<SessionId, readonly InjectionLedgerEntry[]>;
 }
 
 function emptyTranscriptFor(sessionId: SessionId): Transcript {
@@ -361,6 +458,8 @@ export function createFixtureSessionDataSource(
       setTimeout(fn, delayMs);
     });
   const releasedContent = options.releasedContent ?? new Map<string, string>();
+  const injections =
+    options.injections ?? new Map<SessionId, readonly InjectionLedgerEntry[]>();
 
   const sessionListeners = new Map<
     SessionId,
@@ -456,6 +555,19 @@ export function createFixtureSessionDataSource(
       return () => {
         listeners?.delete(onEvent);
       };
+    },
+
+    loadInjections(
+      sessionId: SessionId,
+    ): Promise<readonly InjectionLedgerEntry[]> {
+      return Promise.resolve(injections.get(sessionId) ?? []);
+    },
+
+    subscribeInjections(sessionId, onEvent): Unsubscribe {
+      // Fixtures never change spontaneously (the same contract
+      // `subscribeSession` gives here) — one emission, then nothing.
+      onEvent({ sessionId, injections: injections.get(sessionId) ?? [] });
+      return () => {};
     },
   };
 }

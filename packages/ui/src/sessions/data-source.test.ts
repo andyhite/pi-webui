@@ -435,4 +435,90 @@ describe("createApiSessionDataSource", () => {
     unsubscribe();
     expect(socket.close).toHaveBeenCalledTimes(1);
   });
+
+  it("loadInjections reads GET /api/sessions/:id/injections", async () => {
+    const get = vi.fn(async (path: string) => {
+      expect(path).toBe("/api/sessions/sess-1/injections");
+      return {
+        sessionId: "sess-1",
+        injections: [
+          {
+            id: "inj-1",
+            text: "stop grepping",
+            queuedAt: 1,
+            deliveredAt: null,
+            refusedAt: null,
+          },
+        ],
+      };
+    });
+    const http = { get } as unknown as HttpClient;
+    const source = createApiSessionDataSource({
+      http,
+      createSocket: vi.fn() as unknown as WebSocketFactory,
+    });
+    const injections = await source.loadInjections("sess-1" as SessionId);
+    expect(injections).toHaveLength(1);
+    expect(injections[0]?.id).toBe("inj-1");
+  });
+
+  it("subscribeInjections fetches once, then refetches on the session's own updated event (not session_observation)", async () => {
+    const target = session("sess-1");
+    const socket = fakeSocket();
+    const createSocket: WebSocketFactory = vi.fn(() => socket);
+    let delivered = false;
+    const get = vi.fn(async (path: string) => {
+      if (path === "/api/snapshot") return { seq: 0, sessions: [] };
+      expect(path).toBe("/api/sessions/sess-1/injections");
+      return {
+        sessionId: "sess-1",
+        injections: [
+          {
+            id: "inj-1",
+            text: "stop grepping",
+            queuedAt: 1,
+            deliveredAt: delivered ? 2 : null,
+            refusedAt: null,
+          },
+        ],
+      };
+    });
+    const http = { get } as unknown as HttpClient;
+
+    const source = createApiSessionDataSource({ http, createSocket });
+    const onEvent = vi.fn();
+    source.subscribeInjections("sess-1" as SessionId, onEvent);
+    await flush();
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent.mock.calls[0]?.[0].injections[0]?.deliveredAt).toBeNull();
+
+    socket.onopen?.();
+    await flush();
+
+    // A session_observation event must NOT trigger a refetch — delivery
+    // rides the session's own updated event, not its observation log.
+    const observation: DomainEvent = {
+      id: "evt_obs" as DomainEvent["id"],
+      seq: 1,
+      occurredAt: 0,
+      author: humanAuthor,
+      entity: "session_observation",
+      verb: "created",
+      sessionId: "sess-1" as SessionId,
+      seqInSession: 1,
+      observation: { kind: "turn-started", turn: 2, at: 0 },
+    };
+    socket.onmessage?.({
+      data: JSON.stringify({ type: "event", event: observation }),
+    });
+    await flush();
+    expect(onEvent).toHaveBeenCalledTimes(1);
+
+    delivered = true;
+    socket.onmessage?.({ data: sessionEventMessage(2, target) });
+    await flush();
+
+    expect(onEvent).toHaveBeenCalledTimes(2);
+    expect(onEvent.mock.calls.at(-1)?.[0].injections[0]?.deliveredAt).toBe(2);
+  });
 });

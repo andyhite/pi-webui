@@ -14,10 +14,9 @@
  * gap.
  */
 
-import type { InjectionLedger, SessionPhase, Transcript } from "@plotroom/core";
-import { injectionStatus } from "@plotroom/core";
+import type { SessionPhase, Transcript } from "@plotroom/core";
 
-import type { BubbleSource } from "./model.js";
+import type { BubbleSource, InjectionBubbleStatus } from "./model.js";
 
 export interface CommandBubbleInput {
   readonly nodeId: string;
@@ -111,16 +110,42 @@ export function deriveSessionBubbleSources(
 }
 
 /**
+ * The subset of core's `InjectionEntry` (and the server's `StoredInjection`
+ * wire shape, which carries every one of these plus a few this never reads)
+ * this module actually needs. Loosened deliberately: the live source
+ * (`sessions/data-source.ts`'s `loadInjections`) reads the server's raw
+ * ledger rows, which carry a nullable `nodeId`/`author` core's own
+ * `InjectionEntry` does not allow — and neither field is read here, so
+ * forcing every caller through the stricter type would only add casts with
+ * no real check behind them.
+ */
+export interface InjectionLedgerEntryLike {
+  readonly id: string;
+  readonly text: string;
+  readonly queuedAt: number;
+  readonly deliveredAt: number | null;
+  readonly refusedAt: number | null;
+}
+
+/** Mirrors core's `injectionStatus` predicate, over the loosened shape above. */
+function injectionBubbleStatus(
+  entry: InjectionLedgerEntryLike,
+): InjectionBubbleStatus {
+  if (entry.refusedAt !== null) return "refused";
+  return entry.deliveredAt === null ? "queued" : "delivered";
+}
+
+/**
  * "an injection during a long tool call shows as queued until delivered"
  * (§6.5) — rendered as its own bubble kind so the distinction is structural,
  * not a label inside another bubble's text.
  */
 export function deriveInjectionBubbleSources(
   nodeId: string,
-  ledger: InjectionLedger,
+  ledger: ReadonlyMap<string, InjectionLedgerEntryLike>,
 ): readonly BubbleSource[] {
   return [...ledger.values()].map((entry) => {
-    const status = injectionStatus(entry);
+    const status = injectionBubbleStatus(entry);
     return {
       id: `${nodeId}:injection:${entry.id}`,
       nodeId,
