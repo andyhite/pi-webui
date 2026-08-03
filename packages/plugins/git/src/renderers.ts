@@ -29,17 +29,28 @@ export const CARD_RENDERER_ID = "git-card";
  */
 export const AGENT_CONTENT_MAX_BYTES = 96 * 1024;
 
+/**
+ * `TextEncoder`/`TextDecoder` rather than `Buffer`: this module is a *renderer*
+ * contribution, and the host calling it may be a browser tab (`@plotroom/ui`'s
+ * `ContributionRegistry`) where `Buffer` does not exist. A cap that threw there
+ * would be truncation reported as a broken renderer, which is the one thing
+ * principle 12 forbids.
+ */
 export function cap(content: string, why: string): RenderedContent {
-  const bytes = Buffer.byteLength(content, "utf8");
-  if (bytes <= AGENT_CONTENT_MAX_BYTES) {
+  const encoder = new TextEncoder();
+  const encoded = encoder.encode(content);
+  if (encoded.length <= AGENT_CONTENT_MAX_BYTES) {
     return { content, truncated: null };
   }
-  const kept = Buffer.from(content, "utf8")
-    .subarray(0, AGENT_CONTENT_MAX_BYTES)
-    .toString("utf8");
+  const kept = new TextDecoder("utf-8").decode(
+    encoded.subarray(0, AGENT_CONTENT_MAX_BYTES),
+  );
   return {
     content: kept,
-    truncated: { omittedBytes: bytes - Buffer.byteLength(kept, "utf8"), why },
+    truncated: {
+      omittedBytes: encoded.length - encoder.encode(kept).length,
+      why,
+    },
   };
 }
 

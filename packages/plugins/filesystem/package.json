@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./renderer-manifest": {
+      "types": "./dist/renderer-manifest.d.ts",
+      "default": "./dist/renderer-manifest.js"
     }
   },
   "main": "./dist/index.js",

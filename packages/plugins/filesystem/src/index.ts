@@ -24,12 +24,12 @@ import { filesystemContentRenderer } from "./content-renderer.js";
 import { filesystemBrowsePaletteEntry } from "./palette.js";
 import { FS_READ_PERMISSION } from "./permissions.js";
 import { filesystemConceptProducer } from "./producer.js";
+import { FILESYSTEM_PLUGIN_IDENTITY } from "./renderer-manifest.js";
 
 const manifest: PluginManifest = {
-  id: "filesystem",
-  name: "Filesystem",
-  version: "1.0.0",
-  contractVersion: 1,
+  // Identity is stated once, in `renderer-manifest.ts`: the renderer half of
+  // this plugin is the same plugin, and two spellings of that would be two.
+  ...FILESYSTEM_PLUGIN_IDENTITY,
   permissions: [FS_READ_PERMISSION],
   contributions: {
     conceptProducers: [filesystemConceptProducer],

@@ -35,13 +35,14 @@ import {
 import type { GitContext } from "./exec.js";
 import { createGitWorkspaceKind, type GitKindDeps } from "./kind.js";
 import { createCommitProducer, createDiffProducer } from "./producers.js";
+import { GIT_PLUGIN_IDENTITY } from "./renderer-manifest.js";
 import {
   createGitCardRenderer,
   createGitContentRenderer,
 } from "./renderers.js";
 import { createGitTools } from "./tools.js";
 
-export const GIT_PLUGIN_ID = "coding-git";
+export const GIT_PLUGIN_ID = GIT_PLUGIN_IDENTITY.id;
 export const FILES_PERMISSION = "workspace-files";
 export const REMOTES_PERMISSION = "repository-remotes";
 
@@ -53,10 +54,9 @@ export function createGitPlugin(deps: GitPluginDeps): PluginManifest {
   const provisioning = [FILES_PERMISSION, REMOTES_PERMISSION];
 
   return {
-    id: GIT_PLUGIN_ID,
-    name: "Coding / git",
-    version: "1.0.0",
-    contractVersion: 1,
+    // Identity is stated once, in `renderer-manifest.ts`: the renderer half of
+    // this plugin is the same plugin, and two spellings of that would be two.
+    ...GIT_PLUGIN_IDENTITY,
     permissions: [
       {
         id: FILES_PERMISSION,

@@ -2953,6 +2953,28 @@ recorded stand-in), so the registry now resolves Jira's `ticket`/`collection`/
 `document` card and content renderers and its search-by-JQL palette entry
 alongside Filesystem, Coding/git, and GitHub — the same seam, no new mechanism._
 
+_**Correction, landed after batch 5: those four entries import each plugin's
+`./renderer-manifest`, not its default export.** Registering a machine-touching
+manifest in the renderer broke the batch 4 gate outright: `@plotroom/plugin-git`'s
+default entry calls `os.tmpdir()` while building its manifest, that call ran at
+module scope inside the browser bundle, and the whole renderer threw before React
+mounted — no canvas, no panels, no attention rows, so the gate's two live-queue
+tests timed out waiting for a page that never rendered. Each in-box plugin now
+ships two halves: the host manifest its `index.ts` default-exports (producers,
+agent tools, write actions, condition checks, workspace kinds, real permissions
+— loaded by `apps/server/src/plugins/` in a worker, which is where the reach
+exists), and a `./renderer-manifest` entry carrying the card, content, and
+palette contributions the browser itself calls, with `permissions: []` because
+those contributions declare none. Identity is stated once per package, in the
+renderer entry, and the host manifest spreads it, so the two halves cannot drift
+into two plugins. `in-box-modules.test.ts` pins the invariant (a host-side
+contribution in that list now fails a unit test rather than the gate), an ESLint
+override refuses `node:*` imports and the `Buffer`/`process` globals in the
+renderer-facing modules, and the three `cap()` helpers use
+`TextEncoder`/`TextDecoder` so truncation is still reported in a browser instead
+of throwing (principle 12). The renderer bundle lost 77 kB of server-only code
+as a side effect._
+
 **Weeks 24–26 — Ship (Phase 8)**
 
 | Track | Work                                                                                                 |

@@ -19,29 +19,31 @@
  * same way, this batch's final wave — the git plugin's `diff`/`commit` card
  * and content renderers, and GitHub's `pull_request`/`review`/`ticket`/
  * `document` card, content, and palette (clone-from-a-pull-request)
- * contributions. Both packages default-export the manifest their `index.ts`
- * builds with real, machine-touching dependencies (git's `node:child_process`
- * spawner, GitHub's `fetch` transport) — never `./testing`'s recorded stand-in,
- * which exists for that package's own tests. **Jira** (`@plotroom/plugin-jira`)
- * lands here the same way, Track C's Epic 7.3 port: tickets, epics-as-collections,
- * and workflow-as-document card, content, and palette (search-by-JQL)
- * contributions, its shipped `fetch`-backed transport rather than `./testing`'s
- * recorded stand-in. This module's card/content/palette
- * contributions are registered client-side today; the producers themselves have
- * no live caller yet — **server-side registration of a real worker-hosted
- * producer is Track A's**: nothing under `apps/server/src/integrations/` is
- * wired to `PluginHost`/`PluginRegistry` (`@plotroom/plugin-sdk`) yet, so
- * there is no `/api` seam that actually invokes these plugins' `read` in the
- * running app (see each package's own doc comments and
- * `docs/development-plan.md`'s Epic 7.3 landed-note for what that wiring
- * needs).
+ * contributions. **Jira** (`@plotroom/plugin-jira`) lands here the same way:
+ * tickets, epics-as-collections, and workflow-as-document card, content, and
+ * palette (search-by-JQL) contributions.
+ *
+ * **Every import here is a plugin's `./renderer-manifest` entry, never its
+ * default one.** A plugin has two halves that run in two different processes:
+ * the host manifest its `index.ts` default-exports, built with real,
+ * machine-touching dependencies (git's `node:child_process` spawner and
+ * scratch directory, filesystem's `node:fs`, GitHub's and Jira's `fetch`
+ * transports), and the renderer manifest — card, content, and palette
+ * contributions and nothing else — which is what a browser can actually run.
+ * Importing the host half here is not merely wasteful: it shipped
+ * `os.tmpdir()` into the bundle, where it ran at module scope and threw, so
+ * the whole renderer died before React mounted and every panel on the canvas
+ * went with it (the batch 4 gate caught exactly that). The producers, agent
+ * tools, write actions and condition checks reach the running app through
+ * `apps/server/src/plugins/`, which hosts the default manifests in
+ * `worker_threads` — never through this module.
  */
 
 import type { PluginManifest } from "@plotroom/plugin-sdk";
-import filesystemManifest from "@plotroom/plugin-filesystem";
-import gitManifest from "@plotroom/plugin-git";
-import githubManifest from "@plotroom/plugin-github";
-import jiraManifest from "@plotroom/plugin-jira";
+import filesystemManifest from "@plotroom/plugin-filesystem/renderer-manifest";
+import gitManifest from "@plotroom/plugin-git/renderer-manifest";
+import githubManifest from "@plotroom/plugin-github/renderer-manifest";
+import jiraManifest from "@plotroom/plugin-jira/renderer-manifest";
 
 import {
   createContributionRegistry,

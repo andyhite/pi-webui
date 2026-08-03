@@ -30,12 +30,14 @@ import {
   pullRequestExistsCheck,
   PULL_REQUEST_EXISTS_CHECK,
 } from "./conditions.js";
+import { githubClonePaletteEntry } from "./palette.js";
 import {
   createPullRequestProducer,
   createRepositoryProducer,
   createReviewProducer,
   createTicketProducer,
 } from "./producers.js";
+import { GITHUB_PLUGIN_IDENTITY } from "./renderer-manifest.js";
 import {
   createGitHubCardRenderer,
   createGitHubContentRenderer,
@@ -48,10 +50,10 @@ import {
 } from "./transport.js";
 import { createGitHubWriteActions } from "./writes.js";
 
-export const GITHUB_PLUGIN_ID = "github";
+export const GITHUB_PLUGIN_ID = GITHUB_PLUGIN_IDENTITY.id;
 export const NETWORK_PERMISSION = "github-api";
 export const CREDENTIAL_PERMISSION = "github-token";
-export const CLONE_PALETTE_ENTRY_ID = "github-clone-from-pull-request";
+export { CLONE_PALETTE_ENTRY_ID } from "./palette.js";
 
 export interface GitHubPluginDeps {
   readonly transport: HttpTransport;
@@ -64,10 +66,9 @@ export function createGitHubPlugin(deps: GitHubPluginDeps): PluginManifest {
   const writeActions = createGitHubWriteActions(transport, api);
 
   return {
-    id: GITHUB_PLUGIN_ID,
-    name: "GitHub",
-    version: "1.0.0",
-    contractVersion: 1,
+    // Identity is stated once, in `renderer-manifest.ts`: the renderer half of
+    // this plugin is the same plugin, and two spellings of that would be two.
+    ...GITHUB_PLUGIN_IDENTITY,
     permissions: [
       {
         id: NETWORK_PERMISSION,
@@ -104,23 +105,7 @@ export function createGitHubPlugin(deps: GitHubPluginDeps): PluginManifest {
         pullRequestExistsCheck(transport, api),
         checksGreenCheck(transport, api),
       ],
-      paletteEntries: [
-        {
-          id: CLONE_PALETTE_ENTRY_ID,
-          label: "GitHub: clone a repository from a pull request",
-          description:
-            "Take a pull request card's repository as a workspace, cloned by the host's own git over the host's own authentication (§3.4).",
-          // All a palette entry can do in contract v1: `invoke` answers nothing and
-          // the call context holds no reach into the host, so the gesture itself is
-          // the card action's `clone-from-pull-request` and the host performing it.
-          // Reported as a contract finding rather than worked around.
-          invoke: (context) => {
-            context.log(
-              "clone-from-pull-request was invoked; the clone itself is the host's, over the host's own git authentication (§3.4)",
-            );
-          },
-        },
-      ],
+      paletteEntries: [githubClonePaletteEntry],
       commandDefinitions: [
         {
           id: "github-review-a-pull-request",

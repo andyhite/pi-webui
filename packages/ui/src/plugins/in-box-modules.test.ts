@@ -49,6 +49,38 @@ describe("IN_BOX_PLUGIN_MODULES", () => {
       expect(module.pluginId).toBe(module.manifest.id);
     }
   });
+
+  it("registers renderer contributions only — a host-side one here means a plugin's machine-touching half is in the browser bundle", () => {
+    // The regression this pins: importing a plugin's default (host) manifest
+    // into the renderer shipped `os.tmpdir()` into the page, where it ran at
+    // module scope and threw before React mounted. Producers, agent tools,
+    // write actions, condition checks, workspace kinds and command definitions
+    // reach the running app through `apps/server/src/plugins/` and its
+    // `worker_threads` host — never through this list.
+    for (const module of IN_BOX_PLUGIN_MODULES) {
+      const contributions = module.manifest.contributions;
+      expect({
+        pluginId: module.pluginId,
+        conceptProducers: contributions.conceptProducers ?? [],
+        agentTools: contributions.agentTools ?? [],
+        writeActions: contributions.writeActions ?? [],
+        conditionChecks: contributions.conditionChecks ?? [],
+        workspaceKinds: contributions.workspaceKinds ?? [],
+        commandDefinitions: contributions.commandDefinitions ?? [],
+      }).toEqual({
+        pluginId: module.pluginId,
+        conceptProducers: [],
+        agentTools: [],
+        writeActions: [],
+        conditionChecks: [],
+        workspaceKinds: [],
+        commandDefinitions: [],
+      });
+      // And it asks for nothing: a permission is granted against the half that
+      // uses it, which is the host manifest the server loads.
+      expect(module.manifest.permissions).toEqual([]);
+    }
+  });
 });
 
 describe("createInBoxContributionRegistry", () => {

@@ -30,16 +30,17 @@ import {
   issueInStatusCheck,
   ISSUE_IN_STATUS_CHECK,
 } from "./conditions.js";
+import { jiraSearchPaletteEntry } from "./palette.js";
 import {
   createEpicProducer,
   createIssueProducer,
   createWorkflowProducer,
 } from "./producers.js";
+import { JIRA_PLUGIN_IDENTITY } from "./renderer-manifest.js";
 import {
   createJiraCardRenderer,
   createJiraContentRenderer,
 } from "./renderers.js";
-import { JIRA_SCOPE_EXAMPLE } from "./scope.js";
 import { createJiraTools } from "./tools.js";
 import {
   JIRA_CREDENTIAL_ID,
@@ -49,10 +50,10 @@ import {
 } from "./transport.js";
 import { createJiraWriteActions } from "./writes.js";
 
-export const JIRA_PLUGIN_ID = "jira";
+export const JIRA_PLUGIN_ID = JIRA_PLUGIN_IDENTITY.id;
 export const NETWORK_PERMISSION = "jira-api";
 export const CREDENTIAL_PERMISSION = "jira-credential";
-export const SEARCH_PALETTE_ENTRY_ID = "jira-search-by-jql";
+export { SEARCH_PALETTE_ENTRY_ID } from "./palette.js";
 
 export interface JiraPluginDeps {
   readonly transport: HttpTransport;
@@ -65,10 +66,9 @@ export function createJiraPlugin(deps: JiraPluginDeps): PluginManifest {
   const writeActions = createJiraWriteActions(transport, api);
 
   return {
-    id: JIRA_PLUGIN_ID,
-    name: "Jira",
-    version: "1.0.0",
-    contractVersion: 1,
+    // Identity is stated once, in `renderer-manifest.ts`: the renderer half of
+    // this plugin is the same plugin, and two spellings of that would be two.
+    ...JIRA_PLUGIN_IDENTITY,
     permissions: [
       {
         id: NETWORK_PERMISSION,
@@ -104,22 +104,7 @@ export function createJiraPlugin(deps: JiraPluginDeps): PluginManifest {
         issueInStatusCheck(transport, api),
         epicChildrenResolvedCheck(transport, api),
       ],
-      paletteEntries: [
-        {
-          id: SEARCH_PALETTE_ENTRY_ID,
-          label: "Jira: search issues by JQL",
-          description: `Read issues into the graph from a JQL query, e.g. "${JIRA_SCOPE_EXAMPLE}" (§9.1).`,
-          // All a palette entry can do in contract v1: `invoke` answers nothing and
-          // the call context holds no reach into the host, so the gesture itself is
-          // the host reading with the `jira-issues` producer over the scope the
-          // operator typed. Reported as a contract finding rather than worked around.
-          invoke: (context) => {
-            context.log(
-              "jira-search-by-jql was invoked; the read itself is the host's, over the jira-issues producer and the scope the operator entered (§9.1)",
-            );
-          },
-        },
-      ],
+      paletteEntries: [jiraSearchPaletteEntry],
       commandDefinitions: [
         {
           id: "jira-work-a-ticket",
