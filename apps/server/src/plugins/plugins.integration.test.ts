@@ -186,8 +186,8 @@ describe("THE BATCH 5 GATE: a throwing plugin degrades to 'unavailable' while th
   });
 });
 
-describe("the plugins that ship in the box (§10.2, §9.4)", () => {
-  it("loads git, GitHub and Filesystem in their own workers and reports each ready", async () => {
+describe("THE BATCH 5 GATE: all four in-box plugins run on the public contract (§10.2, §9.4)", () => {
+  it("GATE: loads git, GitHub, Filesystem and Jira in their own workers and reports each ready", async () => {
     // The real list, resolved the way a packaged build resolves it — so this test
     // fails if a plugin package stops shipping a loadable entry point.
     const harness = await boot({ pluginsInBox: IN_BOX_PLUGINS });
@@ -195,15 +195,19 @@ describe("the plugins that ship in the box (§10.2, §9.4)", () => {
     const body = await harness.ok("/plugins");
     expect(list(body, "failures")).toEqual([]);
     const rows = list(body, "plugins") as Record<string, unknown>[];
+    // Four ids the *manifests* declared, never the four lines in the in-box list:
+    // a mistyped package name is an install failure, not a renamed plugin.
     expect(rows.map((row) => row["pluginId"]).sort()).toEqual([
       "coding-git",
       "filesystem",
       "github",
+      "jira",
     ]);
     for (const row of rows) {
       expect(row["health"], String(row["pluginId"])).toBe("ready");
       expect(row["state"]).toBe("enabled");
       expect(row["origin"]).toBe("in-box");
+      expect(row["contractVersion"], String(row["pluginId"])).toBe(1);
     }
 
     // Their concept producers are in the substrate, each showing the plugin's own
@@ -220,8 +224,27 @@ describe("the plugins that ship in the box (§10.2, §9.4)", () => {
         "pull-requests",
         "workspace-diff",
         "workspace-commits",
+        // Jira's three, including the epic producer whose collection membership is
+        // stated by external id because the contract has nowhere else to put it.
+        "jira-issues",
+        "jira-epics-as-collections",
+        "jira-workflow",
       ]),
     );
+
+    // Jira's own declaration reached the surface intact: its credential permission
+    // is unanswered (§10.2's `never-asked`, the state that raises through §6.6) and
+    // its scope language is Jira's own — JQL, not a paraphrase (§9.1).
+    const jira = rows.find((row) => row["pluginId"] === "jira");
+    const permissions = jira?.["permissions"] as Record<string, unknown>[];
+    expect(permissions.length).toBeGreaterThan(0);
+    for (const permission of permissions) {
+      expect(at(permission, "state"), String(at(permission, "id"))).toBe(
+        "never-asked",
+      );
+    }
+    const issues = producers.find((one) => one.id === "jira-issues");
+    expect(issues?.scoping.language.toLowerCase()).toContain("jql");
   });
 });
 

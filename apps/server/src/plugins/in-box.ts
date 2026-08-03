@@ -6,8 +6,8 @@ import { pathToFileURL } from "node:url";
  *
  * A list, deliberately: distribution v1 is "in-box plus a configured directory",
  * and the in-box half is data rather than four hand-written registration calls —
- * Jira joins it by gaining a line here when its package lands (Epic 7.3), and
- * nothing else changes.
+ * Jira joined it by gaining a line here when its package landed (Epic 7.3), and
+ * nothing else changed.
  *
  * Each entry names a **package**, not a path. The entry point resolved is the one
  * the package's own `exports` declares (`dist/index.js`), which is exactly what a
@@ -34,14 +34,17 @@ export interface InBoxPluginEntry {
 }
 
 /**
- * The three in-box plugins that exist today. Jira (§9.4's fourth) is not here
- * because its package does not exist yet — an entry pointing at nothing would be a
- * permanent install failure claiming a plugin was shipped.
+ * §9.4's four in-box plugins, all of them shipping today.
+ *
+ * Each `pluginId` is here for the failure message alone — the id the product uses is
+ * the one the manifest declares, which is why a renamed directory or a mistyped line
+ * here cannot silently become a different plugin (§10.2).
  */
 export const IN_BOX_PLUGINS: readonly InBoxPluginEntry[] = [
   { pluginId: "coding-git", packageName: "@plotroom/plugin-git" },
   { pluginId: "github", packageName: "@plotroom/plugin-github" },
   { pluginId: "filesystem", packageName: "@plotroom/plugin-filesystem" },
+  { pluginId: "jira", packageName: "@plotroom/plugin-jira" },
 ];
 
 export type InBoxResolution =
