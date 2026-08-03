@@ -126,11 +126,10 @@ const wsFactory = browserWebSocketFactory();
  * The renderer contribution registry (§10.1, Epic 7.1's renderer half): the
  * one client-side seam every in-box plugin registers a manifest through,
  * the same path a third-party plugin would use once dynamic loading exists
- * (`plugins/in-box-modules.ts` documents that gap). Empty today —
- * `IN_BOX_PLUGIN_MODULES` has nothing in it until Filesystem (Track B's own
- * Stage 2) lands — so wiring it in changes nothing about what renders yet;
- * it is the seam, exercised by `contribution-registry.test.ts`'s fixture
- * manifests, ready for that manifest to register through.
+ * (`plugins/in-box-modules.ts` documents that gap). `IN_BOX_PLUGIN_MODULES`
+ * now carries four in-box plugins — Filesystem, Coding/git, GitHub, and
+ * Jira — each registering its own card/content/palette contributions
+ * through the same seam a dynamically-loaded third-party plugin would use.
  */
 const contributionRegistry = createInBoxContributionRegistry();
 

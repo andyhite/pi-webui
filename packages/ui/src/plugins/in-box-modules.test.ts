@@ -35,6 +35,15 @@ describe("IN_BOX_PLUGIN_MODULES", () => {
     expect(github?.manifest.contractVersion).toBe(1);
   });
 
+  it("carries the Jira plugin (Track C's Epic 7.3 port)", () => {
+    const jira = IN_BOX_PLUGIN_MODULES.find(
+      (module) => module.pluginId === "jira",
+    );
+    expect(jira).toBeDefined();
+    expect(jira?.manifest.id).toBe("jira");
+    expect(jira?.manifest.contractVersion).toBe(1);
+  });
+
   it("registers pluginId consistent with each manifest's own id", () => {
     for (const module of IN_BOX_PLUGIN_MODULES) {
       expect(module.pluginId).toBe(module.manifest.id);
@@ -176,6 +185,57 @@ describe("createInBoxContributionRegistry", () => {
         renderings: {
           card: "1 file changed",
           summary: "1 file changed",
+          agentContent: oversized,
+        },
+      },
+      createRendererCallContext(),
+    );
+    expect(rendered?.truncated).not.toBeNull();
+    expect(rendered?.truncated?.omittedBytes).toBeGreaterThan(0);
+  });
+
+  it("resolves the Jira card renderer for every concept kind it declares (ticket, collection, document) and its palette entry", async () => {
+    const registry = createInBoxContributionRegistry();
+
+    for (const kind of ["ticket", "collection", "document"] as const) {
+      expect(registry.cardRendererFor(kind)).toBeDefined();
+    }
+
+    const paletteIds = registry.paletteEntries().map((entry) => entry.id);
+    expect(paletteIds).toContain("jira-search-by-jql");
+
+    const view = await resolveCardView(
+      registry,
+      {
+        kind: "ticket",
+        externalId: "jira:acme.atlassian.net:OXY-2",
+        title: "OXY-2",
+        renderings: {
+          card: "In Review · Jane Doe",
+          summary: "In Review · Jane Doe",
+          agentContent: "OXY-2: fix the thing\nStatus: In Review",
+        },
+      },
+      "compact",
+    );
+    expect(view?.title).toBe("OXY-2");
+    expect(view?.lines).toEqual(["In Review · Jane Doe"]);
+  });
+
+  it("surfaces truncation as a fact through Jira's content renderer too (principle 12)", async () => {
+    const registry = createInBoxContributionRegistry();
+    const renderer = registry.contentRendererFor("ticket");
+    expect(renderer).toBeDefined();
+
+    const oversized = "x".repeat(100 * 1024);
+    const rendered = await renderer?.renderAgentContent(
+      {
+        kind: "ticket",
+        externalId: "jira:acme.atlassian.net:OXY-2",
+        title: "OXY-2",
+        renderings: {
+          card: "In Review · Jane Doe",
+          summary: "In Review · Jane Doe",
           agentContent: oversized,
         },
       },

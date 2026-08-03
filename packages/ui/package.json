@@ -23,6 +23,7 @@
     "@plotroom/plugin-filesystem": "workspace:*",
     "@plotroom/plugin-git": "workspace:*",
     "@plotroom/plugin-github": "workspace:*",
+    "@plotroom/plugin-jira": "workspace:*",
     "@plotroom/plugin-sdk": "workspace:*",
     "@xyflow/react": "^12.11.2",
     "react": "^19.2.0",

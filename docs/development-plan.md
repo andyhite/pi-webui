@@ -2946,6 +2946,13 @@ in `@plotroom/ui`, all green. Production behavior is otherwise unchanged:
 both producers still have no live server-side caller (Track A's, as above),
 so no card renders from real data yet._
 
+_**Batch 5's closing task: Jira registered the same way.** `IN_BOX_PLUGIN_MODULES`
+gained a `{ pluginId: "jira", manifest }` entry for `@plotroom/plugin-jira`'s
+default export (its shipped `fetch`-backed transport, never `./testing`'s
+recorded stand-in), so the registry now resolves Jira's `ticket`/`collection`/
+`document` card and content renderers and its search-by-JQL palette entry
+alongside Filesystem, Coding/git, and GitHub — the same seam, no new mechanism._
+
 **Weeks 24–26 — Ship (Phase 8)**
 
 | Track | Work                                                                                                 |

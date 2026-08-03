@@ -22,8 +22,11 @@
  * contributions. Both packages default-export the manifest their `index.ts`
  * builds with real, machine-touching dependencies (git's `node:child_process`
  * spawner, GitHub's `fetch` transport) — never `./testing`'s recorded stand-in,
- * which exists for that package's own tests. Jira is Track C's Epic 7.3 port and
- * lands here the same way once it does. This module's card/content/palette
+ * which exists for that package's own tests. **Jira** (`@plotroom/plugin-jira`)
+ * lands here the same way, Track C's Epic 7.3 port: tickets, epics-as-collections,
+ * and workflow-as-document card, content, and palette (search-by-JQL)
+ * contributions, its shipped `fetch`-backed transport rather than `./testing`'s
+ * recorded stand-in. This module's card/content/palette
  * contributions are registered client-side today; the producers themselves have
  * no live caller yet — **server-side registration of a real worker-hosted
  * producer is Track A's**: nothing under `apps/server/src/integrations/` is
@@ -38,6 +41,7 @@ import type { PluginManifest } from "@plotroom/plugin-sdk";
 import filesystemManifest from "@plotroom/plugin-filesystem";
 import gitManifest from "@plotroom/plugin-git";
 import githubManifest from "@plotroom/plugin-github";
+import jiraManifest from "@plotroom/plugin-jira";
 
 import {
   createContributionRegistry,
@@ -53,6 +57,7 @@ export const IN_BOX_PLUGIN_MODULES: readonly InBoxPluginModule[] = [
   { pluginId: filesystemManifest.id, manifest: filesystemManifest },
   { pluginId: gitManifest.id, manifest: gitManifest },
   { pluginId: githubManifest.id, manifest: githubManifest },
+  { pluginId: jiraManifest.id, manifest: jiraManifest },
 ];
 
 /** A fresh registry, seeded with every in-box module above. */
