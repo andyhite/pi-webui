@@ -11,6 +11,8 @@
   "references": [
     { "path": "../core" },
     { "path": "../plugin-sdk" },
-    { "path": "../plugins/filesystem" }
+    { "path": "../plugins/filesystem" },
+    { "path": "../plugins/git" },
+    { "path": "../plugins/github" }
   ]
 }

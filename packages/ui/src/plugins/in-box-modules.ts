@@ -14,20 +14,30 @@
  * **Filesystem** (`@plotroom/plugin-filesystem`, Track B's Stage 2) is the
  * first real entry: files and directories as `document` concepts, browse
  * via `read` with `externalId: null`, drag via the registered card renderer
- * (§9.4). GitHub, Jira, and Coding/git are Track C's Epic 7.3 port and land
- * here the same way once they do. This module's card/content/palette
- * contributions are registered client-side today; the producer itself has
+ * (§9.4). **Coding/git** (`@plotroom/plugin-git`) and **GitHub**
+ * (`@plotroom/plugin-github`) are Track C's Epic 7.3 port and land here the
+ * same way, this batch's final wave — the git plugin's `diff`/`commit` card
+ * and content renderers, and GitHub's `pull_request`/`review`/`ticket`/
+ * `document` card, content, and palette (clone-from-a-pull-request)
+ * contributions. Both packages default-export the manifest their `index.ts`
+ * builds with real, machine-touching dependencies (git's `node:child_process`
+ * spawner, GitHub's `fetch` transport) — never `./testing`'s recorded stand-in,
+ * which exists for that package's own tests. Jira is Track C's Epic 7.3 port and
+ * lands here the same way once it does. This module's card/content/palette
+ * contributions are registered client-side today; the producers themselves have
  * no live caller yet — **server-side registration of a real worker-hosted
  * producer is Track A's**: nothing under `apps/server/src/integrations/` is
  * wired to `PluginHost`/`PluginRegistry` (`@plotroom/plugin-sdk`) yet, so
- * there is no `/api` seam that actually invokes this plugin's `read` in the
- * running app (see `packages/plugins/filesystem`'s own doc comments and
+ * there is no `/api` seam that actually invokes these plugins' `read` in the
+ * running app (see each package's own doc comments and
  * `docs/development-plan.md`'s Epic 7.3 landed-note for what that wiring
  * needs).
  */
 
 import type { PluginManifest } from "@plotroom/plugin-sdk";
 import filesystemManifest from "@plotroom/plugin-filesystem";
+import gitManifest from "@plotroom/plugin-git";
+import githubManifest from "@plotroom/plugin-github";
 
 import {
   createContributionRegistry,
@@ -41,6 +51,8 @@ export interface InBoxPluginModule {
 
 export const IN_BOX_PLUGIN_MODULES: readonly InBoxPluginModule[] = [
   { pluginId: filesystemManifest.id, manifest: filesystemManifest },
+  { pluginId: gitManifest.id, manifest: gitManifest },
+  { pluginId: githubManifest.id, manifest: githubManifest },
 ];
 
 /** A fresh registry, seeded with every in-box module above. */
