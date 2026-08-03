@@ -13,11 +13,21 @@ import { definePanel, type PanelDefinition } from "../panels/registry.js";
 import { PluginPanelView } from "./PluginPanelView.js";
 import type { ContributionRegistry } from "./contribution-registry.js";
 
+/**
+ * Prefixed for the same reason `contribution-registry.ts`'s palette entries
+ * are (`PLUGIN_PALETTE_ITEM_PREFIX`): the in-box panels register first
+ * (`App.tsx`), plugin panels register after, and `PanelRegistry.register`
+ * is last-write-wins by id — an unprefixed plugin panel named e.g.
+ * `"plugins"` or `"fleet"` would silently replace a host panel rather than
+ * being refused or renamed visibly.
+ */
+const PLUGIN_PANEL_ID_PREFIX = "plugin:";
+
 export function panelDefinitionFromDraft(
   panel: draft.DraftPanel,
 ): PanelDefinition {
   return definePanel<null>({
-    id: panel.id,
+    id: `${PLUGIN_PANEL_ID_PREFIX}${panel.id}`,
     title: panel.title,
     initialState: null,
     render: () => <PluginPanelView panel={panel} />,
