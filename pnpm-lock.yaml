@@ -183,6 +183,9 @@ importers:
       '@plotroom/core':
         specifier: workspace:*
         version: link:../core
+      '@plotroom/plugin-filesystem':
+        specifier: workspace:*
+        version: link:../plugins/filesystem
       '@plotroom/plugin-sdk':
         specifier: workspace:*
         version: link:../plugin-sdk
