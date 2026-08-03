@@ -119,6 +119,12 @@ const TRIGGERING_ENTITIES: ReadonlySet<EventEntity> = new Set<EventEntity>([
   "version",
   "object",
   "session_transcript",
+  /**
+   * An integration's connection state (§9.3). A connection **breaking** is one of
+   * §7.2's five health alerts, and it becomes true the moment a refresh fails — so
+   * without this the alert waited for the slow tick, which is late for no reason.
+   */
+  "integration",
 ]);
 
 export class AttentionService {
