@@ -1,7 +1,11 @@
 import type { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { UpgradeWebSocket } from "hono/ws";
-import { PluginGrantStore, type PlotroomDatabase } from "@plotroom/db";
+import {
+  PluginDisablementStore,
+  PluginGrantStore,
+  type PlotroomDatabase,
+} from "@plotroom/db";
 import type { ServerConfig } from "./config.js";
 import { createConditionChecks } from "./conditions/registry.js";
 import { startCompactionJob } from "./maintenance/compaction.js";
@@ -238,6 +242,9 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   const plugins = new PluginService({
     stores,
     grants: new PluginGrantStore(db, stores.clock),
+    // Persisted, so a restart honours the operator's disable rather than quietly
+    // re-enabling what they turned off (§10.2, and budgets' "removal stays removed").
+    disablements: new PluginDisablementStore(db, stores.clock),
     bus,
     logger,
     integrations: integrationRegistry,

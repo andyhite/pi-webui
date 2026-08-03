@@ -49,12 +49,12 @@ export function pluginRoutes(plugins: PluginService): Hono<ApiEnv> {
 
   app.post("/plugins/install", validateJsonBody(installBody), async (c) => {
     const input = body<z.infer<typeof installBody>>(c);
-    const installed = await plugins.install(input.entry, actorOf(c));
-    if (installed === null) {
-      const failure = plugins.failures().at(-1) ?? null;
-      return c.json({ installed: false, failure }, 200);
-    }
-    return c.json({ installed: true, plugin: installed }, 201);
+    const result = await plugins.install(input.entry, actorOf(c));
+    // This call's own failure, carried back by the call: reading the most recent
+    // entry from the failure list would show whoever's reason arrived last.
+    return result.installed
+      ? c.json({ installed: true, plugin: result.plugin }, 201)
+      : c.json({ installed: false, failure: result.failure }, 200);
   });
 
   /** Re-scan the configured plugins directory — the operator's gesture, never a

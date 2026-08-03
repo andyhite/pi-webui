@@ -22,7 +22,7 @@ import {
   type PluginInstallFailure,
   type PluginRecord,
 } from "@plotroom/plugin-sdk";
-import type { PluginGrantStore } from "@plotroom/db";
+import type { PluginDisablementStore, PluginGrantStore } from "@plotroom/db";
 import type { ConditionCheckRegistry } from "../conditions/registry.js";
 import type { EventBus, Unsubscribe } from "../events/bus.js";
 import { badRequest, forbidden, notFound } from "../http/errors.js";
@@ -70,9 +70,26 @@ import { hostedContributions } from "./producers.js";
  * serving and every other plugin keeps answering (§10.2). That is Batch 5's exit
  * criterion, and `plugins.integration.test.ts` is the test that names it.
  */
+/**
+ * Install, as a result rather than as a null plus a list to search.
+ *
+ * The route used to answer an install failure by reading `failures().at(-1)`, which
+ * is the *most recently recorded* failure and not necessarily this call's: two
+ * requests in flight, or a directory scan in between, and the operator was shown
+ * somebody else's reason. The failure belongs to the call that produced it.
+ */
+export type PluginInstallResult =
+  | { readonly installed: true; readonly plugin: PluginStatus }
+  | { readonly installed: false; readonly failure: PluginInstallFailure };
+
 export interface PluginServiceDeps {
   readonly stores: ApiStores;
   readonly grants: PluginGrantStore;
+  /**
+   * Which plugins the operator disabled (§10.2). Without it, `boot()` re-enabled
+   * everything installed and an operator's disable lasted until the next restart.
+   */
+  readonly disablements: PluginDisablementStore;
   readonly bus: EventBus;
   readonly logger: Logger;
   /** Where a plugin's producers and write actions land while it is enabled. */
@@ -95,7 +112,14 @@ export interface PluginServiceDeps {
 export class PluginService {
   readonly #registry: PluginRegistry;
   readonly #invoker: PluginInvoker;
-  readonly #failures: PluginInstallFailure[] = [];
+  /**
+   * What could not be installed, **keyed by (entry, origin)** rather than appended.
+   *
+   * A re-scan of the same broken directory used to push a second copy of every
+   * failure it had already reported, so the health surface grew a duplicate row per
+   * gesture. One entry has one current reason; re-scanning replaces it.
+   */
+  readonly #failures = new Map<string, PluginInstallFailure>();
   /**
    * Which permission an approval was raised for, so approving it grants that
    * permission. Remembered for the lifetime of the process, which is the lifetime
@@ -148,7 +172,7 @@ export class PluginService {
   async boot(): Promise<readonly PluginStatus[]> {
     for (const resolution of resolveInBoxPlugins(this.deps.inBox)) {
       if (!resolution.ok) {
-        this.#failures.push({
+        this.recordFailure({
           entry: resolution.packageName,
           origin: "in-box",
           reason: resolution.reason,
@@ -161,7 +185,7 @@ export class PluginService {
       }
       const result = await this.#registry.install(resolution.entry, "in-box");
       if (!result.installed) {
-        this.#failures.push(result.failure);
+        this.recordFailure(result.failure);
         this.deps.logger.warn("in-box plugin failed to install", {
           pluginId: resolution.pluginId,
           reason: result.failure.reason,
@@ -173,8 +197,8 @@ export class PluginService {
     if (directory !== null) {
       // A scan is a read the operator configured, never a timer (principle 2).
       const scanned = await this.#registry.installFromDirectory(directory);
-      this.#failures.push(...scanned.failures);
       for (const failure of scanned.failures) {
+        this.recordFailure(failure);
         this.deps.logger.warn(
           "plugin in the plugins directory failed to install",
           {
@@ -185,7 +209,15 @@ export class PluginService {
       }
     }
 
+    // The operator's disable survives the restart that would otherwise undo it: a
+    // disabled plugin is put into `disabled` rather than left `installed`, so the
+    // health surface says which of the two it is (§10.2's own distinction).
+    const disabled = new Set(this.deps.disablements.list());
     for (const record of this.#registry.list()) {
+      if (disabled.has(String(record.id))) {
+        await this.#registry.disable(record.id);
+        continue;
+      }
       await this.enableRecord(record.id);
     }
 
@@ -222,20 +254,20 @@ export class PluginService {
    * a plugin whose manifest could not be read has no id, name, or version to state.
    */
   failures(): readonly PluginInstallFailure[] {
-    return [...this.#failures];
+    return [...this.#failures.values()];
   }
 
   /* ----------------------------------------------------------- the four verbs */
 
-  async install(entry: string, actor: Author): Promise<PluginStatus | null> {
+  async install(entry: string, actor: Author): Promise<PluginInstallResult> {
     this.requireOperator(actor, "installing a plugin");
     const result = await this.#registry.install(entry, "directory");
     if (!result.installed) {
-      this.#failures.push(result.failure);
-      return null;
+      this.recordFailure(result.failure);
+      return { installed: false, failure: result.failure };
     }
     this.publish(result.record, "created");
-    return this.statusOf(result.record);
+    return { installed: true, plugin: this.statusOf(result.record) };
   }
 
   /** Re-scan the configured plugins directory on the operator's gesture (§10.2). */
@@ -248,7 +280,9 @@ export class PluginService {
       );
     }
     const scanned = await this.#registry.installFromDirectory(directory);
-    this.#failures.push(...scanned.failures);
+    for (const failure of scanned.failures) {
+      this.recordFailure(failure);
+    }
     for (const record of scanned.installed) {
       this.publish(record, "created");
     }
@@ -258,12 +292,16 @@ export class PluginService {
   async enable(pluginId: string, actor: Author): Promise<PluginStatus> {
     this.requireOperator(actor, "enabling a plugin");
     this.require(pluginId);
+    // Enabled is the absence of a row, the same shape a removed grant has: the
+    // operator's last decision is what a restart reads.
+    this.deps.disablements.enable(pluginId);
     return this.enableRecord(pluginId);
   }
 
   async disable(pluginId: string, actor: Author): Promise<PluginStatus> {
     this.requireOperator(actor, "disabling a plugin");
     this.require(pluginId);
+    this.deps.disablements.disable(pluginId);
     this.unwire(pluginId);
     const record = await this.#registry.disable(pluginId as PluginId);
     return this.statusOf(record);
@@ -276,6 +314,9 @@ export class PluginService {
     this.unwire(pluginId);
     await this.#registry.remove(pluginId as PluginId);
     this.deps.grants.clear(pluginId);
+    // A removed plugin has no state to remember: installing it again is a plugin
+    // the operator never lost, and it must not come back already disabled.
+    this.deps.disablements.enable(pluginId);
     this.deps.bus.publish({
       entity: "plugin",
       verb: "deleted",
@@ -410,6 +451,11 @@ export class PluginService {
         this.deps.conditions?.unregister(contribution.id);
       }
     }
+  }
+
+  /** One entry, one current reason (§10.2, principle 12). */
+  private recordFailure(failure: PluginInstallFailure): void {
+    this.#failures.set(`${failure.origin}\u0000${failure.entry}`, failure);
   }
 
   private grantsFor(pluginId: PluginId | string): readonly PermissionGrant[] {
