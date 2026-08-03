@@ -192,22 +192,39 @@ permissions, none of which Epic 7.1 decided.
 
 ## 6. Invocation
 
-The host dispatches seven typed invocation kinds:
+The host dispatches fourteen typed invocation kinds:
 
 `concept.read` · `write.perform` · `tool.call` · `condition.check` ·
-`content.render` · `content.delta` · `card.render`
+`content.render` · `content.delta` · `card.render` ·
+`workspace.checkConfig` · `workspace.provision` · `workspace.runSetup` ·
+`workspace.status` · `workspace.fingerprint` · `workspace.remove` ·
+`palette.invoke`
 
 Each is answered within `callTimeoutMs` or the plugin degrades to unavailable. **A
 throw is a fault, not a result**: a handler that wants to report failure returns
 `ok: false`; a handler that throws makes the plugin unavailable (§10.2).
 
+The seven after `card.render` landed with Epic 7.3's in-box ports, exactly where this
+section said they would: the git plugin is a real caller for a workspace kind, and
+clone-from-a-pull-request is a real caller for a palette entry. **No contract type
+changed** — `CONTRACT_VERSION` is still 1 — because dispatch is the host learning to
+call a method the frozen contract already declared; a plugin built against v1 before
+this is a plugin whose declared methods are now reachable.
+
+One consequence is worth stating rather than discovering: **a palette entry answers
+nothing and holds no reach**, so `palette.invoke` can only make a plugin log. An
+entry that needs the host to _do_ something has no way to say so in v1; a card
+action's `writeActionId` is the one route from a rendered surface into a host
+operation, and it goes through §6.6 like any other write.
+
 **Not yet dispatched, declaration-only in v1:** `Panel.render`,
-`PaletteEntry.invoke`, `NotificationRoute.send`, every `WorkspaceKind` method, and
-command definitions (which are copied in rather than called). The types are frozen;
-the wiring lands with the substrate and the in-box ports (Epics 7.2, 7.3), where
+`NotificationRoute.send`, and command definitions (which are copied in rather than
+called). The types are frozen; the wiring lands with the substrate (Epic 7.2), where
 there is a real caller to prove it against. Also deferred: `probeAncestry` — core's
-`deriveDivergence` needs a reachability probe per root, and a plugin kind cannot
-supply one until a plugin kind exists to try it.
+`deriveDivergence` needs a reachability probe per root, and the kind contract the
+plugin boundary narrows to JSON does not carry it, so a plugin-supplied kind cannot
+distinguish a rebase from new commits (Epic 7.2's finding to close, and reported as
+such by the git port).
 
 ---
 

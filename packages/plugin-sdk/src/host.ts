@@ -145,6 +145,13 @@ const POINT_BY_KIND: Readonly<Record<InvocationKind, ContributionPoint>> = {
   "content.render": "content-renderer",
   "content.delta": "content-renderer",
   "card.render": "card-renderer",
+  "workspace.checkConfig": "workspace-kind",
+  "workspace.provision": "workspace-kind",
+  "workspace.runSetup": "workspace-kind",
+  "workspace.status": "workspace-kind",
+  "workspace.fingerprint": "workspace-kind",
+  "workspace.remove": "workspace-kind",
+  "palette.invoke": "palette-entry",
 };
 
 /** In tests this module runs straight from `src/`, where the worker entry is a

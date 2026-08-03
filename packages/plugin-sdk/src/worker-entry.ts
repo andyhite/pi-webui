@@ -55,6 +55,13 @@ const TARGETS: Readonly<
   "content.render": { key: "contentRenderers", method: "renderAgentContent" },
   "content.delta": { key: "contentRenderers", method: "renderDelta" },
   "card.render": { key: "cardRenderers", method: "renderCard" },
+  "workspace.checkConfig": { key: "workspaceKinds", method: "checkConfig" },
+  "workspace.provision": { key: "workspaceKinds", method: "provision" },
+  "workspace.runSetup": { key: "workspaceKinds", method: "runSetup" },
+  "workspace.status": { key: "workspaceKinds", method: "status" },
+  "workspace.fingerprint": { key: "workspaceKinds", method: "fingerprint" },
+  "workspace.remove": { key: "workspaceKinds", method: "remove" },
+  "palette.invoke": { key: "paletteEntries", method: "invoke" },
 };
 
 /**
@@ -169,6 +176,18 @@ const main = async (): Promise<void> => {
         return [invocation.previous, invocation.next, context];
       case "card.render":
         return [invocation.object, invocation.detail, context];
+      case "workspace.checkConfig":
+        return [invocation.config, context];
+      case "workspace.provision":
+      case "workspace.runSetup":
+        return [invocation.request, context];
+      case "workspace.status":
+      case "workspace.fingerprint":
+        return [invocation.workspace, context];
+      case "workspace.remove":
+        return [invocation.workspace, invocation.options, context];
+      case "palette.invoke":
+        return [context];
     }
   };
 

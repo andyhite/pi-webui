@@ -172,6 +172,135 @@ describe("a conformant plugin", () => {
     expect(lines).toEqual(["echoing"]);
   });
 
+  it("dispatches every method of a contributed workspace kind (§3.4, §10.1)", async () => {
+    const host = await load("test-plugin/index.ts");
+    const workspaceId = coreId("wsp_1");
+    const workspace = {
+      workspaceId,
+      roots: [{ rootKey: "root", path: "/tmp/fixture" }],
+      config: { path: "/tmp/fixture" },
+    };
+
+    // A kind validates its own opaque configuration and refuses with a reason.
+    expect(
+      await host.invoke({
+        kind: "workspace.checkConfig",
+        contributionId: "fixture-workspace",
+        config: {},
+      }),
+    ).toEqual({
+      valid: false,
+      refusal: {
+        message: "a fixture workspace needs a path",
+        fields: ["path"],
+      },
+    });
+    expect(
+      await host.invoke({
+        kind: "workspace.checkConfig",
+        contributionId: "fixture-workspace",
+        config: { path: "/tmp/fixture" },
+      }),
+    ).toEqual({ valid: true });
+
+    const provisioned = await host.invoke({
+      kind: "workspace.provision",
+      contributionId: "fixture-workspace",
+      request: {
+        workspaceId,
+        workstreamId: coreId("wst_1"),
+        config: { path: "/tmp/fixture" },
+        requestedAt: 1,
+      },
+    });
+    expect(provisioned.provisioned).toBe(true);
+
+    const setup = await host.invoke({
+      kind: "workspace.runSetup",
+      contributionId: "fixture-workspace",
+      request: {
+        workspace,
+        program: "true",
+        args: [],
+        workingSubdirectory: "",
+        startedAt: 7,
+      },
+    });
+    expect(setup).toEqual({
+      ok: true,
+      exitCode: 0,
+      output: "",
+      finishedAt: 7,
+    });
+
+    const status = await host.invoke({
+      kind: "workspace.status",
+      contributionId: "fixture-workspace",
+      workspace,
+    });
+    expect(status.readiness).toBe("ready");
+    expect(status.units.map((unit) => unit.rootKey)).toEqual(["root"]);
+
+    const fingerprint = await host.invoke({
+      kind: "workspace.fingerprint",
+      contributionId: "fixture-workspace",
+      workspace,
+    });
+    expect(fingerprint.units[0]?.dirtyDigest).toBe("empty");
+
+    // The options cross the boundary: an unforced removal is refused, a forced
+    // one is performed, and the kind says which.
+    const refused = await host.invoke({
+      kind: "workspace.remove",
+      contributionId: "fixture-workspace",
+      workspace,
+      options: { force: false },
+    });
+    expect(refused.removed).toBe(false);
+    const forced = await host.invoke({
+      kind: "workspace.remove",
+      contributionId: "fixture-workspace",
+      workspace,
+      options: { force: true },
+    });
+    expect(forced.removed).toBe(true);
+  });
+
+  it("dispatches a palette entry, which can only log (§10.1, §11)", async () => {
+    const lines: string[] = [];
+    const host = await load("test-plugin/index.ts", {
+      onLog: (line) => lines.push(line.message),
+    });
+
+    await expect(
+      host.invoke({
+        kind: "palette.invoke",
+        contributionId: "fixture-entry",
+      }),
+    ).resolves.toBeUndefined();
+    expect(lines).toEqual(["palette entry invoked"]);
+  });
+
+  it("acts as nobody for a workspace-kind call, whoever asked (principle 1)", async () => {
+    const host = await load("test-plugin/index.ts");
+
+    // The actor is the host's statement and only a tool call has one; passing
+    // one here changes nothing, so a kind cannot act as a session.
+    const status = await host.invoke(
+      {
+        kind: "workspace.status",
+        contributionId: "fixture-workspace",
+        workspace: {
+          workspaceId: coreId("wsp_1"),
+          roots: [],
+          config: {},
+        },
+      },
+      { actor },
+    );
+    expect(status.units).toEqual([]);
+  });
+
   it("refuses an invocation naming a contribution the plugin does not have", async () => {
     const host = await load("test-plugin/index.ts");
 

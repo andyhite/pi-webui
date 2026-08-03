@@ -20,10 +20,20 @@ import type {
   CardView,
   ConditionResult,
   ProducedObject,
+  ProvisionOutcome,
+  ProvisionRequest,
   ReadRequest,
   ReadResult,
+  RemovalOutcome,
   RenderedContent,
+  SetupAttemptResult,
+  SetupRequest,
   ToolResult,
+  WorkspaceConfigCheck,
+  WorkspaceFingerprint,
+  WorkspaceKindConfig,
+  WorkspaceRef,
+  WorkspaceStatus,
   WriteResult,
 } from "./contract/contributions.js";
 import type { ContributionId } from "./contract/ids.js";
@@ -87,6 +97,47 @@ export type PluginInvocation =
       readonly contributionId: ContributionId;
       readonly object: ProducedObject;
       readonly detail: CardDetail;
+    }
+  /* --- workspace kinds: one invocation per method of the kind contract (§3.4) --- */
+  | {
+      readonly kind: "workspace.checkConfig";
+      readonly contributionId: ContributionId;
+      readonly config: WorkspaceKindConfig;
+    }
+  | {
+      readonly kind: "workspace.provision";
+      readonly contributionId: ContributionId;
+      readonly request: ProvisionRequest;
+    }
+  | {
+      readonly kind: "workspace.runSetup";
+      readonly contributionId: ContributionId;
+      readonly request: SetupRequest;
+    }
+  | {
+      readonly kind: "workspace.status";
+      readonly contributionId: ContributionId;
+      readonly workspace: WorkspaceRef;
+    }
+  | {
+      readonly kind: "workspace.fingerprint";
+      readonly contributionId: ContributionId;
+      readonly workspace: WorkspaceRef;
+    }
+  | {
+      readonly kind: "workspace.remove";
+      readonly contributionId: ContributionId;
+      readonly workspace: WorkspaceRef;
+      readonly options: { readonly force: boolean };
+    }
+  /**
+   * A palette entry the operator picked (§11). It answers nothing: a plugin's
+   * reach is `log` and its credentials, so an entry cannot ask the host to do
+   * anything — see `docs/plugin-contract.md` §6.
+   */
+  | {
+      readonly kind: "palette.invoke";
+      readonly contributionId: ContributionId;
     };
 
 /** What each invocation kind answers with. */
@@ -98,6 +149,13 @@ export interface InvocationResults {
   "content.render": RenderedContent;
   "content.delta": RenderedContent;
   "card.render": CardView;
+  "workspace.checkConfig": WorkspaceConfigCheck;
+  "workspace.provision": ProvisionOutcome;
+  "workspace.runSetup": SetupAttemptResult;
+  "workspace.status": WorkspaceStatus;
+  "workspace.fingerprint": WorkspaceFingerprint;
+  "workspace.remove": RemovalOutcome;
+  "palette.invoke": void;
 }
 
 export type InvocationKind = PluginInvocation["kind"];

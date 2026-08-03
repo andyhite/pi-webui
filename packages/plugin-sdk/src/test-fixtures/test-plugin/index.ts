@@ -206,7 +206,11 @@ const manifest: PluginManifest = {
         id: "fixture-entry",
         label: "Fixture: do nothing",
         description: "proves a palette entry can be contributed",
-        invoke: () => undefined,
+        // All an entry can do: a palette entry answers nothing and holds no reach
+        // into the host beyond its log line.
+        invoke: (context) => {
+          context.log("palette entry invoked");
+        },
       },
     ],
     workspaceKinds: [
@@ -214,7 +218,18 @@ const manifest: PluginManifest = {
         id: "fixture-workspace",
         label: "Fixture workspace",
         permissions: [],
-        checkConfig: () => ({ valid: true }),
+        // A kind validates its own configuration and refuses with a reason; it
+        // never throws its way out of the product.
+        checkConfig: (config) =>
+          typeof config["path"] === "string"
+            ? { valid: true }
+            : {
+                valid: false,
+                refusal: {
+                  message: "a fixture workspace needs a path",
+                  fields: ["path"],
+                },
+              },
         provision: (request) => ({
           provisioned: true,
           roots: [{ rootKey: "root", path: "/tmp/fixture" }],
@@ -233,14 +248,46 @@ const manifest: PluginManifest = {
           output: "",
           finishedAt: request.startedAt,
         }),
-        status: () => ({
+        status: (workspace) => ({
           observedAt: 0,
           readiness: "ready",
-          units: [],
+          units: workspace.roots.map((root) => ({
+            rootKey: root.rootKey,
+            path: root.path,
+            branch: "fixture",
+            head: null,
+            upstream: null,
+            ahead: null,
+            behind: null,
+            uncommitted: [],
+            untracked: [],
+          })),
           unavailable: null,
         }),
-        fingerprint: () => ({ observedAt: 0, units: [] }),
-        remove: () => ({ removed: true, log: [] }),
+        fingerprint: (workspace) => ({
+          observedAt: 0,
+          units: workspace.roots.map((root) => ({
+            rootKey: root.rootKey,
+            head: null,
+            branch: "fixture",
+            upstream: null,
+            upstreamHead: null,
+            dirtyDigest: "empty",
+            dirtyCount: 0,
+            unreadable: null,
+          })),
+        }),
+        // The options cross the boundary too: an unforced removal is refused.
+        remove: (_workspace, options) =>
+          options.force
+            ? { removed: true, log: ["forced"] }
+            : {
+                removed: false,
+                refusal: {
+                  message: "the fixture workspace refuses an unforced removal",
+                  forcible: true,
+                },
+              },
       },
     ],
     conditionChecks: [
