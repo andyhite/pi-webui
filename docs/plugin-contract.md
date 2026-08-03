@@ -253,9 +253,19 @@ context)`, `read(request, context)`, `perform(input, context)`, and so on. It
 12. **`PluginModule` (the old ping-based host interface) is gone**, along with
     `PluginHost.ping`. `PluginHost.invoke` replaces it, and `PluginHealth.ready` now
     carries the descriptor and any version warnings rather than a bare name.
+13. **`CONCEPT_KINDS` now mirrors core's `ObjectKind` spellings exactly.** The draft
+    spelled the pull request kind `pull-request` while `@plotroom/core` spells it
+    `pull_request`, so the draft's own claim to mirror core's object kinds was false
+    for that one member. The contract member is `pull_request`; the two lists are now
+    the same members with the same spellings, and a producer's declared kind is a core
+    kind without translation. Track B built its renderer registry against the draft
+    and translates at the boundary (`toDraftConceptKind`); that translation becomes
+    the identity function at its rebase and should be deleted there. Corrected before
+    the freeze rather than after, because a frozen misspelling is a translation every
+    call site owes forever.
 
 Unchanged from the draft, deliberately: the permission model's four properties and
-three states, `CONCEPT_KINDS`, `RefreshMode`, `ScopingDeclaration`, `ReadResult`'s
+three states, `RefreshMode`, `ScopingDeclaration`, `ReadResult`'s
 present-or-absent `unavailable` list, `WriteResult`'s read-back, `RenderedContent`,
 `CardView`, `ConditionResult`, `Notification`, and `Theme`.
 

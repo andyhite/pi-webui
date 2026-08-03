@@ -64,13 +64,14 @@ export interface PluginCallContext {
 /**
  * The first-class concept kinds a producer may populate (§3.1).
  *
- * Mirrors `@plotroom/core`'s object kinds. Closed rather than open because "an
- * integration populates first-class concepts; it never adds new ones" is only
- * enforceable if the set is closed.
+ * Mirrors `@plotroom/core`'s object kinds — the same members with the same
+ * spellings, so a producer's declared kind is a core kind without translation.
+ * Closed rather than open because "an integration populates first-class
+ * concepts; it never adds new ones" is only enforceable if the set is closed.
  */
 export const CONCEPT_KINDS = [
   "ticket",
-  "pull-request",
+  "pull_request",
   "review",
   "document",
   "diff",
