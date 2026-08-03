@@ -14,30 +14,43 @@ export interface PluginPanelViewProps {
   readonly panel: draft.DraftPanel;
 }
 
-type ViewState =
+export type PluginPanelViewState =
   | { readonly kind: "loading" }
   | { readonly kind: "ready"; readonly view: draft.DraftCardView }
   | { readonly kind: "failed"; readonly reason: string };
 
+/**
+ * The one place a rejected `render()` becomes the "failed" state, pulled out
+ * of the effect so the degrade-on-throw rule (§10.2) is testable without
+ * mounting a component. Never throws itself — `panel.render()`'s rejection
+ * reason is read defensively (`Error` or coerced to a string) the same way
+ * the effect below already did.
+ */
+export async function resolvePluginPanelViewState(
+  panel: draft.DraftPanel,
+): Promise<PluginPanelViewState> {
+  try {
+    const view = await panel.render();
+    return { kind: "ready", view };
+  } catch (error) {
+    return {
+      kind: "failed",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export function PluginPanelView({ panel }: PluginPanelViewProps) {
-  const [state, setState] = useState<ViewState>({ kind: "loading" });
+  const [state, setState] = useState<PluginPanelViewState>({
+    kind: "loading",
+  });
 
   useEffect(() => {
     let cancelled = false;
     setState({ kind: "loading" });
-    panel
-      .render()
-      .then((view) => {
-        if (!cancelled) setState({ kind: "ready", view });
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setState({
-            kind: "failed",
-            reason: error instanceof Error ? error.message : String(error),
-          });
-        }
-      });
+    void resolvePluginPanelViewState(panel).then((next) => {
+      if (!cancelled) setState(next);
+    });
     return () => {
       cancelled = true;
     };
