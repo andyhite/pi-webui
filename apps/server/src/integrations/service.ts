@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   decideApproval,
   integrationToolName,
@@ -11,14 +12,21 @@ import {
   type SessionId,
   type WorkstreamId,
 } from "@plotroom/core";
-import type { draft } from "@plotroom/plugin-sdk";
+import type {
+  CoreId,
+  PluginActor,
+  PluginCallContext,
+  ProducedObject,
+  ReadResult,
+  WriteAction,
+  WriteResult as PluginWriteResult,
+} from "@plotroom/plugin-sdk";
 import { forbidden, notFound, refused } from "../http/errors.js";
 import type { Logger } from "../logging/logger.js";
 import type { ApiStores } from "../routes/api.js";
 import {
   type IntegrationProducer,
   type IntegrationRegistry,
-  toCoreObjectKind,
   toCoreRenderings,
 } from "./registry.js";
 
@@ -63,6 +71,8 @@ export type RefreshOutcome =
       readonly ok: true;
       readonly integration: Integration;
       readonly objectsWritten: number;
+      /** What this read actually found, reconciled through `ObjectStore` — the truth a caller reads back (§9.2). */
+      readonly objects: readonly ProducedObject[];
       readonly unavailable: readonly { externalId: string; why: string }[];
     }
   | {
@@ -84,7 +94,7 @@ export type PerformWriteOutcome =
       readonly kind: "executed";
       readonly ok: boolean;
       readonly message: string;
-      readonly readBack: draft.DraftProducedObject | null;
+      readonly readBack: ProducedObject | null;
     }
   | { readonly kind: "must-ask"; readonly approval: Approval };
 
@@ -172,12 +182,15 @@ export class IntegrationService {
     const integration = this.get(id);
     const producer = this.requireProducer(integration.producerId);
 
-    let result: draft.DraftReadResult;
+    let result: ReadResult;
     try {
-      result = await producer.read({
-        scope: integration.scope,
-        externalId: options.externalId ?? null,
-      });
+      result = await producer.read(
+        {
+          scope: integration.scope,
+          externalId: options.externalId ?? null,
+        },
+        this.buildCallContext(null),
+      );
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       const broken = this.deps.stores.integrations.markBroken(id, reason);
@@ -191,7 +204,7 @@ export class IntegrationService {
     let written = 0;
     for (const object of result.objects) {
       this.deps.stores.objects.write({
-        kind: toCoreObjectKind(object.kind),
+        kind: object.kind,
         title: object.title,
         renderings: toCoreRenderings(object.renderings),
         external: { system: integration.system, id: object.externalId },
@@ -204,6 +217,7 @@ export class IntegrationService {
       ok: true,
       integration: refreshed,
       objectsWritten: written,
+      objects: result.objects,
       unavailable: result.unavailable,
     };
   }
@@ -265,7 +279,11 @@ export class IntegrationService {
       if (routing.kind !== "allowed") return routing;
     }
 
-    const result = await action.perform(input.actionInput);
+    const pluginActor = this.pluginActorFor(input.actor);
+    const result = await action.perform(
+      input.actionInput,
+      this.buildCallContext(pluginActor),
+    );
 
     // Read-back, never assumed: re-derive what is true now, whatever `perform`
     // claimed, and reconcile it like any other refresh (§9.1, §3.2).
@@ -284,7 +302,7 @@ export class IntegrationService {
 
   private decideWrite(
     integration: Integration,
-    action: draft.DraftWriteAction,
+    action: WriteAction,
     input: {
       readonly actionId: string;
       readonly actor: Author;
@@ -342,12 +360,45 @@ export class IntegrationService {
     return { kind: "allowed" };
   }
 
-  private requireProducer(producerId: string): draft.DraftConceptProducer {
+  private requireProducer(producerId: string): IntegrationProducer {
     const producer = this.deps.registry.get(producerId);
     if (producer === undefined) {
       throw notFound(`unknown integration producer ${producerId}`);
     }
     return producer;
+  }
+
+  /**
+   * Who a plugin call acts as (contract §10.2): non-null only when a session's
+   * own call is what is running — a write action invoked as an agent tool.
+   * Never set for a concept producer's `read` (never an agent tool call) or a
+   * human's direct UI action.
+   */
+  private pluginActorFor(actor: Author): PluginActor | null {
+    if (actor.kind !== "session") return null;
+    const { workstreamId } = this.deps.stores.sessions.get(
+      actor.sessionId,
+    ).session;
+    return {
+      sessionId: actor.sessionId as unknown as CoreId,
+      workstreamId: workstreamId as unknown as CoreId,
+    };
+  }
+
+  /**
+   * The direct-invocation seam's own `PluginCallContext` (registry.ts's own
+   * docstring: a same-process stand-in for Track C's host). No credential or
+   * grant wiring here yet — unchanged from before the freeze, and still not
+   * this batch's scope.
+   */
+  private buildCallContext(actor: PluginActor | null): PluginCallContext {
+    return {
+      invocationId: randomUUID(),
+      actor,
+      credentials: {},
+      grants: [],
+      log: (message) => this.deps.logger.info(message),
+    };
   }
 }
 
@@ -358,7 +409,7 @@ export class IntegrationService {
  * than none.
  */
 function readBackExternalId(
-  result: draft.DraftWriteResult,
+  result: PluginWriteResult,
   actionInput: unknown,
 ): string | null {
   if (result.readBack !== null) return result.readBack.externalId;

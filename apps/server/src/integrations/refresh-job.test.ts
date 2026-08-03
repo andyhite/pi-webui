@@ -57,6 +57,7 @@ function fakeIntegrations(due: readonly Integration[]) {
         ok: true as const,
         integration: fixture(id),
         objectsWritten: 0,
+        objects: [],
         unavailable: [],
       };
     }),
@@ -119,6 +120,7 @@ describe("the integration refresh job (§9.1, principle 2)", () => {
             ok: true as const,
             integration: fixture(id),
             objectsWritten: 0,
+            objects: [],
             unavailable: [],
           };
         }),

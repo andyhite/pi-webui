@@ -1,5 +1,9 @@
-import type { draft } from "@plotroom/plugin-sdk";
-import type { ObjectKind, Renderings } from "@plotroom/core";
+import type {
+  ConceptProducer,
+  Renderings as PluginRenderings,
+  WriteAction,
+} from "@plotroom/plugin-sdk";
+import type { Renderings } from "@plotroom/core";
 
 /**
  * The integration producer registry — Epic 7.2's direct-invocation seam
@@ -13,49 +17,39 @@ import type { ObjectKind, Renderings } from "@plotroom/core";
  * loader calls into — the substrate above it (the store, the service, the
  * routes, the catalog tools) does not change, because none of it assumes
  * same-process execution; it only ever calls `producer.read(...)` and
- * `action.perform(...)`, both already `Promise`-returning per the draft
+ * `action.perform(...)`, both already `Promise`-returning per the frozen
  * contract.
  *
- * Built against `@plotroom/plugin-sdk`'s `draft.*` shapes, per the batch
- * assignment: "build the server-side substrate against the DRAFT types'
- * shapes (semantics won't move much; C will list deviations; you'll reconcile
- * at rebase)." Two shapes needed extending beyond the draft as written, both
- * recorded here rather than silently patched into the draft file (which is
- * Track C's subtree):
+ * Rebased onto the frozen contract (`packages/plugin-sdk/src/contract/`,
+ * `docs/plugin-contract.md`); `draft.*` is gone. One extension survives the
+ * freeze, additive rather than a change to the contract's own field list:
+ * `ConceptProducer`/`WriteAction` name no plugin, and a registry needs to
+ * group a producer's actions and know which plugin owns which credential
+ * namespace, so {@link IntegrationProducer} adds `pluginId`.
  *
- * - `DraftConceptProducer`/`DraftWriteAction` name no plugin. A registry needs
- *   to group a producer's actions and know which plugin owns which credential
- *   namespace, so {@link IntegrationProducer} adds `pluginId` — additive, not a
- *   change to the draft's own field list.
- * - `DraftRenderings.card` is `string`; `@plotroom/core`'s `Renderings.card` is
- *   `Readonly<Record<string, unknown>>` (`packages/core/src/renderings.ts`).
- *   {@link toCoreRenderings} bridges the two by parsing the string as JSON
- *   (falling back to `{ text: <string> }` for a producer that returns plain
- *   text) — see `docs/plugin-contract-draft.md`'s reconciliation note for
- *   which side this is expected to resolve on at the freeze.
- * - `DraftConceptKind` spells one member `"pull-request"`; `@plotroom/core`'s
- *   `ObjectKind` (`packages/core/src/objects.ts`) spells the same concept
- *   `"pull_request"`. A hyphen-vs-underscore drift a TypeScript build catches
- *   immediately, which is exactly why it is caught here rather than at the
- *   freeze: {@link toCoreObjectKind} is the one place that translates, so a
- *   producer keeps writing the draft's own spelling.
+ * One bridge from the draft still applies: `Renderings.card` is `string` in
+ * the contract but `Readonly<Record<string, unknown>>` in `@plotroom/core`'s
+ * `Renderings` (`packages/core/src/renderings.ts`) — {@link toCoreRenderings}
+ * parses the string as JSON, falling back to `{ text: <string> }` for a
+ * producer that returns plain text. The other bridge did not survive it:
+ * `@plotroom/core`'s `ObjectKind` and the contract's `ConceptKind` mirror each
+ * other exactly now (`docs/plugin-contract.md` §7.13 — the draft's own
+ * `"pull-request"` misspelling is corrected to `"pull_request"`), so a
+ * producer's declared kind (`ConceptKind`) is a core `ObjectKind` with no
+ * translation; the former `toCoreObjectKind` bridge is deleted rather than
+ * kept as an identity function, per that section's own instruction.
  */
-export interface IntegrationProducer extends draft.DraftConceptProducer {
+export interface IntegrationProducer extends ConceptProducer {
   readonly pluginId: string;
-  readonly writeActions?: readonly draft.DraftWriteAction[];
+  readonly writeActions?: readonly WriteAction[];
 }
 
-export function toCoreRenderings(rendered: draft.DraftRenderings): Renderings {
+export function toCoreRenderings(rendered: PluginRenderings): Renderings {
   return {
     card: parseCard(rendered.card),
     summary: rendered.summary,
     agentContent: rendered.agentContent,
   };
-}
-
-/** See the class docstring's third deviation: `"pull-request"` vs `"pull_request"`. */
-export function toCoreObjectKind(kind: draft.DraftConceptKind): ObjectKind {
-  return kind === "pull-request" ? "pull_request" : kind;
 }
 
 function parseCard(card: string): Readonly<Record<string, unknown>> {
@@ -89,10 +83,7 @@ export class IntegrationRegistry {
     return [...this.producers.values()];
   }
 
-  writeAction(
-    producerId: string,
-    actionId: string,
-  ): draft.DraftWriteAction | undefined {
+  writeAction(producerId: string, actionId: string): WriteAction | undefined {
     return this.get(producerId)?.writeActions?.find(
       (action) => action.id === actionId,
     );

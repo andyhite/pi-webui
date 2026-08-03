@@ -1,4 +1,10 @@
-import type { draft } from "@plotroom/plugin-sdk";
+import type {
+  ProducedObject,
+  ReadRequest,
+  ReadResult,
+  WriteAction,
+  WriteResult,
+} from "@plotroom/plugin-sdk";
 import type { IntegrationProducer } from "./registry.js";
 
 /**
@@ -41,7 +47,7 @@ export function createFakeIntegrationState(
   };
 }
 
-function renderTicket(ticket: FakeTicket): draft.DraftProducedObject {
+function renderTicket(ticket: FakeTicket): ProducedObject {
   return {
     kind: "ticket",
     externalId: ticket.externalId,
@@ -69,10 +75,9 @@ export function createFakeProducer(
     kinds: ["ticket"],
     refresh: { kind: "interval", seconds: options.refreshSeconds ?? 300 },
     scoping: { language: "fake-ql", example: 'status = "open"' },
+    permissions: [],
 
-    async read(
-      request: draft.DraftReadRequest,
-    ): Promise<draft.DraftReadResult> {
+    async read(request: ReadRequest): Promise<ReadResult> {
       if (state.failReads) {
         throw new Error(state.failReason);
       }
@@ -111,9 +116,7 @@ export function createFakeProducer(
  * assuming the input described it (§9.2, scope item 3 and 6: "tested with a
  * fake plugin whose write mutates differently than asked").
  */
-function fakeCommentAction(
-  state: FakeIntegrationState,
-): draft.DraftWriteAction {
+function fakeCommentAction(state: FakeIntegrationState): WriteAction {
   return {
     id: "comment",
     action: "comment",
@@ -123,7 +126,8 @@ function fakeCommentAction(
       externalId: { type: "string", required: true, description: "ticket id" },
       text: { type: "string", required: true, description: "comment text" },
     },
-    async perform(rawInput: unknown): Promise<draft.DraftWriteResult> {
+    permissions: [],
+    async perform(rawInput: unknown): Promise<WriteResult> {
       const input = rawInput as { externalId: string; text: string };
       const ticket = state.tickets.get(input.externalId);
       if (ticket === undefined) {
@@ -149,7 +153,7 @@ function fakeCommentAction(
 }
 
 /** An irreversible write action, so the approval-piercing path has one to hit. */
-function fakeCloseAction(state: FakeIntegrationState): draft.DraftWriteAction {
+function fakeCloseAction(state: FakeIntegrationState): WriteAction {
   return {
     id: "close",
     action: "close",
@@ -158,7 +162,8 @@ function fakeCloseAction(state: FakeIntegrationState): draft.DraftWriteAction {
     input: {
       externalId: { type: "string", required: true, description: "ticket id" },
     },
-    async perform(rawInput: unknown): Promise<draft.DraftWriteResult> {
+    permissions: [],
+    async perform(rawInput: unknown): Promise<WriteResult> {
       const input = rawInput as { externalId: string };
       const ticket = state.tickets.get(input.externalId);
       if (ticket === undefined) {

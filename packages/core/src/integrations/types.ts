@@ -1,15 +1,14 @@
 /**
  * The integration substrate's own vocabulary (Epic 7.2, §9.1–§9.3).
  *
- * `packages/plugin-sdk/src/draft/` is Track C's contract draft, drafted a batch
- * early so the freeze reconciles reviewed shapes against native code rather than
- * inventing them (`docs/plugin-contract-draft.md`). This module is the native
- * counterpart the draft's `DraftConceptProducer` / `DraftRefreshMode` /
- * `DraftScopingDeclaration` point at: `@plotroom/core` cannot depend on
- * `@plotroom/plugin-sdk` (the dependency runs the other way, draft → nothing,
- * eventually host → core), so the shapes are mirrored here rather than imported,
- * and `apps/server/src/integrations/registry.ts` is where the two vocabularies
- * meet.
+ * `packages/plugin-sdk/src/contract/` is the frozen v1 plugin contract
+ * (`docs/plugin-contract.md`) — built against its draft predecessor, which this
+ * batch reconciled at rebase. This module is the native counterpart the
+ * contract's `ConceptProducer` / `RefreshMode` / `ScopingDeclaration` point at:
+ * `@plotroom/core` cannot depend on `@plotroom/plugin-sdk` (the dependency runs
+ * the other way, contract → nothing, eventually host → core), so the shapes
+ * are mirrored here rather than imported, and
+ * `apps/server/src/integrations/registry.ts` is where the two vocabularies meet.
  *
  * Three rules carried over from the draft, restated because they are the ones a
  * server-side implementation could quietly violate:
@@ -29,14 +28,14 @@
 
 import type { WriteReversibility } from "../sessions/outside-world.js";
 
-/** Mirrors `DraftRefreshMode` (§9.1): reads only, never runs (principle 2). */
+/** Mirrors the contract's `RefreshMode` (§9.1): reads only, never runs (principle 2). */
 export type IntegrationRefreshMode =
   | { readonly kind: "on-demand" }
   | { readonly kind: "interval"; readonly seconds: number }
   /** The plugin observes something and tells the host; still a read. */
   | { readonly kind: "observed"; readonly what: string };
 
-/** Mirrors `DraftScopingDeclaration` (§9.1): the source's own query language. */
+/** Mirrors the contract's `ScopingDeclaration` (§9.1): the source's own query language. */
 export interface IntegrationScopingDeclaration {
   readonly language: string;
   readonly example: string;
@@ -85,8 +84,8 @@ export interface Integration {
 
 /**
  * A declared write action, as the substrate's write-gate seam needs it — the
- * subset of `DraftWriteAction` that `toolCallAsk`/`decideApproval` are built to
- * consume (§9.2, §6.6). `perform`/`input` stay with the registry
+ * subset of the contract's `WriteAction` that `toolCallAsk`/`decideApproval` are
+ * built to consume (§9.2, §6.6). `perform`/`input` stay with the registry
  * (`apps/server/src/integrations/registry.ts`); this is only what an approval ask
  * has to carry.
  */
