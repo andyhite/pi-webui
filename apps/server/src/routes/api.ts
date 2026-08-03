@@ -11,11 +11,13 @@ import {
   IntegrationStore,
   Maintenance,
   ObjectStore,
+  ProposalStore,
   QuestionStore,
   RunQueueStore,
   RunStore,
   SessionStore,
   SpendStore,
+  StandingInstructionStore,
   WorkspaceStore,
   WorkstreamStore,
   type PlotroomDatabase,
@@ -67,6 +69,10 @@ export interface ApiStores {
   readonly integrations: IntegrationStore;
   /** Credentials for integrations — never read by a route's own response (§9.3). */
   readonly credentials: CredentialStore;
+  /** Standing instructions and their per-workstream opt-ins (§3.8). */
+  readonly standingInstructions: StandingInstructionStore;
+  /** A session's proposals, awaiting the human who accepts them (principle 1). */
+  readonly proposals: ProposalStore;
 }
 
 export function createStores(
@@ -99,6 +105,8 @@ export function createStores(
     maintenance: new Maintenance(db, clock),
     integrations: new IntegrationStore(db, clock),
     credentials: new CredentialStore(db, clock),
+    standingInstructions: new StandingInstructionStore(db, clock),
+    proposals: new ProposalStore(db, clock),
   };
 }
 

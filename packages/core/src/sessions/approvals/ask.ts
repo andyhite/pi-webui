@@ -194,7 +194,10 @@ export function describeAsk(ask: ApprovalAsk): string {
   } else if (ask.paths.length > 0) {
     parts.push(`writes ${ask.paths.join(", ")}`);
   }
-  if (ask.target !== null) {
+  // Only a destruction ask *removes* its target. Every other kind names one for
+  // matching rather than for wording — a proposal's target is the proposal itself,
+  // and "removes proposal X" would describe the opposite of what accepting does.
+  if (ask.target !== null && ask.kind === "destruction") {
     parts.push(`removes ${ask.target.kind} ${ask.target.id}`);
   }
   return parts.join(" — ");

@@ -202,7 +202,10 @@ export function applyEvent(state: BoardState, event: DomainEvent): BoardState {
     // them. A pre-grant, an outbound route, an integration instance, and a
     // plugin's own lifecycle/health are configuration and are never on the board
     // at all (§6.6, §7.3, §9.1–§9.3, §10.2) — the plugin health panel reads that
-    // event through its own seam.
+    // event through its own seam. A standing instruction and a workstream's opt-in
+    // are the same: §3.8 is deliberately **not** a fan-out of context edges, so
+    // nothing on the board changes when one is declared or opted into — they reach
+    // a run through assembly, and the standing-instructions surface reads them.
     case "version":
     case "session_observation":
     case "session_transcript":
@@ -217,6 +220,8 @@ export function applyEvent(state: BoardState, event: DomainEvent): BoardState {
     case "broadcast":
     case "approval":
     case "pre_grant":
+    case "standing_instruction":
+    case "standing_instruction_opt_in":
     case "attention":
     case "notification_route":
     case "integration":

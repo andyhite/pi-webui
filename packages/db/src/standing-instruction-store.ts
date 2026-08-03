@@ -254,10 +254,14 @@ export class StandingInstructionStore {
     });
   }
 
-  /* ------------------------------------------------------------- internals */
-
-  /** The object's own kind and scope, which is what the predicate checks. */
-  private candidate(objectId: string): StandingInstructionCandidate {
+  /**
+   * The object's own kind and scope, which is what the predicates check.
+   *
+   * Public because acceptance needs it too (`acceptedStandingInstruction` takes the
+   * candidate): the facts come from the stored object either way, so a caller cannot
+   * accept a proposal by describing the object more favourably than it is.
+   */
+  candidate(objectId: string): StandingInstructionCandidate {
     const object = this.objects.get(objectId);
     if (object === undefined) throw new EntityNotFound("object", objectId);
     return {
@@ -266,6 +270,8 @@ export class StandingInstructionStore {
       scope: object.scope,
     };
   }
+
+  /* ------------------------------------------------------------- internals */
 
   private requireOptIn(
     workstreamId: string,

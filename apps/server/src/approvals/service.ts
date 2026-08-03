@@ -68,6 +68,20 @@ export interface ApprovalServiceDeps {
   readonly hub: SessionHub;
   /** Answering a claim approval settles the wait it stands for (§3.4). */
   readonly claims?: ClaimApprovalAnswerer;
+  /**
+   * Whether a proposal is still pending (§3.8), for the queue's own filter.
+   *
+   * A read and nothing else: **applying** an answered proposal is
+   * `ProposalService`'s, reached from the event this service publishes rather than
+   * from a call here — the same shape `subscribeToClaimWaits` uses in the other
+   * direction, and what keeps the two services from depending on each other.
+   */
+  readonly proposals?: ProposalPendingReader;
+}
+
+/** The one fact the approval queue needs about a proposal (§3.8). */
+export interface ProposalPendingReader {
+  isPending(proposalId: string): boolean;
 }
 
 /** The half of `ClaimService` this needs, so the two are not circular. */
@@ -419,6 +433,14 @@ export class ApprovalService {
 
   /** Whether this approval still has something to answer about. */
   private stillAsking(approval: Approval): boolean {
+    if (approval.kind === "standing-instruction") {
+      // A proposal decided through its own route leaves this row unanswered for as
+      // long as it takes the settling call to run; a queue that showed it would be
+      // asking about something already decided (§3.8, the claim wait's own rule).
+      const proposalId = approval.ask.target?.id;
+      if (proposalId === undefined) return true;
+      return this.deps.proposals?.isPending(proposalId) ?? true;
+    }
     if (approval.kind !== "claim") return true;
     const waitId = approval.ask.target?.id;
     if (waitId === undefined) return true;
@@ -441,6 +463,12 @@ export class ApprovalService {
       this.answerClaimWait(approval, "grant");
       return true;
     }
+
+    // A proposal is applied by `ProposalService`, which acts on the event this
+    // answer publishes. Applying it here would be the second acceptance path — and
+    // the second one is always the one that forgets to check who is accepting
+    // (§3.8, principle 1).
+    if (approval.kind === "standing-instruction") return false;
 
     const target = approval.ask.target;
     if (approval.kind !== "destruction" || target === null) return false;

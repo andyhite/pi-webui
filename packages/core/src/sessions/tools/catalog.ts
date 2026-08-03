@@ -1994,7 +1994,7 @@ const standingInstructionTools: readonly AgentTool[] = [
       "the standing instructions panel",
       "/api/standing-instructions",
     ),
-    availability: "pending",
+    availability: "live",
   },
   mutate({
     name: "standing_instruction_declare",
@@ -2003,7 +2003,7 @@ const standingInstructionTools: readonly AgentTool[] = [
     gesture: "mark a note as a standing instruction",
     method: "POST",
     endpoint: "/api/standing-instructions",
-    availability: "pending",
+    availability: "live",
     input: {
       objectId: {
         type: "string",
@@ -2023,7 +2023,7 @@ const standingInstructionTools: readonly AgentTool[] = [
     gesture: "unmark a standing instruction",
     method: "DELETE",
     endpoint: "/api/standing-instructions/:id",
-    availability: "pending",
+    availability: "live",
     input: { id: id("the standing instruction's id") },
     // Retiring one changes what every opted-in workstream knows, the caller's own
     // chain included — the same act as declaring, from the other side.
@@ -2036,7 +2036,7 @@ const standingInstructionTools: readonly AgentTool[] = [
     gesture: "tick a standing instruction on a workstream",
     method: "POST",
     endpoint: "/api/workstreams/:id/standing-instructions",
-    availability: "pending",
+    availability: "live",
     input: {
       id: id("the workstream's id"),
       instructionId: {
@@ -2057,7 +2057,7 @@ const standingInstructionTools: readonly AgentTool[] = [
     gesture: "untick a standing instruction on a workstream",
     method: "DELETE",
     endpoint: "/api/workstreams/:id/standing-instructions/:instructionId",
-    availability: "pending",
+    availability: "live",
     input: {
       id: id("the workstream's id"),
       instructionId: id("the standing instruction to opt out of"),
@@ -2095,7 +2095,7 @@ const agencyTools: readonly AgentTool[] = [
     gesture: "none; this exists because a session cannot author into itself",
     method: "POST",
     endpoint: "/api/proposals",
-    availability: "pending",
+    availability: "live",
     input: {
       tool: {
         type: "string",
@@ -2117,7 +2117,7 @@ const agencyTools: readonly AgentTool[] = [
     gesture: "accept a proposal from the queue (§7.1)",
     method: "POST",
     endpoint: "/api/proposals/:id/accept",
-    availability: "pending",
+    availability: "live",
     input: { id: id("the proposal id") },
     requires: { humanOnly: true },
   }),

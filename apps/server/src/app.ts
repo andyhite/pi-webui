@@ -64,6 +64,9 @@ import { IntegrationService } from "./integrations/service.js";
 import { integrationWorldDeclarations } from "./integrations/world.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { PluginService } from "./plugins/service.js";
+import { standingInstructionRoutes } from "./routes/standing-instructions.js";
+import { ProposalService } from "./standing-instructions/proposals.js";
+import { StandingInstructionService } from "./standing-instructions/service.js";
 
 export interface AppDependencies {
   readonly config: ServerConfig;
@@ -174,8 +177,37 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   // one of the two paths that raise one: a call it cannot answer from claims and
   // standing decisions alone asks, and the record is what the operator answers
   // from the queue without opening the session (§7.1).
-  const approvals = new ApprovalService({ stores, bus, logger, hub, claims });
+  // Standing instructions (§3.8, Epic 7.4). The instruction half decides nothing the
+  // store's predicates do not; the proposal half is what turns a session's proposal
+  // into a §7.1 queue row and an accepted one into the operator's own act.
+  const standingInstructions = new StandingInstructionService({
+    instructions: stores.standingInstructions,
+    bus,
+  });
+  const approvals = new ApprovalService({
+    stores,
+    bus,
+    logger,
+    hub,
+    claims,
+    proposals: {
+      isPending: (proposalId) =>
+        stores.proposals.find(proposalId)?.state === "pending",
+    },
+  });
   const unsubscribeClaimApprovals = approvals.subscribeToClaimWaits();
+  const proposals = new ProposalService({
+    proposals: stores.proposals,
+    instructions: stores.standingInstructions,
+    approvals,
+    bus,
+    logger,
+    clock: stores.clock,
+  });
+  // Answering the queue row is answering the proposal: the fact is already on the
+  // stream, so this listens rather than being called from `ApprovalService` — the
+  // shape `subscribeToClaimWaits` uses in the other direction.
+  const unsubscribeProposals = proposals.subscribe();
 
   // The integration substrate (§9.1–§9.3, Epic 7.2). Constructed here, before the
   // gate, because the gate's own `world` declarations are built from exactly
@@ -355,6 +387,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", snapshotRoutes(stores));
   app.route("/api", integrationRoutes(integrations));
   app.route("/api", pluginRoutes(plugins));
+  app.route("/api", standingInstructionRoutes(standingInstructions, proposals));
 
   mountWsRoute({ app, path: "/ws", upgradeWebSocket, bus, logger });
 
@@ -423,6 +456,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     stopAttention: () => {
       unsubscribeAttention();
       unsubscribeClaimApprovals();
+      unsubscribeProposals();
     },
     attentionTick,
     notifications,

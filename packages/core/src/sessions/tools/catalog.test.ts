@@ -241,6 +241,10 @@ const OPERATOR_ONLY_ROUTES: readonly {
     why: "\u00a710.2's grants are operator-only acts, recorded as such in AGENTS.md: \"there is no agent tool that grants a permission, for the same reason there is none that raises a budget\" (principle 1). A session answering its own plugin's permission request is the silent reach \u00a710.2 rules out.",
   },
   {
+    path: "/api/proposals/:id/reject",
+    why: "declining a proposal is the operator's word, and it has no tool for the reason accepting one is `humanOnly` (§3.8, principle 1): a session that could decline proposals could decline its own, which is the same reach as accepting them. The refusal reaches the proposing session as feedback, the way an approval denial's does.",
+  },
+  {
     path: "/api/nodes/:id/position",
     why: "the arrangement is the operator's authored spatial work (§5): an agent rearranging the canvas somebody else is reading is not a wanted gesture, and nothing an agent does depends on where a node sits.",
   },
