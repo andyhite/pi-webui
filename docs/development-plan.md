@@ -2293,10 +2293,60 @@ into Track C's subtree (reconciled at rebase; see `docs/plugin-contract.md`
 
 ### Epic 7.3 — In-box plugins (`integrations`)
 
-- [ ] **Coding/git**: workspace kind, diffs, commits, branches — port Phase 4 git mechanics onto the plugin contract (§9.4)
-- [ ] **GitHub**: PRs, reviews, issues-as-tickets, repo metadata, writes; clone-from-PR-card (§9.4, §3.4)
+- [x] **Coding/git**: workspace kind, diffs, commits, branches — port Phase 4 git mechanics onto the plugin contract (§9.4) — _`packages/plugins/git`; the kind's six methods, `diff` and `commit` producers, renderers, three condition checks and four read-only tools. **Branches are not a concept**: `CONCEPT_KINDS` is closed (§3.1) and has no branch member, so they reach the product through the kind's status and `git_branches`, never as objects_
+- [x] **GitHub**: PRs, reviews, issues-as-tickets, repo metadata, writes; clone-from-PR-card (§9.4, §3.4) — _`packages/plugins/github`; four producers, four write actions with per-action reversibility, three write tools that call those actions, the two condition checks the native registry leaves to it, and clone-from-a-pull-request as a card action **with no write action behind it** — the clone is the host's git over the host's own authentication (§3.4)_
 - [ ] **Filesystem**: files/directories as documents; browse and drag (§9.4)
 - [ ] **Jira**: tickets, epics+children as collections, statuses/transitions, writes (§9.4)
+
+_**Landed (Batch 5, Track C, Stage 2): the git port and GitHub.** Two private ESM
+workspace packages under `packages/plugins/`, each importing **types only** from
+`@plotroom/plugin-sdk` and nothing at all from `@plotroom/core` — a port that borrowed
+core's implementation would prove that two packages can share code, not that the
+contract can express git. Both load in the **real `worker_threads` host** in tests
+(`host.integration.test.ts` in each), pass conformance at the boundary, and serve at
+least one invocation per dispatchable contribution point they declare. The git plugin
+runs against **real git in temp directories**; the GitHub plugin runs against a
+recorded, stateful GitHub behind an injected transport, so nothing in the repository
+can reach the network and a write's read-back really does re-read something that
+changed. The GitHub token arrives **only** through the host's per-call credential
+injection: nothing in either package reads `process.env` for a credential, and the
+recorded GitHub answers 401 without the header, so a producer that answers at all
+proves the injection happened._
+
+_**Dispatch for seven more invocation kinds landed with them**, exactly where
+[`plugin-contract.md`](plugin-contract.md) §6 said it would — `workspace.checkConfig`
+/ `provision` / `runSetup` / `status` / `fingerprint` / `remove` and `palette.invoke`,
+because the git kind and clone-from-a-pull-request are the real callers the freeze was
+waiting for. **No contract type changed and `CONTRACT_VERSION` is still 1**: the host
+learned to call methods the frozen contract already declared._
+
+_**Five gaps the port found, worked around inside v1 rather than by widening a frozen
+contract** (each is a Phase 7.2 decision, not a licence to edit `contract/`): there is
+**no command capability** in a plugin's injected reach, so the git plugin brings its
+own spawner as an injected dependency; a **`ConceptProducer` receives no workspace**,
+so the checkout lives in the producer's scope (`path=…`, which §9.1 already makes the
+source's own query language) and a `ConditionCheck` takes it as an input the server
+must fill in; **`WorkspaceStatus.readiness` asks a kind for a state core derives from
+records**, so the git kind answers only the mechanism-level facts it has and never
+claims setup passed; **`WorkspaceRoot` carries no `primaryCheckout` flag and
+`RemovalOutcome` no typed refusal reason**, so the kind refuses to remove anything it
+cannot show it provisioned and names the protection in the message; and a
+**`WriteAction` declares no paths**, so a plugin write into a workspace could not be
+gated by the claim ledger (§3.4) — which is why the git plugin contributes **no write
+action at all** and its four tools are `mutates: false`. A palette entry, finally, can
+only log: `invoke` answers nothing and the call context holds no reach, so the clone
+gesture is the card action plus the host performing it._
+
+_**What Track A wires**: register both manifests as in-box entries on the
+`PluginRegistry`; route descriptor `concept-producer` contributions into the substrate
+(Epic 7.2) with their `scoping` declarations shown verbatim; map declared world
+conditions onto `condition.check` invocations, **supplying the workspace path in the
+input** the checks declare; give the git workspace kind a home in the
+`WorkspaceKindRegistry` behind the six `workspace.*` invocations; and honour a card
+action id of `clone-from-pull-request` by provisioning a git workspace from the pull
+request's clone URL over the host's own git authentication. **What Track B renders**:
+both plugins' `card.render` and `content.render` / `content.delta` answers (their
+`truncated` is a fact to display), and the palette entry as a declaration._
 
 ### Epic 7.4 — Standing instructions (`graph`)
 
