@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { draft } from "@plotroom/plugin-sdk";
+import type {
+  CardRenderer,
+  ConceptKind,
+  PluginManifest,
+  ProducedObject,
+} from "@plotroom/plugin-sdk";
 
 import {
   commandPaletteItemsFromRegistry,
@@ -9,9 +14,24 @@ import {
   resolveContentDelta,
 } from "./contribution-registry.js";
 
+function manifest(
+  overrides: Partial<PluginManifest["contributions"]> = {},
+  manifestOverrides: Partial<PluginManifest> = {},
+): PluginManifest {
+  return {
+    id: "filesystem",
+    name: "filesystem",
+    version: "0.0.0",
+    contractVersion: 1,
+    permissions: [],
+    contributions: { ...overrides },
+    ...manifestOverrides,
+  };
+}
+
 function producedObject(
-  overrides: Partial<draft.DraftProducedObject> = {},
-): draft.DraftProducedObject {
+  overrides: Partial<ProducedObject> = {},
+): ProducedObject {
   return {
     kind: "document",
     externalId: "ext_1",
@@ -22,21 +42,16 @@ function producedObject(
 }
 
 function cardRenderer(
-  kinds: readonly draft.DraftConceptKind[],
-  renderCard: draft.DraftCardRenderer["renderCard"],
-): draft.DraftCardRenderer {
-  return { kinds, renderCard };
+  kinds: readonly ConceptKind[],
+  renderCard: CardRenderer["renderCard"],
+): CardRenderer {
+  return { id: "card", kinds, renderCard };
 }
 
 describe("createContributionRegistry", () => {
   it("registers and lists manifests, including by plugins later — a registry, not a hardcoded list", () => {
     const registry = createContributionRegistry();
-    registry.registerManifest("filesystem", {
-      name: "filesystem",
-      version: "0.0.0",
-      contractVersion: 0,
-      permissions: [],
-    });
+    registry.registerManifest("filesystem", manifest());
     expect(registry.listManifests()).toEqual([
       {
         pluginId: "filesystem",
@@ -47,19 +62,18 @@ describe("createContributionRegistry", () => {
 
   it("unregisterManifest removes a manifest and everything it contributed", () => {
     const registry = createContributionRegistry();
-    registry.registerManifest("filesystem", {
-      name: "filesystem",
-      version: "0.0.0",
-      contractVersion: 0,
-      permissions: [],
-      cardRenderers: [
-        cardRenderer(["document"], async () => ({
-          title: "x",
-          lines: [],
-          actions: [],
-        })),
-      ],
-    });
+    registry.registerManifest(
+      "filesystem",
+      manifest({
+        cardRenderers: [
+          cardRenderer(["document"], async () => ({
+            title: "x",
+            lines: [],
+            actions: [],
+          })),
+        ],
+      }),
+    );
     registry.unregisterManifest("filesystem");
     expect(registry.listManifests()).toEqual([]);
     expect(registry.cardRendererFor("document")).toBeUndefined();
@@ -72,13 +86,10 @@ describe("createContributionRegistry", () => {
       lines: [],
       actions: [],
     }));
-    registry.registerManifest("filesystem", {
-      name: "filesystem",
-      version: "0.0.0",
-      contractVersion: 0,
-      permissions: [],
-      cardRenderers: [renderer],
-    });
+    registry.registerManifest(
+      "filesystem",
+      manifest({ cardRenderers: [renderer] }),
+    );
     expect(registry.cardRendererFor("document")).toBe(renderer);
     expect(registry.cardRendererFor("ticket")).toBeUndefined();
   });
@@ -95,20 +106,14 @@ describe("createContributionRegistry", () => {
       lines: [],
       actions: [],
     }));
-    registry.registerManifest("a", {
-      name: "a",
-      version: "0.0.0",
-      contractVersion: 0,
-      permissions: [],
-      cardRenderers: [first],
-    });
-    registry.registerManifest("b", {
-      name: "b",
-      version: "0.0.0",
-      contractVersion: 0,
-      permissions: [],
-      cardRenderers: [second],
-    });
+    registry.registerManifest(
+      "a",
+      manifest({ cardRenderers: [first] }, { id: "a", name: "a" }),
+    );
+    registry.registerManifest(
+      "b",
+      manifest({ cardRenderers: [second] }, { id: "b", name: "b" }),
+    );
     expect(registry.cardRendererFor("document")).toBe(first);
   });
 });
@@ -129,13 +134,10 @@ describe("resolveCardView", () => {
         actions: [{ id: "open", label: "Open", writeActionId: null }],
       }),
     );
-    registry.registerManifest("filesystem", {
-      name: "filesystem",
-      version: "0.0.0",
-      contractVersion: 0,
-      permissions: [],
-      cardRenderers: [cardRenderer(["document"], renderCard)],
-    });
+    registry.registerManifest(
+      "filesystem",
+      manifest({ cardRenderers: [cardRenderer(["document"], renderCard)] }),
+    );
 
     const compact = await resolveCardView(
       registry,
@@ -147,7 +149,11 @@ describe("resolveCardView", () => {
       lines: ["a line"],
       actions: [{ id: "open", label: "Open", writeActionId: null }],
     });
-    expect(renderCard).toHaveBeenCalledWith(expect.anything(), "compact");
+    expect(renderCard).toHaveBeenCalledWith(
+      expect.anything(),
+      "compact",
+      expect.objectContaining({ actor: null }),
+    );
 
     const expanded = await resolveCardView(
       registry,
@@ -159,17 +165,19 @@ describe("resolveCardView", () => {
 
   it("degrades to null (never throws) when the registered renderer throws — the concept never renders broken", async () => {
     const registry = createContributionRegistry();
-    registry.registerManifest("broken", {
-      name: "broken",
-      version: "0.0.0",
-      contractVersion: 0,
-      permissions: [],
-      cardRenderers: [
-        cardRenderer(["document"], async () => {
-          throw new Error("exploded");
-        }),
-      ],
-    });
+    registry.registerManifest(
+      "broken",
+      manifest(
+        {
+          cardRenderers: [
+            cardRenderer(["document"], async () => {
+              throw new Error("exploded");
+            }),
+          ],
+        },
+        { id: "broken", name: "broken" },
+      ),
+    );
 
     await expect(
       resolveCardView(registry, producedObject(), "compact"),
@@ -178,15 +186,17 @@ describe("resolveCardView", () => {
 
   it("degrades to null when the registered renderer rejects", async () => {
     const registry = createContributionRegistry();
-    registry.registerManifest("broken", {
-      name: "broken",
-      version: "0.0.0",
-      contractVersion: 0,
-      permissions: [],
-      cardRenderers: [
-        cardRenderer(["document"], () => Promise.reject(new Error("nope"))),
-      ],
-    });
+    registry.registerManifest(
+      "broken",
+      manifest(
+        {
+          cardRenderers: [
+            cardRenderer(["document"], () => Promise.reject(new Error("nope"))),
+          ],
+        },
+        { id: "broken", name: "broken" },
+      ),
+    );
 
     await expect(
       resolveCardView(registry, producedObject(), "compact"),
@@ -208,30 +218,27 @@ describe("resolveContentDelta", () => {
   it("resolves the registered content renderer's delta", async () => {
     const registry = createContributionRegistry();
     const renderDelta = vi.fn(
-      async (
-        previous: draft.DraftProducedObject,
-        next: draft.DraftProducedObject,
-      ) => ({
+      async (previous: ProducedObject, next: ProducedObject) => ({
         content: `${previous.title} -> ${next.title}`,
         truncated: null,
       }),
     );
-    registry.registerManifest("filesystem", {
-      name: "filesystem",
-      version: "0.0.0",
-      contractVersion: 0,
-      permissions: [],
-      contentRenderers: [
-        {
-          kinds: ["document"],
-          renderAgentContent: async (object) => ({
-            content: object.title,
-            truncated: null,
-          }),
-          renderDelta,
-        },
-      ],
-    });
+    registry.registerManifest(
+      "filesystem",
+      manifest({
+        contentRenderers: [
+          {
+            id: "content",
+            kinds: ["document"],
+            renderAgentContent: async (object) => ({
+              content: object.title,
+              truncated: null,
+            }),
+            renderDelta,
+          },
+        ],
+      }),
+    );
 
     const result = await resolveContentDelta(
       registry,
@@ -239,28 +246,36 @@ describe("resolveContentDelta", () => {
       producedObject({ title: "new" }),
     );
     expect(result).toEqual({ content: "old -> new", truncated: null });
+    expect(renderDelta).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ actor: null }),
+    );
   });
 
   it("degrades to null when the registered content renderer throws", async () => {
     const registry = createContributionRegistry();
-    registry.registerManifest("broken", {
-      name: "broken",
-      version: "0.0.0",
-      contractVersion: 0,
-      permissions: [],
-      contentRenderers: [
+    registry.registerManifest(
+      "broken",
+      manifest(
         {
-          kinds: ["document"],
-          renderAgentContent: async (object) => ({
-            content: object.title,
-            truncated: null,
-          }),
-          renderDelta: async () => {
-            throw new Error("exploded");
-          },
+          contentRenderers: [
+            {
+              id: "content",
+              kinds: ["document"],
+              renderAgentContent: async (object) => ({
+                content: object.title,
+                truncated: null,
+              }),
+              renderDelta: async () => {
+                throw new Error("exploded");
+              },
+            },
+          ],
         },
-      ],
-    });
+        { id: "broken", name: "broken" },
+      ),
+    );
 
     await expect(
       resolveContentDelta(
@@ -275,20 +290,19 @@ describe("resolveContentDelta", () => {
 describe("commandPaletteItemsFromRegistry / invokePluginPaletteEntry", () => {
   it("maps every registered palette entry onto a verb-kind command palette item, prefixed to avoid collisions", () => {
     const registry = createContributionRegistry();
-    registry.registerManifest("filesystem", {
-      name: "filesystem",
-      version: "0.0.0",
-      contractVersion: 0,
-      permissions: [],
-      paletteEntries: [
-        {
-          id: "browse",
-          label: "Browse files",
-          description: "browse the filesystem",
-          invoke: async () => {},
-        },
-      ],
-    });
+    registry.registerManifest(
+      "filesystem",
+      manifest({
+        paletteEntries: [
+          {
+            id: "browse",
+            label: "Browse files",
+            description: "browse the filesystem",
+            invoke: async () => {},
+          },
+        ],
+      }),
+    );
 
     expect(commandPaletteItemsFromRegistry(registry)).toEqual([
       { id: "plugin:browse", label: "Browse files", kind: "verb" },
@@ -298,19 +312,21 @@ describe("commandPaletteItemsFromRegistry / invokePluginPaletteEntry", () => {
   it("invokes a matching plugin entry and reports it handled", async () => {
     const registry = createContributionRegistry();
     const invoke = vi.fn(async () => {});
-    registry.registerManifest("filesystem", {
-      name: "filesystem",
-      version: "0.0.0",
-      contractVersion: 0,
-      permissions: [],
-      paletteEntries: [
-        { id: "browse", label: "Browse files", description: "", invoke },
-      ],
-    });
+    registry.registerManifest(
+      "filesystem",
+      manifest({
+        paletteEntries: [
+          { id: "browse", label: "Browse files", description: "", invoke },
+        ],
+      }),
+    );
 
     const handled = await invokePluginPaletteEntry(registry, "plugin:browse");
     expect(handled).toBe(true);
     expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: null }),
+    );
   });
 
   it("reports unhandled for an id that isn't a plugin entry, without calling anything", async () => {

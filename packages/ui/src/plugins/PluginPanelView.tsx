@@ -1,6 +1,6 @@
 /**
- * Renders one plugin-contributed `DraftPanel` inside the dock rail (§10.1,
- * §11). `DraftPanel.render()` is async and may throw — a throwing panel
+ * Renders one plugin-contributed `Panel` inside the dock rail (§10.1,
+ * §11). `Panel.render()` is async and may throw — a throwing panel
  * degrades to a reported message here, never to a crashed dock rail
  * (§10.2: a throwing contribution is an unavailable contribution).
  *
@@ -8,15 +8,17 @@
  */
 
 import { useEffect, useState } from "react";
-import type { draft } from "@plotroom/plugin-sdk";
+import type { CardView, Panel } from "@plotroom/plugin-sdk";
+
+import { createRendererCallContext } from "./call-context.js";
 
 export interface PluginPanelViewProps {
-  readonly panel: draft.DraftPanel;
+  readonly panel: Panel;
 }
 
 export type PluginPanelViewState =
   | { readonly kind: "loading" }
-  | { readonly kind: "ready"; readonly view: draft.DraftCardView }
+  | { readonly kind: "ready"; readonly view: CardView }
   | { readonly kind: "failed"; readonly reason: string };
 
 /**
@@ -27,10 +29,10 @@ export type PluginPanelViewState =
  * the effect below already did.
  */
 export async function resolvePluginPanelViewState(
-  panel: draft.DraftPanel,
+  panel: Panel,
 ): Promise<PluginPanelViewState> {
   try {
-    const view = await panel.render();
+    const view = await panel.render(createRendererCallContext());
     return { kind: "ready", view };
   } catch (error) {
     return {

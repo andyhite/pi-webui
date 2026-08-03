@@ -1,5 +1,5 @@
 /**
- * Adapts a plugin-contributed `DraftPanel` onto the host's own
+ * Adapts a plugin-contributed `Panel` onto the host's own
  * `PanelDefinition` (§10.1, §11): "panels registered, including by
  * plugins" through the *exact same* `register` call the in-box panels use
  * (`panels/registry.ts`'s own doc comment) — this is that adaptation, kept
@@ -7,7 +7,7 @@
  * registry.ts` otherwise stays plain logic.
  */
 
-import type { draft } from "@plotroom/plugin-sdk";
+import type { Panel } from "@plotroom/plugin-sdk";
 
 import { definePanel, type PanelDefinition } from "../panels/registry.js";
 import { PluginPanelView } from "./PluginPanelView.js";
@@ -23,9 +23,7 @@ import type { ContributionRegistry } from "./contribution-registry.js";
  */
 const PLUGIN_PANEL_ID_PREFIX = "plugin:";
 
-export function panelDefinitionFromDraft(
-  panel: draft.DraftPanel,
-): PanelDefinition {
+export function panelDefinitionFromPanel(panel: Panel): PanelDefinition {
   return definePanel<null>({
     id: `${PLUGIN_PANEL_ID_PREFIX}${panel.id}`,
     title: panel.title,
@@ -38,5 +36,5 @@ export function panelDefinitionFromDraft(
 export function panelDefinitionsFromRegistry(
   registry: ContributionRegistry,
 ): readonly PanelDefinition[] {
-  return registry.panels().map(panelDefinitionFromDraft);
+  return registry.panels().map(panelDefinitionFromPanel);
 }

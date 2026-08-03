@@ -1,13 +1,12 @@
 /**
  * The renderer contribution registry (§10.1, Epic 7.1's renderer half).
  *
- * Consumes manifest-shaped declarations from `@plotroom/plugin-sdk`'s
- * `draft.*` contract — unstable, wired to nothing on the host side yet, but
- * the shape the freeze reconciles against (`docs/plugin-contract-draft.md`).
- * This registry is the client-side seam every in-box plugin (Filesystem,
- * GitHub, Jira, Coding/git) registers a manifest through, the exact same
- * path a third-party plugin's manifest would use once dynamic loading
- * exists — see `in-box-modules.ts` for that seam's static v1 shape.
+ * Consumes manifest-shaped declarations from `@plotroom/plugin-sdk`'s frozen
+ * v1 contract (`docs/plugin-contract.md`). This registry is the client-side
+ * seam every in-box plugin (Filesystem, GitHub, Jira, Coding/git) registers
+ * a manifest through, the exact same path a third-party plugin's manifest
+ * would use once dynamic loading exists — see `in-box-modules.ts` for that
+ * seam's static v1 shape.
  *
  * Two things this file is deliberately not:
  *
@@ -24,36 +23,43 @@
  *   unavailable contribution, never a broken host).
  */
 
-import type { draft } from "@plotroom/plugin-sdk";
+import type {
+  CardRenderer,
+  CardView,
+  ConceptKind,
+  ContentRenderer,
+  Panel,
+  PaletteEntry,
+  PluginManifest,
+  ProducedObject,
+  RenderedContent,
+} from "@plotroom/plugin-sdk";
 
 import type { CanvasCardAction, CanvasCardView } from "../canvas/PlotCanvas.js";
 import type { CommandPaletteItem } from "../command-palette/model.js";
+import { createRendererCallContext } from "./call-context.js";
 
 export interface RegisteredManifest {
   readonly pluginId: string;
-  readonly manifest: draft.DraftPluginManifest;
+  readonly manifest: PluginManifest;
 }
 
 export interface ContributionRegistry {
-  registerManifest(pluginId: string, manifest: draft.DraftPluginManifest): void;
+  registerManifest(pluginId: string, manifest: PluginManifest): void;
   unregisterManifest(pluginId: string): void;
   listManifests(): readonly RegisteredManifest[];
   /** First-registered-wins: the in-box four each own a disjoint kind set today. */
-  cardRendererFor(
-    kind: draft.DraftConceptKind,
-  ): draft.DraftCardRenderer | undefined;
-  contentRendererFor(
-    kind: draft.DraftConceptKind,
-  ): draft.DraftContentRenderer | undefined;
-  paletteEntries(): readonly draft.DraftPaletteEntry[];
-  panels(): readonly draft.DraftPanel[];
+  cardRendererFor(kind: ConceptKind): CardRenderer | undefined;
+  contentRendererFor(kind: ConceptKind): ContentRenderer | undefined;
+  paletteEntries(): readonly PaletteEntry[];
+  panels(): readonly Panel[];
 }
 
 export function createContributionRegistry(): ContributionRegistry {
-  const manifests = new Map<string, draft.DraftPluginManifest>();
+  const manifests = new Map<string, PluginManifest>();
 
   function firstMatch<T>(
-    pick: (manifest: draft.DraftPluginManifest) => readonly T[] | undefined,
+    pick: (manifest: PluginManifest) => readonly T[] | undefined,
     matches: (item: T) => boolean,
   ): T | undefined {
     for (const manifest of manifests.values()) {
@@ -78,31 +84,31 @@ export function createContributionRegistry(): ContributionRegistry {
     },
     cardRendererFor(kind) {
       return firstMatch(
-        (manifest) => manifest.cardRenderers,
+        (manifest) => manifest.contributions.cardRenderers,
         (renderer) => renderer.kinds.includes(kind),
       );
     },
     contentRendererFor(kind) {
       return firstMatch(
-        (manifest) => manifest.contentRenderers,
+        (manifest) => manifest.contributions.contentRenderers,
         (renderer) => renderer.kinds.includes(kind),
       );
     },
     paletteEntries() {
       return [...manifests.values()].flatMap(
-        (manifest) => manifest.paletteEntries ?? [],
+        (manifest) => manifest.contributions.paletteEntries ?? [],
       );
     },
     panels() {
       return [...manifests.values()].flatMap(
-        (manifest) => manifest.panels ?? [],
+        (manifest) => manifest.contributions.panels ?? [],
       );
     },
   };
 }
 
-/** `DraftCardView` -> the canvas's own (decoupled) card view shape. */
-function toCanvasCardView(view: draft.DraftCardView): CanvasCardView {
+/** `CardView` -> the canvas's own (decoupled) card view shape. */
+function toCanvasCardView(view: CardView): CanvasCardView {
   const actions: CanvasCardAction[] = view.actions.map((action) => ({
     id: action.id,
     label: action.label,
@@ -120,13 +126,15 @@ function toCanvasCardView(view: draft.DraftCardView): CanvasCardView {
  */
 export async function resolveCardView(
   registry: ContributionRegistry,
-  object: draft.DraftProducedObject,
+  object: ProducedObject,
   detail: "compact" | "expanded",
 ): Promise<CanvasCardView | null> {
   const renderer = registry.cardRendererFor(object.kind);
   if (!renderer) return null;
   try {
-    return toCanvasCardView(await renderer.renderCard(object, detail));
+    return toCanvasCardView(
+      await renderer.renderCard(object, detail, createRendererCallContext()),
+    );
   } catch {
     return null;
   }
@@ -140,13 +148,17 @@ export async function resolveCardView(
  */
 export async function resolveContentDelta(
   registry: ContributionRegistry,
-  previous: draft.DraftProducedObject,
-  next: draft.DraftProducedObject,
-): Promise<draft.DraftRenderedContent | null> {
+  previous: ProducedObject,
+  next: ProducedObject,
+): Promise<RenderedContent | null> {
   const renderer = registry.contentRendererFor(next.kind);
   if (!renderer) return null;
   try {
-    return await renderer.renderDelta(previous, next);
+    return await renderer.renderDelta(
+      previous,
+      next,
+      createRendererCallContext(),
+    );
   } catch {
     return null;
   }
@@ -154,8 +166,8 @@ export async function resolveContentDelta(
 
 /**
  * Plugin palette/command-palette entries (§10.1, §11), surfaced through the
- * command palette: `DraftPaletteEntry.invoke()` is a verb with no drag
- * payload, so it maps onto `CommandPaletteItem`'s `"verb"` kind rather than
+ * command palette: `PaletteEntry.invoke()` is a verb with no drag payload,
+ * so it maps onto `CommandPaletteItem`'s `"verb"` kind rather than
  * `PaletteRail`'s drag sources, which are typed to core `ObjectKind`s a
  * plugin never adds to (§3.1). Prefixed so a plugin's own id never collides
  * with an in-box verb's.
@@ -183,6 +195,6 @@ export async function invokePluginPaletteEntry(
     .paletteEntries()
     .find((candidate) => candidate.id === entryId);
   if (!entry) return false;
-  await entry.invoke();
+  await entry.invoke(createRendererCallContext());
   return true;
 }

@@ -139,20 +139,24 @@ describe("createApiGraphDataSource.load", () => {
 
     const registry = createContributionRegistry();
     registry.registerManifest("filesystem", {
+      id: "filesystem",
       name: "filesystem",
       version: "0.0.0",
-      contractVersion: 0,
+      contractVersion: 1,
       permissions: [],
-      cardRenderers: [
-        {
-          kinds: ["document"],
-          renderCard: async (produced) => ({
-            title: `file: ${produced.title}`,
-            lines: [`kind: ${produced.kind}`],
-            actions: [],
-          }),
-        },
-      ],
+      contributions: {
+        cardRenderers: [
+          {
+            id: "card",
+            kinds: ["document"],
+            renderCard: async (produced) => ({
+              title: `file: ${produced.title}`,
+              lines: [`kind: ${produced.kind}`],
+              actions: [],
+            }),
+          },
+        ],
+      },
     });
 
     const source = createApiGraphDataSource({ http, createSocket, registry });

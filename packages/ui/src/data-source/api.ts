@@ -17,7 +17,7 @@
  */
 
 import type { DomainEvent } from "@plotroom/core";
-import type { draft } from "@plotroom/plugin-sdk";
+import type { ProducedObject } from "@plotroom/plugin-sdk";
 
 import type { CanvasCardView } from "../canvas/PlotCanvas.js";
 import {
@@ -106,39 +106,25 @@ async function fetchObjectContent(
 }
 
 /**
- * Core's `ObjectKind` -> the draft contract's `DraftConceptKind` (§3.1,
- * §10.1). Every kind matches by name except one: core spells the pull
- * request kind `"pull_request"` (`packages/core/src/objects.ts`) and the
- * draft spells it `"pull-request"` (`packages/plugin-sdk/src/draft/
- * contributions.ts`'s `DRAFT_CONCEPT_KINDS`), even though the draft's own
- * doc comment says it "mirrors @plotroom/core's object kinds". Recorded
- * here as the one translation this boundary needs, rather than assuming
- * either side to fix silently — Track C should reconcile the naming when
- * Epic 7.1 freezes the contract.
- */
-function toDraftConceptKind(
-  kind: draft.DraftConceptKind | "pull_request",
-): draft.DraftConceptKind {
-  return kind === "pull_request" ? "pull-request" : kind;
-}
-
-/**
  * A live object, as the plugin contract sees it (§10.1) — the client's own
- * `PlotObject` mapped onto `DraftProducedObject`. An object without an
- * external identity (a native note, say) stands in for its own: nothing
+ * `PlotObject` mapped onto `ProducedObject`. Core's `ObjectKind` mirrors the
+ * frozen contract's `ConceptKind` exactly (same members, same spellings,
+ * including `pull_request`), so `object.kind` needs no translation at this
+ * boundary (`docs/plugin-contract.md` §7, deviation 13). An object without
+ * an external identity (a native note, say) stands in for its own: nothing
  * downstream of a card renderer needs the two distinguished once the object
  * is already inside the client, and the alternative (refusing to resolve a
  * card for it) would make every locally-created object permanently
  * ineligible for a plugin's card renderer.
  */
-function toDraftProducedObject(
+function toProducedObject(
   object: BoardState["objects"] extends ReadonlyMap<string, infer O>
     ? O
     : never,
   agentContent: string,
-): draft.DraftProducedObject {
+): ProducedObject {
   return {
-    kind: toDraftConceptKind(object.kind),
+    kind: object.kind,
     externalId: object.external?.id ?? object.id,
     title: object.title,
     renderings: {
@@ -172,7 +158,7 @@ async function resolvePluginCardViews(
       async (node): Promise<readonly [string, CanvasCardView] | null> => {
         const object = state.objects.get(node.refId);
         if (!object) return null;
-        const produced = toDraftProducedObject(
+        const produced = toProducedObject(
           object,
           objectContent.get(object.id) ?? "",
         );
