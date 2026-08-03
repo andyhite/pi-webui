@@ -1961,6 +1961,114 @@ const claimTools: readonly AgentTool[] = [
   }),
 ];
 
+/* ------------------------------------- standing instructions (Epic 7.4) */
+
+/**
+ * Standing instructions (§3.8, principle 1).
+ *
+ * Two shapes, and the split is principle 1's own worked example:
+ *
+ * - **Marking content standing is `self-proposal`.** "Content marked as applying
+ *   everywhere" applies to the caller's own chain by construction, so a session
+ *   calling one of these is refused by `checkToolCall` and told to `proposal_create`;
+ *   a human accepts, and `acceptedStandingInstruction` applies it as the human's own
+ *   act. Retiring one is the same act from the other side and gets the same class.
+ * - **Opting a workstream in is ordinary authoring**, so it is lineage-checked rather
+ *   than proposal-shaped: it decides what that workstream's sessions know, which a
+ *   session may do for work outside its own chain and may not do for its own. That is
+ *   `target-session` over the workstream, and the resolution below is the mounting
+ *   contract for it.
+ *
+ * The reads are unrestricted: §8's "a session can see what remains" has the same shape
+ * here — a session that cannot see the instructions it is running under will rediscover
+ * them at a paid turn each, which is the cost §3.8 exists to remove.
+ */
+const STANDING_INSTRUCTION_TARGETS =
+  "the sessions the named workstream feeds: every session it is running and every session its commands would run next, because opting the workstream in changes what all of them know.";
+
+const standingInstructionTools: readonly AgentTool[] = [
+  {
+    ...read(
+      "standing_instruction_list",
+      "List the standing instructions — content marked as applying everywhere, and which workstreams opted in (§3.8).",
+      "the standing instructions panel",
+      "/api/standing-instructions",
+    ),
+    availability: "pending",
+  },
+  mutate({
+    name: "standing_instruction_declare",
+    summary:
+      "Mark world-scoped content as applying everywhere — a standing instruction (§3.8).",
+    gesture: "mark a note as a standing instruction",
+    method: "POST",
+    endpoint: "/api/standing-instructions",
+    availability: "pending",
+    input: {
+      objectId: {
+        type: "string",
+        required: true,
+        description:
+          "the world-scoped note or document whose content applies everywhere",
+      },
+    },
+    // It applies everywhere, so it applies to the caller: propose, and a human
+    // accepts (principle 1, §3.8).
+    requires: { reflexivity: "self-proposal" },
+  }),
+  mutate({
+    name: "standing_instruction_retire",
+    summary:
+      "Stop a standing instruction from applying. The content survives; only the marker retires (§3.8).",
+    gesture: "unmark a standing instruction",
+    method: "DELETE",
+    endpoint: "/api/standing-instructions/:id",
+    availability: "pending",
+    input: { id: id("the standing instruction's id") },
+    // Retiring one changes what every opted-in workstream knows, the caller's own
+    // chain included — the same act as declaring, from the other side.
+    requires: { reflexivity: "self-proposal" },
+  }),
+  mutate({
+    name: "workstream_standing_instructions_opt_in",
+    summary:
+      "Opt a workstream into a standing instruction, so its runs assemble it (§3.8).",
+    gesture: "tick a standing instruction on a workstream",
+    method: "POST",
+    endpoint: "/api/workstreams/:id/standing-instructions",
+    availability: "pending",
+    input: {
+      id: id("the workstream's id"),
+      instructionId: {
+        type: "string",
+        required: true,
+        description: "the standing instruction to opt into",
+      },
+    },
+    requires: {
+      reflexivity: "target-session",
+      targetResolution: STANDING_INSTRUCTION_TARGETS,
+    },
+  }),
+  mutate({
+    name: "workstream_standing_instructions_opt_out",
+    summary:
+      "Opt a workstream out of a standing instruction. Recorded, not erased (§3.8).",
+    gesture: "untick a standing instruction on a workstream",
+    method: "DELETE",
+    endpoint: "/api/workstreams/:id/standing-instructions/:instructionId",
+    availability: "pending",
+    input: {
+      id: id("the workstream's id"),
+      instructionId: id("the standing instruction to opt out of"),
+    },
+    requires: {
+      reflexivity: "target-session",
+      targetResolution: STANDING_INSTRUCTION_TARGETS,
+    },
+  }),
+];
+
 /* ------------------------------------------------------- warnings, agency */
 
 const agencyTools: readonly AgentTool[] = [
@@ -2027,6 +2135,7 @@ export const AGENT_TOOL_CATALOG: readonly AgentTool[] = [
   ...integrationTools,
   ...boardTools,
   ...claimTools,
+  ...standingInstructionTools,
   ...agencyTools,
 ];
 

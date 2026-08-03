@@ -407,6 +407,36 @@ describe("the catalog", () => {
     }
   });
 
+  it("splits §3.8's standing instructions the way principle 1 does", () => {
+    // Marking content standing applies it to the caller's own chain, so it is a
+    // proposal; opting *a workstream* in is ordinary authoring into that workstream,
+    // so it is lineage-checked with a resolution stated as data.
+    for (const name of [
+      "standing_instruction_declare",
+      "standing_instruction_retire",
+    ]) {
+      expect(toolByName(name)?.requires.reflexivity, name).toBe(
+        "self-proposal",
+      );
+      expect(toolByName(name)?.requires.humanOnly, name).toBe(false);
+    }
+    for (const name of [
+      "workstream_standing_instructions_opt_in",
+      "workstream_standing_instructions_opt_out",
+    ]) {
+      expect(toolByName(name)?.requires.reflexivity, name).toBe(
+        "target-session",
+      );
+      expect(toolByName(name)?.requires.targetResolution, name).toContain(
+        "workstream feeds",
+      );
+    }
+    // A session can see what it is running under; rediscovering it costs a turn.
+    expect(toolByName("standing_instruction_list")?.requires.humanOnly).toBe(
+      false,
+    );
+  });
+
   it("declares a claim requirement on the tools that name a workspace path", () => {
     const claiming = AGENT_TOOL_CATALOG.filter(
       (tool) => tool.requires.claimOnInput !== undefined,

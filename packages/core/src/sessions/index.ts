@@ -30,6 +30,7 @@ export * from "./phases.js";
 export * from "./questions.js";
 export * from "./runtime.js";
 export * from "./session.js";
+export * from "./standing-instructions.js";
 export * from "./stop.js";
 export * from "./transcript.js";
 export * from "./triage.js";
