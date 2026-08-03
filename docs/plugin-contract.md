@@ -290,7 +290,9 @@ present-or-absent `unavailable` list, `WriteResult`'s read-back, `RenderedConten
 
 ## 8. Wiring contract for the server (Track A)
 
-Nothing here is wired to `apps/server` yet; this is what the substrate mounts.
+**Wired.** Batch 5's Track A mounted all of this in `apps/server/src/plugins/`; what
+follows is the contract it implements, and the three places reality is worth stating
+beside it are marked inline.
 
 **Mounting.** One `PluginRegistry` per server:
 
@@ -308,7 +310,10 @@ for the configured plugins directory, both at boot and on an operator gesture.
 
 **Endpoints** (all operator-only; there is no agent tool for any of them):
 
-- `GET /api/plugins` — `registry.list()`, which is the §10.2 health surface.
+- `GET /api/plugins` — `registry.list()`, which is the §10.2 health surface. _As
+  wired:_ it answers `{ plugins, failures }`, because a plugin whose manifest could
+  not be read has no id, name or version to state and must still be reported
+  (principle 12).
 - `POST /api/plugins/install` `{ entry }` → `InstallResult`; a failure is a 200 with
   the reason, not a 500.
 - `POST /api/plugins/:id/enable`, `POST /api/plugins/:id/disable`,
@@ -323,6 +328,17 @@ for the configured plugins directory, both at boot and on an operator gesture.
 §6.6 approval from it (the fields are `ApprovalAsk`'s) against the calling session,
 and re-invoke when it settles as approved. When `raise` is null the call is simply
 refused with `error.reason`.
+
+_As wired:_ the raise happens in `plugins/invoker.ts`, and the compile-time assertion
+that `PermissionRaise` stays assignable to `ApprovalAsk` lives in `plugins/raise.ts` —
+the server is the only package that can see both types. "Re-invoke when it settles" is
+realised as §4's own sentence, **"grants take effect on the next call; nothing is
+re-run"**: approving records the grant and pushes it into the host, and the blocked
+call is re-issued by whoever was blocked. Nothing holds a promise across an operator's
+absence, because a restart interrupts a blocked call (principle 11) and a queued
+continuation would report otherwise. A call with **no** calling session — a scheduled
+or operator-initiated read — has nobody to raise against, so it is refused naming the
+operator's own grant route.
 
 **Agent tools.** Descriptor contributions with `point: "agent-tool"` become catalog
 entries under a plugin-namespaced name; invoke with

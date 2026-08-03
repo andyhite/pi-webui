@@ -2160,7 +2160,7 @@ discover on a refetch. It stays operator-only. Deferred: nothing renders any of 
 - [x] Declared permissions granted by the user; no silent reach; credentials never exposed to sessions or other plugins (§10.2, §9.3) — _enforced at the host boundary: per-call injection for granted names only, redaction of injected values out of every result, refusal (with a §6.6 raise) otherwise. **Grant persistence and routing the raise into the queue is server wiring, Track A.** Network/filesystem scopes are declared trust, not a sandbox, and the contract doc says so_
 - [x] Contract versioning with refusal/warning; install/enable/disable/remove without restart (§10.2) — _`checkContractVersion` at load and `PluginRegistry`'s four verbs with a health/event shape. **The health surface itself — `GET /api/plugins` and the panel — is Tracks A and B**_
 - [x] Enforced: plugins cannot author intent — tools act as the calling session (§10.2, principle 1) — _the actor is host-supplied per call, `CoreId`-typed so a plugin cannot construct one, null for every non-tool invocation, and a tool call without one is refused; the worker's whole reach is two enumerated injected capabilities, neither of which authors an edge_
-- [ ] Distribution: in-box, from directory, from configured source (§10.2) — _in-box and directory landed; **"from a configured source" is deliberately deferred** (fetch, verification, and an update path that cannot silently widen permissions — three decisions a freeze should not invent). The permission-grant UX decision is recorded in AGENTS.md_
+- [ ] Distribution: in-box, from directory, from configured source (§10.2) — _in-box and directory landed in the host, and **Batch 5's Track A wired both into the server**: `IN_BOX_PLUGINS` (`apps/server/src/plugins/in-box.ts`) is installed and enabled at boot, `PLOTROOM_PLUGINS_DIR` is scanned at boot and on `POST /api/plugins/scan` (never on a timer, principle 2), and an unresolvable entry is an install failure with a reason on `GET /api/plugins`. The box stays unticked because **"from a configured source" is deliberately deferred** (fetch, verification, and an update path that cannot silently widen permissions — three decisions a freeze should not invent). The permission-grant UX decision is recorded in AGENTS.md_
 
 _**Landed (Batch 5, Track C, Stage 1): the freeze.** The draft is gone —
 `packages/plugin-sdk/src/contract/` is the v1 contract, exported from the package
@@ -2277,16 +2277,23 @@ into Track C's subtree (reconciled at rebase; see `docs/plugin-contract.md`
   landed yet (Epic 7.3, Track C, later this batch). The seam
   (`ObjectStore.write`'s `delta` parameter) already exists from Epic 1.1 and
   takes a delta the moment a producer offers one.
-- **A real, worker-isolated plugin host now exists** (Track C's Epic 7.1 froze
-  it this batch), but this substrate is not wired to it yet —
-  `IntegrationRegistry` is still the same-process direct-invocation seam and
-  says so on every export. Wiring `register` to a worker-backed producer
-  through the frozen host is the next step, and nothing above the registry
-  changes when it happens.
-- **The permission-grant UX** (declared but not decided — see AGENTS.md's
-  "Decided" log for Epic 7.1's plugin distribution/permission-grant record) is
-  not implemented: connecting the fake producer stores a credential with no
-  grant dialog, because there is no grant model yet to route through.
+- ~~**A real, worker-isolated plugin host now exists** but this substrate is not
+  wired to it yet.~~ **Closed later in Batch 5** (Track A): every producer in
+  `IntegrationRegistry` now comes from an enabled plugin's worker
+  (`apps/server/src/plugins/producers.ts` — `read` and `perform` are
+  `PluginHost.invoke`), registered when the plugin is enabled and unregistered
+  when it is disabled. Nothing above the registry changed, exactly as this note
+  predicted; the in-process fake producer survives for `IntegrationService`'s own
+  unit tests, which want state a worker boundary makes unreachable, while the
+  HTTP-level suite runs against a real fixture plugin in the real host.
+- ~~**The permission-grant UX** is not implemented.~~ **The runtime half closed
+  in Batch 5** (Track A): grants are rows (migration 25, one per plugin and
+  permission, absent meaning never-asked), answered only by the operator
+  (`POST /api/plugins/:id/grants`), and a plugin's reach for an unanswered
+  permission raises through §6.6 against the calling session with the call left
+  **blocked** — the recorded decision, implemented rather than described. Bespoke
+  grant UX (an install-time dialog, a trusted-publisher tier, what an update that
+  widens a request does) is still the design package's.
 - **The four in-box plugins** (git, GitHub, filesystem, Jira) build on this
   substrate next (Epic 7.3): each is a real `IntegrationProducer` (and, for
   GitHub/Jira, `writeActions`) registered the same way the fake one is._
@@ -2347,6 +2354,38 @@ action id of `clone-from-pull-request` by provisioning a git workspace from the 
 request's clone URL over the host's own git authentication. **What Track B renders**:
 both plugins' `card.render` and `content.render` / `content.delta` answers (their
 `truncated` is a fact to display), and the palette entry as a declaration._
+
+_**Landed (Batch 5, Track A): the server wiring, and what it did not reach.** All
+three in-box plugins are `IN_BOX_PLUGINS` entries installed and enabled at boot
+(`apps/server/src/plugins/`), each in its own worker, each proven `ready` from the
+real list rather than from a fixture. Their `concept-producer` contributions are what
+the integration substrate now holds — `read` and `perform` are `PluginHost.invoke`,
+and each producer's `scoping` declaration reaches `GET /api/integration-plugins`
+**verbatim** (§9.1). Their `condition-check` contributions are mounted in the server's
+own condition registry under their contribution ids, with the **workspace path
+supplied in the declared input** the git port asked for (`plugins/conditions.ts`) —
+`unknown` maps to "not proven", never to unmet, and a check whose plugin was disabled
+answers "nobody checked, which is not proof" rather than passing quietly._
+
+_**Two of Track C's four asks are deferred, with reasons rather than shallow
+wiring:**_
+
+- _**The git workspace kind is not mounted in the `WorkspaceKindRegistry`.** Three
+  facts make it a decision rather than an adapter: core already registers a native
+  `git` kind that the run path uses, so a plugin-supplied kind of the same id is a
+  collision somebody has to arbitrate; the plugin kind's `WorkspaceStatus.readiness`
+  answers only mechanism-level facts, while core derives readiness from records, so
+  the adapter has to decide which side wins; and `probeAncestry` is absent from the
+  contract, so a plugin-supplied kind cannot tell a rebase from new commits
+  (`docs/plugin-contract.md` §6's own deferral). Wiring it silently would have made
+  divergence quietly less accurate for every workstream._
+- _**`clone-from-pull-request` is not honoured yet.** The card action exists in the
+  GitHub plugin and has no write action behind it deliberately (§3.4: the clone is
+  the host's git over the host's own authentication), so honouring it needs a host
+  operation a rendered surface can dispatch — which needs the card-action dispatch
+  seam Track B renders and the workspace-kind mount above. Neither exists, and
+  inventing a bespoke endpoint for one plugin's one action would be the second
+  provisioning path §3.4 does not want._
 
 _**Filesystem landed (Track B, Stage 2, Batch 5).** `@plotroom/plugin-filesystem`
 (`packages/plugins/filesystem`) is a conforming `PluginManifest` on the frozen

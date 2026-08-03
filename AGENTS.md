@@ -249,6 +249,25 @@ memory returns the moment the server does. A notification route attaches to a
 so a restart cannot re-fire every open item, and a delivery failure is route health
 rather than an exception.
 
+**Plugin grants** live in `plugin_grants` (migration 25) and nothing else about a
+plugin is persisted: which plugins exist is the build's (in-box) or the operator's
+directory's, and health is a running worker's property, so a row for either would be a
+second source of truth about something observable. Two states and an absence: a
+`granted` or `denied` row, and **no row means never-asked** — the state that raises
+through §6.6 the moment a plugin reaches for the permission, so removing a grant is
+deleting the row rather than writing a third state (the same "grant or remove" shape
+budgets use). No expiry column, because a grant lapsing on a clock would change what a
+plugin may do with nobody behind it (principle 2), which is also why the contract's
+`PermissionState` has no `expired` member. Every write to this table is the operator's
+(`POST /api/plugins/:id/grants`, or answering the §6.6 approval a raise produced) and
+there is **no agent tool for any plugin verb at all** — principle 1, the same reason
+there is none that raises a budget. The server-side wiring is
+`apps/server/src/plugins/`: one `PluginRegistry`, one worker per enabled plugin, every
+producer read and write action performed through `PluginHost.invoke`, and
+`plugins/raise.ts` holding the compile-time assertion that `PermissionRaise` stays
+assignable to `ApprovalAsk` — the server is the only package that can see both types,
+so enum drift on either side breaks the build.
+
 **Scoped runs and the queue** live in `run_batches` / `run_queue` (migrations 13, 14
 and 15). One batch is one gesture over a scope; one entry is one command, admitted
 rather than scheduled. Every entry carries `contract_hash` — the configuration plus
