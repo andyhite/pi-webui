@@ -537,7 +537,14 @@ Record answers here as they are decided; do not assume.
 
 - Collection membership model (the `collection` kind has no members yet) — the
   only schema gap left in Phase 1's model: workstreams, nodes, edges, commands,
-  runs, sessions, and workspaces are landed (see "Persistence notes").
+  runs, sessions, and workspaces are landed (see "Persistence notes"). **Two
+  in-box plugins now have an interim representation, and whoever decides this
+  should read both**: the Jira plugin produces an epic as a `collection` whose
+  content lists each child by its **external id** and co-produces every child as
+  its own `ticket` in the same read (the join key is the external id and nothing
+  else, so the same ids become the membership rows when this lands); the
+  filesystem plugin sidesteps collections entirely and renders a directory as one
+  `document`. Neither invents a membership schema, deliberately.
 - Styling approach for the UI package
 - Versioning and release process
 

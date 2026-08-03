@@ -2303,7 +2303,7 @@ into Track C's subtree (reconciled at rebase; see `docs/plugin-contract.md`
 - [x] **Coding/git**: workspace kind, diffs, commits, branches — port Phase 4 git mechanics onto the plugin contract (§9.4) — _`packages/plugins/git`; the kind's six methods, `diff` and `commit` producers, renderers, three condition checks and four read-only tools. **Branches are not a concept**: `CONCEPT_KINDS` is closed (§3.1) and has no branch member, so they reach the product through the kind's status and `git_branches`, never as objects_
 - [x] **GitHub**: PRs, reviews, issues-as-tickets, repo metadata, writes; clone-from-PR-card (§9.4, §3.4) — _`packages/plugins/github`; four producers, four write actions with per-action reversibility, three write tools that call those actions, the two condition checks the native registry leaves to it, and clone-from-a-pull-request as a card action **with no write action behind it** — the clone is the host's git over the host's own authentication (§3.4)_
 - [x] **Filesystem**: files/directories as documents; browse and drag (§9.4)
-- [ ] **Jira**: tickets, epics+children as collections, statuses/transitions, writes (§9.4)
+- [x] **Jira**: tickets, epics+children as collections, statuses/transitions, writes (§9.4) — _`packages/plugins/jira`; three producers (issues as tickets, **epics-with-children as collections**, an issue's workflow as a document), five write actions with per-action reversibility, eight agent tools (five of them those actions), the two condition checks the native registry leaves to it, and **JQL** as the scoping language. An epic states its membership as **content plus co-produced members**, joined by external id, because `ProducedObject` has no members field and core's `collection` kind has no membership model yet_
 
 _**Landed (Batch 5, Track C, Stage 2): the git port and GitHub.** Two private ESM
 workspace packages under `packages/plugins/`, each importing **types only** from
@@ -2449,10 +2449,155 @@ Track A's Epic 7.2/§8 wiring; until it lands, the plugin health panel keeps
 showing its honest-empty `LIVE` state (`createEmptyPluginHealthDataSource`),
 not a fabricated Filesystem row._
 
-### Epic 7.4 — Standing instructions (`graph`)
+_**Jira landed (Batch 5, Track C, final wave).** `@plotroom/plugin-jira`
+(`packages/plugins/jira`) on the frozen contract v1, built the same way GitHub was:
+types only from `@plotroom/plugin-sdk`, nothing from `@plotroom/core`, an **injected
+transport** with a recorded, stateful Jira behind it, and a stub entry the real
+`worker_threads` host loads (`host.integration.test.ts` serves at least one invocation
+per dispatchable point it declares). 48 tests, and **no path in the package can reach
+the network**: the credential arrives only through the host's per-call injection,
+nothing reads `process.env`, and the recorded Jira answers 401 without the header, so a
+producer that answers at all proves the injection happened._
 
-- [ ] Standing-instruction content available to every workstream that opts in (§3.8)
-- [ ] Agent proposes / human accepts flow (§3.8, principle 1)
+_**The epic→children representation, and why this one.** §9.4 asks for "epics and
+children", §3.1 says a collection is "one node with one output… presented as one thing
+with a count", and core's `collection` kind still has **no membership model** (an open
+decision in `AGENTS.md`). Contract v1 has nowhere to state membership either:
+`ProducedObject` is kind + externalId + title + three renderings, with no members, no
+references, and no relationship channel. So the epic producer states membership the only
+way the contract can, and invents nothing in core: the epic comes back as a
+`collection` whose content **lists every child by its own external id**, one per line in
+a documented, parseable form (`parseCollectionMembers`), and **every child comes back as
+its own `ticket` in the same read**. The join between the two is the external id and
+nothing else, which is enough for §3.1's gesture — expand, prune, drag four tickets out
+— because everything draggable already exists as an object that reconciles on re-read.
+When the membership model lands, those same external ids are the join key, so nothing
+has to be re-read and no plugin-local membership schema has to be migrated away. A
+structured side-channel (the filesystem plugin's `renderings.card` JSON, say) was
+rejected for exactly that reason: it would have been a second membership model core would
+later have to honour._
+
+_**Five findings, all worked around inside v1 rather than by widening a frozen
+contract.** (1) **There is no per-connection configuration channel at all**:
+`PluginCallContext` is credentials plus a log function, and a Jira **site** is not a
+secret — injecting it as a credential would make the host's egress redaction strip the
+site out of every issue link it returns. So the site travels in the producer's scope
+(`site=acme.atlassian.net <JQL>`) and as a declared input on every write, tool and
+check, which is the git port's own workaround for its checkout path. (2)
+**`WriteReversibility` is declared per action, not per call**, so an action whose
+reversibility depends on its target cannot say so where §6.6 reads it: a Jira transition
+is declared `reversible` (the general case) and the **read-back names whether the
+workflow offers a way back from wherever the issue actually landed**, which is the only
+honest place that fact can appear. `create-issue` is `unknown` — an issue can be
+deleted, but its key is never reissued — and `unknown` is treated as irreversible
+(principle 7). (3) A **palette entry can only log**, as the git/GitHub ports already
+reported. (4) `ConceptProducer.scoping` carries a language and one example but **no way
+to declare a required prefix or directive**, so `site=` is documented in the example
+string and enforced by a refusal that names it. (5) `ReadResult.unavailable` is keyed by
+external id, which is the wrong shape for "this query has more matches than were read" —
+the plugin reports it under a synthetic `jira:query:<site>` id rather than dropping the
+fact, because a page silently standing in for a query is principle 12's exact failure._
+
+_**What Track A wires**: register the manifest as an in-box entry; route the three
+`concept-producer` contributions into the substrate with their `scoping` declarations
+shown verbatim (the language is `jql`); map declared world conditions onto
+`condition.check`, **supplying `site` in the input** the checks declare; and honour the
+card action ids — `expand-collection` (no write action: expanding writes nothing to Jira,
+the members are already objects) and `transition` (a write action, so §6.6 applies to the
+button). **What Track B renders**: `card.render` and `content.render` / `content.delta`,
+whose `truncated` is a fact to display._
+
+### Epic 7.4 — Standing instructions (`graph`) — _core landed; store, routes and queue surfacing are Track A's_
+
+- [ ] Standing-instruction content available to every workstream that opts in (§3.8) — _the rule landed as `@plotroom/core`'s `resolveStandingInstructions` (Track C); the tables, the routes and assembly are Track A's_
+- [ ] Agent proposes / human accepts flow (§3.8, principle 1) — _the refusal, the proposal and the acceptance landed (Track C); the `/api/proposals` routes and the queue row are Track A's_
+
+_**Landed (Batch 5, Track C, final wave): the model and every rule, in
+`packages/core/src/sessions/standing-instructions.ts`.** A standing instruction is a
+**marker on a world object, never a tenth `ObjectKind`** — §3.1's kinds are closed and
+§3.2 already lists a standing instruction among the objects that live at world scope —
+and the record holds no content of its own, so an edit to the object is a new version
+that drifts consumers like any other change (§3.2). `checkStandingInstruction` refuses a
+**local** object (pointing at promotion, which is one gesture) and refuses a kind whose
+content somebody else changes: a `ticket` or `transcript` marked "applies everywhere"
+would let an external re-sync silently rewrite the rules every workstream runs under, so
+only `note` and `document` can be standing. Markers **retire rather than delete**, like a
+claim row and a pre-grant._
+
+_**Availability is opt-in per workstream, and resolved at assembly** —
+`resolveStandingInstructions` is the one statement of it. Opt-in only, because "available
+to every workstream that *wants* it" is a gesture and nothing appears that nobody put
+there (principle 6); each opt-in **records its author**, because it decides what that
+workstream's sessions know (principle 1). Deliberately **not** a fan-out of context
+edges: one opt-in covers the workstream's commands as they are and as they will be, where
+a fan-out would go stale the moment a command was added and would have to be re-authored
+per command to stay true — and nothing is lost from the record either way, since run
+history stores the full assembled content it ran on (§15-1). The resolution's **order is
+part of the answer** (oldest first, then by id, standing instructions before the wired
+inputs): two runs of one command with the same opt-ins must assemble identically or the
+comparison §3.7 promises would report a change nobody made._
+
+_**A session never makes an instruction standing.** Its target includes the author — it
+applies everywhere, so it applies to the caller's own chain — which is principle 1's own
+worked example. So `standing_instruction_declare` and `standing_instruction_retire` are
+declared **`self-proposal`** in the catalog: `checkToolCall` refuses a session outright
+and names `proposal_create`, `markStandingInstruction` refuses a session author again at
+the model boundary (a store reached without the gate fails closed), and
+`acceptedStandingInstruction` is the only path from a proposal to a marker — recording
+**the accepting human** as the author, never the proposing session, because the graph
+records who decided what agents know (§15-2). It refuses a pending or rejected proposal,
+a proposal for another tool, a proposal redirected at another object, and an accepted
+proposal about content that may not be standing: acceptance does not widen the rule.
+Proposals reuse the existing `ToolProposal` + `decideProposal` (already human-only)
+rather than gaining a second acceptance verb — the second one is always the one that
+forgets to check who is accepting. **Opting a workstream in is not a proposal**: it is
+ordinary authoring into that workstream, so it is lineage-checked (`target-session`) with
+its required resolution stated as data beside the tool, which means a session may opt
+another workstream in and may not opt in one in its own chain._
+
+_**What Track A must build, exactly.** All five catalog tools are `availability:
+"pending"` and the catalog test will fail the moment a route appears without the flag
+flipping._
+
+1. **Schema** (one migration, no rebuild needed): `standing_instructions` — `id` TEXT PK,
+   `object_id` NOT NULL REFERENCES `objects` (id), `declared_by_kind` TEXT NOT NULL CHECK
+   (`= 'human'`) (the model already refuses every session author, and the column should
+   not be able to say otherwise), `declared_at` INTEGER NOT NULL, `retired_at` INTEGER,
+   plus a partial unique index on `object_id` WHERE `retired_at IS NULL` (principle 9's
+   `already_standing`, enforced by the store as well as the predicate). And
+   `standing_instruction_opt_ins` — (`workstream_id`, `instruction_id`) PK, `by_kind` /
+   `by_session_id` (an opt-in may be a session's), `at`, `opted_out_at`. Rows retired, not
+   deleted, both tables.
+2. **A proposals table**, which nothing has yet: `proposals` — `id`, `proposed_by`
+   (session), `tool`, `input_json`, `target_kind` / `target_id` (nullable — a
+   standing-instruction proposal names none, deliberately), `rationale`, `proposed_at`,
+   `state` CHECK (`'pending' | 'accepted' | 'rejected'`), `decided_at`,
+   `decided_by_kind` CHECK (`= 'human'`). It is `ToolProposal` at rest and decides
+   nothing: `decideProposal` is the only transition.
+3. **Routes**, matching the catalog's endpoints exactly: `GET`/`POST
+/api/standing-instructions`, `DELETE /api/standing-instructions/:id`, `POST
+/api/workstreams/:id/standing-instructions`, `DELETE
+/api/workstreams/:id/standing-instructions/:instructionId`, plus `POST /api/proposals`
+   and `POST /api/proposals/:id/accept` (already in the catalog as `pending`, and
+   `proposal_accept` is already declared operator-only). A reject verb is needed too and
+   has no tool: declining is the operator's, and `decideProposal` takes `"reject"`.
+4. **Assembly**: `RunStore.plan`/`start` prepends `resolveStandingInstructions(...)`'s
+   content before the wired inputs, and the run's recorded `assembled_blob_id` therefore
+   already contains them (§15-1). Nothing else needs to know.
+5. **Events**: `standing_instruction` and `standing_instruction_opt_in` on the one event
+   stream, beside `claim` / `claim_policy`.
+6. **The queue row is the one open decision, and it is Track A's to make** (Track C did
+   not make it half-way): `ATTENTION_FEEDS` is closed at six and
+   `AttentionAnswerPayload` has no proposal variant, while `approvals.kind` is a
+   CHECK-constrained column whose four values do not include a self-proposal. So a
+   pending proposal reaches §7.1 either (a) as an ordinary `tool-permission` approval
+   raised with the proposal id as its `ApprovalTarget` — no migration, and the same route
+   the plugin permission raise already takes — or (b) as a new `ApprovalKind`
+   (`'self-proposal'`) plus the migration that widens that CHECK **by rebuild**, which
+   buys an honest row kind. Whichever is chosen, the answer must not be pre-grantable: an
+   "allow always" covering a proposal would apply it silently, which is the one thing
+   principle 1 says a proposal must never be. `describeStandingInstructionProposal` is
+   the sentence the row shows, so no surface words it twice._
 
 ---
 
