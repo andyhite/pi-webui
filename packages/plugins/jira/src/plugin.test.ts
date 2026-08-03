@@ -251,6 +251,20 @@ describe("an epic and its children (§9.4, §3.1)", () => {
     );
   });
 
+  it("refreshes one epic from its collection id alone, with no scope (§9.1)", async () => {
+    const recorded = createRecordedJira();
+    const read = await createEpicProducer(recorded.transport, permissions).read(
+      {
+        scope: null,
+        externalId: `jira:collection:${FIXTURE_SITE}/${FIXTURE_EPIC}`,
+      },
+      connected,
+    );
+    const collection = read.objects.find((one) => one.kind === "collection");
+    expect(collection?.title).toBe("OXY-1 Path claims (2 children)");
+    expect(read.objects.filter((one) => one.kind === "ticket")).toHaveLength(2);
+  });
+
   it("says so when the membership it read is not all of it (principle 12)", async () => {
     const recorded = createRecordedJira();
     const read = await createEpicProducer(recorded.transport, permissions).read(

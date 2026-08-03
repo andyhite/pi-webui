@@ -34,6 +34,7 @@ import {
   type IssueRead,
 } from "./model.js";
 import {
+  DEFAULT_PAGE_SIZE,
   JIRA_SCOPE_EXAMPLE,
   JIRA_SCOPE_LANGUAGE,
   parseExternalId,
@@ -115,13 +116,18 @@ function resolve(
       },
     };
   }
+  const refresh = target as NonNullable<typeof target>;
   const scope: JiraScope = parsedScope.ok
     ? parsedScope.scope
     : {
         // A refresh of one object: its own key is the query, in Jira's own language.
-        site: (target as NonNullable<typeof target>).site,
-        jql: `issue = ${(target as NonNullable<typeof target>).key}`,
-        limit: 1,
+        site: refresh.site,
+        jql: `issue = ${refresh.key}`,
+        // Not 1. A per-object refresh reads its object **by key**, so this limit
+        // bounds only the secondary reads a producer makes about it — an epic's
+        // children, an issue's transitions — and a limit of one there would have
+        // reported every child but the first as omitted.
+        limit: DEFAULT_PAGE_SIZE,
       };
 
   const connection = JiraApi.connect(
