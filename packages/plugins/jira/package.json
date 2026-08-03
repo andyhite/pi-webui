@@ -1,0 +1,28 @@
+{
+  "name": "@plotroom/plugin-jira",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
+    "lint": "eslint src",
+    "test": "tsc -b && vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "@plotroom/plugin-sdk": "workspace:*",
+    "@types/node": "^26.1.2"
+  }
+}

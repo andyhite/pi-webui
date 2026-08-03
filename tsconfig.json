@@ -7,6 +7,7 @@
     { "path": "packages/plugins/filesystem" },
     { "path": "packages/plugins/git" },
     { "path": "packages/plugins/github" },
+    { "path": "packages/plugins/jira" },
     { "path": "packages/ui" },
     { "path": "apps/server" },
     { "path": "apps/web" },
