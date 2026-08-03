@@ -2701,6 +2701,24 @@ decided when Stage 2 starts, against whatever the host and substrate
 actually shipped), and the plugin health panel showing Filesystem's real
 lifecycle instead of `FIXTURE_PLUGIN_HEALTH`'s stand-in row._
 
+_**This batch's final wave: Coding/git and GitHub registered the same way.**
+`IN_BOX_PLUGIN_MODULES` (`packages/ui/src/plugins/in-box-modules.ts`) gained a
+`{ pluginId, manifest }` entry for each of Track C's two ported manifests
+(`@plotroom/plugin-git`'s default export, `@plotroom/plugin-github`'s — never
+the latter's `./testing` entry, which exists only for that package's own
+tests), so the client-side registry now resolves the git plugin's `diff`/
+`commit` card and content renderers and GitHub's `pull_request`/`review`/
+`ticket`/`document` card, content, and palette (clone-from-a-pull-request)
+contributions — nothing new on the mechanism side, the same seam Filesystem
+proved. `in-box-modules.test.ts` grew five cases: id/contractVersion checks
+for both new manifests, card-renderer resolution and GitHub's card action for
+their declared kinds, and one `RenderedContent.truncated` check per plugin's
+content renderer confirming the fact still surfaces through this registry
+rather than being swallowed (principle 12) — 9 tests total in that file, 457
+in `@plotroom/ui`, all green. Production behavior is otherwise unchanged:
+both producers still have no live server-side caller (Track A's, as above),
+so no card renders from real data yet._
+
 **Weeks 24–26 — Ship (Phase 8)**
 
 | Track | Work                                                                                                 |
