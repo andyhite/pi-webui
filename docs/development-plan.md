@@ -2295,7 +2295,7 @@ into Track C's subtree (reconciled at rebase; see `docs/plugin-contract.md`
 
 - [x] **Coding/git**: workspace kind, diffs, commits, branches — port Phase 4 git mechanics onto the plugin contract (§9.4) — _`packages/plugins/git`; the kind's six methods, `diff` and `commit` producers, renderers, three condition checks and four read-only tools. **Branches are not a concept**: `CONCEPT_KINDS` is closed (§3.1) and has no branch member, so they reach the product through the kind's status and `git_branches`, never as objects_
 - [x] **GitHub**: PRs, reviews, issues-as-tickets, repo metadata, writes; clone-from-PR-card (§9.4, §3.4) — _`packages/plugins/github`; four producers, four write actions with per-action reversibility, three write tools that call those actions, the two condition checks the native registry leaves to it, and clone-from-a-pull-request as a card action **with no write action behind it** — the clone is the host's git over the host's own authentication (§3.4)_
-- [ ] **Filesystem**: files/directories as documents; browse and drag (§9.4)
+- [x] **Filesystem**: files/directories as documents; browse and drag (§9.4)
 - [ ] **Jira**: tickets, epics+children as collections, statuses/transitions, writes (§9.4)
 
 _**Landed (Batch 5, Track C, Stage 2): the git port and GitHub.** Two private ESM
@@ -2347,6 +2347,68 @@ action id of `clone-from-pull-request` by provisioning a git workspace from the 
 request's clone URL over the host's own git authentication. **What Track B renders**:
 both plugins' `card.render` and `content.render` / `content.delta` answers (their
 `truncated` is a fact to display), and the palette entry as a declaration._
+
+_**Filesystem landed (Track B, Stage 2, Batch 5).** `@plotroom/plugin-filesystem`
+(`packages/plugins/filesystem`) is a conforming `PluginManifest` on the frozen
+contract v1: a concept producer (`fs-documents`) that reads files and
+directories as `document` concepts keyed on their absolute path (§3.1/§3.2 —
+a re-read reconciles, never duplicates), a content renderer surfacing "no
+silent truncation" (principle 12) through the contract's own `truncated`
+field, a card renderer (mechanics only — the design gate still applies), and
+a "Browse" palette entry. Both files and directories produce the `document`
+kind — the task this plugin was built against says so explicitly, which
+sidesteps the open "collection membership model" question (AGENTS.md)
+entirely: a directory is "browsable structure" rendered as one document's own
+content (its immediate children, bounded and listed), never a `collection`
+whose membership schema doesn't exist. Bounded, never silently: a file over
+64KB (`FILE_INLINE_MAX_BYTES`, matching `packages/db`'s `INLINE_MAX_BYTES`
+convention) or a directory over 500 entries (`DIRECTORY_MAX_ENTRIES`) is
+still produced, but says so both in-band (the rendered text) and through the
+dedicated `RenderedContent.truncated` field. Refresh is `on-demand`,
+deliberately not `observed`: a filesystem watcher is expressible in the
+contract's `RefreshMode`, but Track A's integration substrate
+(`apps/server/src/integrations/`) has no push seam today — recorded as a
+deferral, not silently built as interval-polling instead.
+
+Registered in `IN_BOX_PLUGIN_MODULES`
+(`packages/ui/src/plugins/in-box-modules.ts`), replacing Stage 1's empty
+placeholder — the first real entry through that seam. Covered at three
+levels: the manifest's own conformance (`manifest.test.ts`), the producer's
+read against real temp directories (`producer.test.ts`, hermetic — no reads
+outside what each test creates), and the plugin loaded in the **real**
+worker_threads host (`host.test.ts`, built via `tsc -b` before the test runs
+so it exercises the actual compiled module crossing the worker boundary, not
+a hand-simulated stand-in) — 25 tests in the plugin package, plus 4 more at
+the UI registry level (`in-box-modules.test.ts`) proving the browse/drag
+surface the same way Stage 1 proved its fixture manifests. `@plotroom/ui` is
+now 454 tests, all green.
+
+One review fix landed alongside it: `ContributionRegistry.registerManifest`
+used to key on its `pluginId` parameter while ignoring `manifest.id` — now
+it asserts the two agree (a caller bug, not a silent mismatch) before keying
+on `manifest.id`.
+
+**What the contract could not express, for the batch report:** `Renderings`
+(the producer's shape) has no truncation field — only `RenderedContent`
+(the content renderer's shape) does — so reporting truncation through the
+contract's own dedicated mechanism needs a content renderer contribution
+even when the producer's inline `agentContent` already states the same fact
+in text. And `ContentRenderer`/`CardRenderer` carry no `permissions` field
+(unlike `ConceptProducer`), so neither is gated by the host — meaning a
+conforming plugin must derive both purely from the already-produced
+`ProducedObject` and never perform its own I/O there; this plugin packs
+structured metadata (`fsKind`, `sizeBytes`, `truncated`) into the free-form
+`renderings.card` JSON channel Stage 1's bridge already established, rather
+than re-opening files a second, ungated way.
+
+**Cross-track need, stated exactly:** nothing under `apps/server` is wired
+to `@plotroom/plugin-sdk`'s `PluginHost`/`PluginRegistry` yet — there is no
+`/api/plugins`, and Epic 7.2's `IntegrationRegistry` is still the
+same-process direct-invocation seam, not a worker-hosted one. Server-side
+registration of this plugin's producer (and every other in-box plugin's) is
+Track A's Epic 7.2/§8 wiring; until it lands, the plugin health panel keeps
+showing its honest-empty `LIVE` state (`createEmptyPluginHealthDataSource`),
+not a fabricated Filesystem row._
 
 ### Epic 7.4 — Standing instructions (`graph`)
 
