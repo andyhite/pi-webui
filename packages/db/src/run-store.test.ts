@@ -21,6 +21,7 @@ import { GraphStore } from "./graph-store.js";
 import { ObjectStore } from "./object-store.js";
 import { RunRefused, RunStore } from "./run-store.js";
 import { SessionStore } from "./session-store.js";
+import { StandingInstructionStore } from "./standing-instruction-store.js";
 import { WorkstreamStore } from "./workstream-store.js";
 
 let dir: string;
@@ -867,5 +868,114 @@ describe("the run preview (§4.1)", () => {
     // No cap accepted is null, never zero: zero would read as "spend nothing".
     const other = runs.start({ commandId: wired(["input"]).command.id });
     expect(other.run.spendCapMicros).toBeNull();
+  });
+});
+
+describe("standing instructions in assembly (§3.8)", () => {
+  /** A world-scoped note, marked standing, and what it says. */
+  function standing(body: string, title = "House rules") {
+    const object = objects.write({
+      kind: "note",
+      title,
+      renderings: makeRenderings({ agentContent: body }),
+    });
+    const declared = standingStore().declare({
+      objectId: object.objectId,
+      by: humanAuthor,
+    });
+    if (!declared.ok) throw new Error(declared.refusal.message);
+    return declared.value;
+  }
+
+  const standingStore = () => new StandingInstructionStore(state, clock.now);
+
+  it("assembles nothing extra until the workstream opts in (principle 6)", () => {
+    standing("This repository uses pnpm, never npm.");
+    const command = wired(["the ticket"]);
+
+    const plan = runs.plan(command.command.id);
+    expect(plan.inputs).toHaveLength(1);
+    expect(plan.body).not.toContain("pnpm");
+  });
+
+  it("prepends the opted-in instructions before the wired inputs", () => {
+    const first = standing("This repository uses pnpm, never npm.", "Rule one");
+    clock.advance(1);
+    const second = standing("Never touch the generated directory.", "Rule two");
+    const store = standingStore();
+    // Opted in newest-first: the resolution's order is the answer, not row order.
+    store.optIn({
+      workstreamId,
+      instructionId: second.id,
+      by: humanAuthor,
+    });
+    store.optIn({ workstreamId, instructionId: first.id, by: humanAuthor });
+
+    const command = wired(["the ticket"]);
+    const { run } = runs.start({ commandId: command.command.id });
+    const content = runs.assembledContent(run.id);
+
+    expect(content.indexOf("pnpm")).toBeLessThan(
+      content.indexOf("generated directory"),
+    );
+    expect(content.indexOf("generated directory")).toBeLessThan(
+      content.indexOf("the ticket"),
+    );
+    // §15-1: the run recorded every input it saw, standing ones included, with
+    // the version each was read at — and no node, because none was drawn.
+    expect(run.inputs.map((each) => each.ordinal)).toEqual([1, 2, 3]);
+    expect(run.inputs.slice(0, 2).map((each) => each.nodeId)).toEqual([
+      null,
+      null,
+    ]);
+    expect(run.inputs[0]?.versionId).not.toBe("");
+  });
+
+  it("stops assembling one that was retired or opted out of", () => {
+    const instruction = standing("This repository uses pnpm, never npm.");
+    const store = standingStore();
+    store.optIn({
+      workstreamId,
+      instructionId: instruction.id,
+      by: humanAuthor,
+    });
+    const command = wired(["the ticket"]);
+    expect(runs.plan(command.command.id).body).toContain("pnpm");
+
+    store.optOut(workstreamId, instruction.id);
+    expect(runs.plan(command.command.id).body).not.toContain("pnpm");
+
+    store.optIn({
+      workstreamId,
+      instructionId: instruction.id,
+      by: humanAuthor,
+    });
+    store.retire(instruction.id, humanAuthor);
+    expect(runs.plan(command.command.id).body).not.toContain("pnpm");
+  });
+
+  it("counts toward the content budget the run is checked against (§3.5)", () => {
+    const instruction = standing("x".repeat(40_000));
+    standingStore().optIn({
+      workstreamId,
+      instructionId: instruction.id,
+      by: humanAuthor,
+    });
+    const command = wired(
+      ["the ticket"],
+      define({
+        budget: {
+          modelWindowTokens: 200_000,
+          warnAtFraction: 0.85,
+          hardCapTokens: 100,
+        },
+      }).id,
+    );
+
+    const plan = runs.plan(command.command.id);
+    expect(plan.budget.state).toBe("refused");
+    expect(plan.blockers.map((each) => each.reason)).toContain(
+      "content_budget",
+    );
   });
 });

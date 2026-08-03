@@ -40,6 +40,7 @@ import { EntityNotFound } from "./errors.js";
 import { CommandStore } from "./command-store.js";
 import { GraphStore } from "./graph-store.js";
 import { ObjectStore } from "./object-store.js";
+import { StandingInstructionStore } from "./standing-instruction-store.js";
 import {
   commandOutputs,
   objectVersions,
@@ -209,6 +210,7 @@ export class RunStore {
   private readonly commands: CommandStore;
   private readonly graph: GraphStore;
   private readonly objects: ObjectStore;
+  private readonly standing: StandingInstructionStore;
 
   constructor(
     private readonly state: PlotroomDatabase,
@@ -218,6 +220,7 @@ export class RunStore {
     this.commands = new CommandStore(state, now);
     this.graph = new GraphStore(state, now);
     this.objects = new ObjectStore(state, now);
+    this.standing = new StandingInstructionStore(state, now);
   }
 
   /* --------------------------------------------------------------- the plan */
@@ -258,7 +261,7 @@ export class RunStore {
       });
     }
 
-    const assembled = this.assemble(node.id);
+    const assembled = this.assemble(node.id, node.workstreamId);
     blockers.push(...assembled.blockers);
 
     const body = assembled.parts
@@ -1044,13 +1047,50 @@ export class RunStore {
   /**
    * Assemble the ordered inputs (§3.5). A placeholder nothing has produced yet
    * blocks the run and says which one, rather than being quietly skipped.
+   *
+   * The workstream's **standing instructions come first** (§3.8), because they are
+   * the frame the rest is read in — "this repository uses pnpm, never npm" is not
+   * one input among the ticket and the diff. Which ones, and in what order, is
+   * `resolveStandingInstructions`'s answer and never this method's: two runs of one
+   * command with the same opt-ins have to assemble identically, or the comparison
+   * §3.7 promises would report a change nobody made.
+   *
+   * They are resolved here rather than fanned out into context edges, and the run's
+   * own record loses nothing by it: `plan` hands these to `start`, which stores the
+   * assembled bytes and every input's version whole (§15-1), so what a run actually
+   * saw is recorded whether or not an edge existed.
    */
-  private assemble(commandNodeId: string): {
+  private assemble(
+    commandNodeId: string,
+    workstreamId: string | null,
+  ): {
     readonly parts: PlannedInput[];
     readonly blockers: RunRefusal[];
   } {
     const parts: PlannedInput[] = [];
     const blockers: RunRefusal[] = [];
+
+    if (workstreamId !== null) {
+      for (const instruction of this.standing.resolve(workstreamId)) {
+        // No node: a standing instruction reaches assembly through the
+        // workstream's opt-in, not through anything drawn on the board — which is
+        // why `run_inputs.node_id` is nullable.
+        const content = this.objects.read(instruction.objectId);
+        const object = this.objects.get(instruction.objectId);
+        parts.push({
+          ordinal: parts.length + 1,
+          nodeId: null,
+          objectId: instruction.objectId,
+          versionId: content.versionId as VersionId,
+          contentHash: createHash("sha256")
+            .update(content.renderings.agentContent)
+            .digest("hex"),
+          bytes: Buffer.byteLength(content.renderings.agentContent, "utf8"),
+          title: object?.title ?? content.renderings.summary,
+          content: content.renderings.agentContent,
+        });
+      }
+    }
 
     for (const edge of this.graph.contextInputs(commandNodeId)) {
       const source = this.graph.node(edge.fromNode);
@@ -1070,7 +1110,11 @@ export class RunStore {
       const object = this.objects.get(objectId);
 
       parts.push({
-        ordinal: edge.ordinal ?? parts.length + 1,
+        // Sequential over the whole assembly rather than the edge's own ordinal:
+        // `run_inputs` is keyed by (run, ordinal), and the edges' ordering is
+        // already what `contextInputs` returned them in. Standing instructions
+        // occupy the first places, so the wired inputs continue from there.
+        ordinal: parts.length + 1,
         nodeId: source.id as NodeId,
         objectId: objectId as ObjectId,
         versionId: content.versionId as VersionId,
