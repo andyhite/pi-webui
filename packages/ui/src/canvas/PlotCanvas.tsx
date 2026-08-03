@@ -84,11 +84,11 @@ import {
  * A plugin-contributed card, compact or expanded (§10.1, §3.2): declarative
  * so a plugin cannot break focus management for the whole board — the host
  * draws it, never the plugin's own markup. Deliberately the same shape as
- * `@plotroom/plugin-sdk`'s draft `DraftCardView`, but declared independently
- * here rather than imported: the canvas is core mechanics and must not take
- * a hard dependency on an unstable, still-drafting contract (`packages/
- * plugin-sdk/src/draft/`) — the contribution registry (`plugins/
- * contribution-registry.ts`) is what maps one onto the other.
+ * `@plotroom/plugin-sdk`'s frozen `CardView` (`docs/plugin-contract.md`),
+ * but declared independently here rather than imported: the canvas is core
+ * mechanics and must not take a hard dependency on the plugin contract —
+ * the contribution registry (`plugins/contribution-registry.ts`) is what
+ * maps one onto the other.
  */
 export interface CanvasCardAction {
   readonly id: string;

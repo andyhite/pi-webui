@@ -708,13 +708,14 @@ export const FIXTURE_FLEET_SUMMARY: FleetSummary = {
 
 /**
  * The plugin health panel's fixture (§10.2, §11): fixture-fed regardless of
- * `LIVE` — Epic 7.1's host has no lifecycle event stream yet (`docs/
- * plugin-contract-draft.md`'s "known gaps"), so there is nothing real to
- * load either way. Four rows, one per in-box plugin (§9.4), each a
- * different lifecycle/integration combination so every §10.2 state this
- * panel renders is exercised: `ready`+`connected`, `unavailable`+`failing`,
- * `disabled`, and `ready` with no integration substrate yet (Filesystem —
- * honest, since Epic 7.2 hasn't landed).
+ * `LIVE` — `apps/server` publishes no lifecycle event stream yet (§8's
+ * server wiring over `@plotroom/plugin-sdk`'s `PluginRegistry` is Track A's),
+ * so there is nothing real to load either way. Four rows, one per in-box
+ * plugin (§9.4), each a different lifecycle/integration combination so
+ * every §10.2 state this panel renders is exercised: `ready`+`connected`,
+ * `unavailable`+`failing`, `disabled`, and `ready` with no integration
+ * substrate wired server-side (Filesystem — honest, since Epic 7.2's
+ * substrate is not wired to a worker-hosted plugin yet).
  */
 export const FIXTURE_PLUGIN_HEALTH: readonly PluginHealthEntry[] = [
   {
