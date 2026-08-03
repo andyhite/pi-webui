@@ -2387,6 +2387,24 @@ wiring:**_
   inventing a bespoke endpoint for one plugin's one action would be the second
   provisioning path §3.4 does not want._
 
+_**Closing wave (Batch 5, Track A): Jira joined the in-box list and three review fixes
+landed.** `@plotroom/plugin-jira` is a fourth `IN_BOX_PLUGINS` entry plus a workspace
+dependency, so a packaged build resolves it the way it resolves the other three, and the
+gate now asserts **all four** load in their own workers and report `ready` on contract v1
+— with Jira's three producers in the substrate, its scope language its own (JQL,
+verbatim), and its credential permission arriving `never-asked`, the state that raises
+through §6.6 rather than a silent reach. The fixes: **a disable is now persisted**
+(`plugin_disablements`, migration 28 — a row means disabled, an absence means enabled, and
+removing the plugin forgets it), because the registry's state is a running process's
+property and a restart was quietly re-enabling what the operator turned off; **install
+failures are keyed by (entry, origin)** rather than appended, so a re-scan replaces a
+reason instead of growing a duplicate row per gesture, and `install()` hands its own
+failure back rather than leaving the route to read `failures().at(-1)` — the most recent
+failure recorded, which is not necessarily this call's; and **the approval-answered →
+grant-persisted → retry-succeeds path is tested** (`plugins/service.test.ts`, real worker
+host, stubbed approval authority), along with a denial recorded as `denied` and an
+approval this service never raised granting nothing._
+
 _**Filesystem landed (Track B, Stage 2, Batch 5).** `@plotroom/plugin-filesystem`
 (`packages/plugins/filesystem`) is a conforming `PluginManifest` on the frozen
 contract v1: a concept producer (`fs-documents`) that reads files and
@@ -2454,7 +2472,7 @@ _**Jira landed (Batch 5, Track C, final wave).** `@plotroom/plugin-jira`
 types only from `@plotroom/plugin-sdk`, nothing from `@plotroom/core`, an **injected
 transport** with a recorded, stateful Jira behind it, and a stub entry the real
 `worker_threads` host loads (`host.integration.test.ts` serves at least one invocation
-per dispatchable point it declares). 48 tests, and **no path in the package can reach
+per dispatchable point it declares). 49 tests, and **no path in the package can reach
 the network**: the credential arrives only through the host's per-call injection,
 nothing reads `process.env`, and the recorded Jira answers 401 without the header, so a
 producer that answers at all proves the injection happened._
@@ -2507,10 +2525,10 @@ the members are already objects) and `transition` (a write action, so §6.6 appl
 button). **What Track B renders**: `card.render` and `content.render` / `content.delta`,
 whose `truncated` is a fact to display._
 
-### Epic 7.4 — Standing instructions (`graph`) — _core landed; store, routes and queue surfacing are Track A's_
+### Epic 7.4 — Standing instructions (`graph`) — **landed**
 
-- [ ] Standing-instruction content available to every workstream that opts in (§3.8) — _the rule landed as `@plotroom/core`'s `resolveStandingInstructions` (Track C); the tables, the routes and assembly are Track A's_
-- [ ] Agent proposes / human accepts flow (§3.8, principle 1) — _the refusal, the proposal and the acceptance landed (Track C); the `/api/proposals` routes and the queue row are Track A's_
+- [x] Standing-instruction content available to every workstream that opts in (§3.8) — _`@plotroom/core`'s `resolveStandingInstructions` (Track C), the tables and stores, the six routes, and the assembly point in `RunStore.plan` (Track A)_
+- [x] Agent proposes / human accepts flow (§3.8, principle 1) — _the refusal, the proposal and the acceptance (Track C); `/api/proposals`, its reject verb, and the §7.1 queue row as its own `ApprovalKind` (Track A)_
 
 _**Landed (Batch 5, Track C, final wave): the model and every rule, in
 `packages/core/src/sessions/standing-instructions.ts`.** A standing instruction is a
@@ -2598,6 +2616,70 @@ flipping._
    "allow always" covering a proposal would apply it silently, which is the one thing
    principle 1 says a proposal must never be. `describeStandingInstructionProposal` is
    the sentence the row shows, so no surface words it twice._
+
+_**Landed (Batch 5, Track A, closing wave): the server half, exactly as specified
+above.** Migration 26 is `standing_instructions` (with the partial unique index that
+makes `already_standing` unrepresentable as well as refused),
+`standing_instruction_opt_ins`, and `proposals`; `StandingInstructionStore` and
+`ProposalStore` apply core's predicates and decide nothing — `declared_by_kind` and
+`decided_by_kind` can only say `human`, so a store reached without the gate still cannot
+write the fact principle 1 exists to prevent. Assembly is `RunStore.plan`, which
+prepends `resolveStandingInstructions`'s answer before the wired inputs; `start()` reads
+the same plan, so there is still one description of what will execute, and the run's
+`assembled_blob_id` therefore already contains them (§15-1). Input ordinals are now
+sequential over the whole assembly (`run_inputs` is keyed by them) and a standing
+instruction's `node_id` is null, because it reaches assembly through the workstream's
+opt-in rather than through anything drawn on the board._
+
+_**The queue-row decision, made: a new `ApprovalKind`, `'standing-instruction'`, plus
+migration 27's CHECK-widening rebuild** (`rebuildsTable: true`, foreign keys off before
+the transaction, `foreign_key_check` after — migrations 9 and 21's worked examples, and
+its test upgrades a seeded store to prove the pre-grant beside the approvals table
+survived). Option (a) needed no migration and was rejected for one reason: `ApprovalKind`
+is the vocabulary every attention surface, every pre-grant and every outbound route
+reads, and a row whose `kind` said `tool-permission` while meaning "a proposal" is one
+word doing two jobs — the drift principle 8 exists to prevent, in the schema. The name is
+`standing-instruction` rather than the sketch's `self-proposal` because §3.8 is what the
+kind is **about**; "self-proposal" is the reflexivity class that produces it, which the
+catalog already states. **Nothing can pre-grant one, structurally**: `preGrantable`
+returns null for the kind, so no call site can express a coverage check, and
+`declarePreGrant` refuses one by name so an operator is never left believing proposals
+were pre-approved. `settlesAsk` now compares the ask's **kind** as well as its tool and
+target — without that, a write-gate raise over `standing_instruction_declare` would
+settle the proposal, applying it with nobody having confirmed it._
+
+_**Two entry points, one path, and no circular dependency.** The operator can answer the
+queue row (`POST /api/approvals/:id/answer`) or call `POST /api/proposals/:id/accept`;
+either way `ProposalService` decides the proposal once and settles the other side, and
+the approval-answered direction arrives **over the event stream** rather than through a
+callback into `ApprovalService` — the shape `subscribeToClaimWaits` and
+`PluginService.onEvent` already use. `ApprovalService` deliberately applies nothing for
+this kind: a second acceptance path is always the one that forgets to check who is
+accepting. **The retire asymmetry is deliberate and stated in the code**: an accepted
+retire proposal has no apply helper in core (`acceptedStandingInstruction` refuses it as
+`wrong_tool`), so `applyAccepted` calls `retireStandingInstruction` **as the human
+directly** — the same function the DELETE route calls, with the same author and the same
+refusals. Inventing an `acceptedRetire` would be a second statement of a rule that
+already has one._
+
+_**Refusals are shaped by what the product wants next.** Declaring or retiring as a
+session is a **409 with `human_only`** whose message names `proposal_create`, not a 403:
+the answer is not "stop", it is "propose it". Accept and reject are the operator's by the
+request's actor (`ClaimService`'s convention) as well as by `decideProposal`. All five
+standing-instruction tools plus `proposal_create` and `proposal_accept` flipped to
+`live`; **reject has no tool and joins `OPERATOR_ONLY_ROUTES`** with its reason — a
+session that could decline proposals could decline its own. One gap recorded rather than
+papered over: the catalog has **no proposal read tool**, so a session learns its
+proposal's fate only if something injects it; adding one is a catalog decision, not a
+route this batch invented._
+
+_Tests: 12 + 6 store tests and 2 migration-27 rebuild tests in `@plotroom/db`, 4 assembly
+tests in `run-store.test.ts`, 9 route integration tests
+(`standing-instructions.integration.test.ts` — including the queue row's own sentence and
+the pre-grant refusal), and 3 new core tests. `packages/ui`'s `applyEvent` gained the two
+new entities to its "advance `seq` and nothing else" list: §3.8 is deliberately not a
+fan-out of context edges, so nothing on the board changes when an instruction is declared
+or opted into._
 
 ---
 

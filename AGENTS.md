@@ -249,10 +249,14 @@ memory returns the moment the server does. A notification route attaches to a
 so a restart cannot re-fire every open item, and a delivery failure is route health
 rather than an exception.
 
-**Plugin grants** live in `plugin_grants` (migration 25) and nothing else about a
-plugin is persisted: which plugins exist is the build's (in-box) or the operator's
-directory's, and health is a running worker's property, so a row for either would be a
-second source of truth about something observable. Two states and an absence: a
+**Plugin grants** live in `plugin_grants` (migration 25), and the only other thing about
+a plugin that is persisted is whether the operator **disabled** it
+(`plugin_disablements`, migration 28 — a row means disabled, an absence means enabled,
+and removing the plugin deletes the row). Nothing else: which plugins exist is the
+build's (in-box) or the operator's directory's, and health is a running worker's
+property, so a row for either would be a second source of truth about something
+observable. A disable is not in that category — it is a **decision**, and one held only
+in the registry came back undone at the next boot. Two states and an absence: a
 `granted` or `denied` row, and **no row means never-asked** — the state that raises
 through §6.6 the moment a plugin reaches for the permission, so removing a grant is
 deleting the row rather than writing a third state (the same "grant or remove" shape
@@ -267,6 +271,24 @@ producer read and write action performed through `PluginHost.invoke`, and
 `plugins/raise.ts` holding the compile-time assertion that `PermissionRaise` stays
 assignable to `ApprovalAsk` — the server is the only package that can see both types,
 so enum drift on either side breaks the build.
+
+**Standing instructions** live in `standing_instructions` /
+`standing_instruction_opt_ins` and `proposals` (migration 26). A standing instruction is
+a **marker on a world object, never a tenth `ObjectKind`**, so the table names an object
+and holds no content of its own; `declared_by_kind` can only say `human` and
+`decided_by_kind` on a proposal likewise, because a store reached without the predicate
+must not be able to write the fact principle 1 exists to prevent. A partial unique index
+on a live `object_id` makes `already_standing` unrepresentable as well as refused. Markers
+retire and opt-ins opt out; nothing is deleted. **Availability is resolved at assembly,
+not fanned out into edges**: `RunStore.plan` prepends `resolveStandingInstructions`'s
+answer before the wired inputs (and `start()` reads that same plan), so a run's recorded
+assembled content already contains them (§15-1) — which is also why a standing input's
+`run_inputs.node_id` is null and why input ordinals are sequential over the whole
+assembly rather than copied from the edge. `proposals` is `ToolProposal` at rest with
+`decideProposal` as its only transition; a pending one reaches §7.1 through the approvals
+channel as the `standing-instruction` kind, and an **accepted retire** is performed by
+calling `retireStandingInstruction` as the human directly, because core deliberately has
+no apply helper for it.
 
 **Scoped runs and the queue** live in `run_batches` / `run_queue` (migrations 13, 14
 and 15). One batch is one gesture over a scope; one entry is one command, admitted
@@ -550,6 +572,26 @@ Record answers here as they are decided; do not assume.
 
 Decided (recorded as they were made):
 
+- **A pending proposal reaches §7.1 as its own `ApprovalKind`, `standing-instruction`**
+  (Epic 7.4). `ATTENTION_FEEDS` is closed at six, so a proposal is surfaced through the
+  approvals channel §6.6 already owns — but as a **fifth kind**, added by the documented
+  CHECK-widening rebuild (migration 27), rather than as a `tool-permission` row carrying
+  the proposal id. The rejected option needed no migration and that was its only
+  advantage: `ApprovalKind` is the one vocabulary every attention surface, every
+  pre-grant and every outbound route reads, and a row whose kind says one thing while
+  meaning another is the drift principle 8 exists to prevent, written into the schema.
+  **Nothing can pre-grant one, structurally**: `preGrantable` returns `null` for the
+  kind, so no call site can express a coverage check, and `declarePreGrant` refuses one
+  by name — an "allow always" over proposals would apply them silently, which is the one
+  thing principle 1 says a proposal must never be. `settlesAsk` therefore compares the
+  ask's kind as well as its tool and target, because a write-gate raise over
+  `standing_instruction_declare` would otherwise settle the proposal.
+- **A plugin's enabled/disabled state is persisted** (`plugin_disablements`, migration
+  28). A row means disabled and an absence means enabled — the shape `plugin_grants`
+  uses for never-asked and budgets use for removed — because the registry's state is a
+  running process's property, and a disable that lapsed at the next boot would be the
+  operator's decision reversed with nobody behind it (the same reasoning as "removal
+  stays removed").
 - **Plugin distribution and permission-grant UX** (Epic 7.1). Three answers, and the
   third is the one that mattered. **Distribution v1 is in-box packages plus a
   configured plugins directory** — one subdirectory per plugin, scanned on an
