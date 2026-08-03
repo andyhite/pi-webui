@@ -53,12 +53,24 @@ import {
 import { issuePath, transitionsPath } from "./producers.js";
 import { isIssueKey } from "./scope.js";
 import { JiraApi, type ApiResult, type HttpTransport } from "./transport.js";
+import {
+  ASSIGN_ACTION,
+  COMMENT_ACTION,
+  CREATE_ISSUE_ACTION,
+  TRANSITION_ACTION,
+  UPDATE_SUMMARY_ACTION,
+} from "./write-action-ids.js";
 
-export const COMMENT_ACTION = "comment";
-export const TRANSITION_ACTION = "transition";
-export const ASSIGN_ACTION = "assign";
-export const UPDATE_SUMMARY_ACTION = "update-summary";
-export const CREATE_ISSUE_ACTION = "create-issue";
+// The ids themselves are a leaf module (`write-action-ids.ts`), because the
+// renderer half names one of them on a card action and must not import this
+// file to learn it. Re-exported here so every existing import site is unchanged.
+export {
+  ASSIGN_ACTION,
+  COMMENT_ACTION,
+  CREATE_ISSUE_ACTION,
+  TRANSITION_ACTION,
+  UPDATE_SUMMARY_ACTION,
+} from "./write-action-ids.js";
 
 /**
  * The site, on every write.

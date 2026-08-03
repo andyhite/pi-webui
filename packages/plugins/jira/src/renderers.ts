@@ -34,7 +34,7 @@ import type {
   RenderedContent,
 } from "@plotroom/plugin-sdk";
 
-import { TRANSITION_ACTION } from "./writes.js";
+import { TRANSITION_ACTION } from "./write-action-ids.js";
 
 export const CONTENT_RENDERER_ID = "jira-content";
 export const CARD_RENDERER_ID = "jira-card";
