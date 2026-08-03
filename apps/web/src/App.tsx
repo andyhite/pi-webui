@@ -43,6 +43,7 @@ import {
   createApiSessionDataSource,
   createFixtureActivityDataSource,
   createFixtureAttentionDataSource,
+  createEmptyPluginHealthDataSource,
   createFixtureDiffDataSource,
   createFixtureFleetDataSource,
   createFixtureGraphDataSource,
@@ -144,17 +145,22 @@ const graphDataSource = LIVE
 const actions = createApiActions(httpClient);
 
 /**
- * Plugin health (§10.2, §11): fixture-fed always, on purpose — Epic 7.1's
- * host has a load/ping/dispose skeleton (`packages/plugin-sdk/src/host.ts`)
- * but no enable/disable/remove verbs and no health event stream yet (see
- * `docs/plugin-contract-draft.md`'s "known gaps"), so there is nothing live
- * to subscribe to regardless of `LIVE`. `createUnavailableLifecycleActions`
- * is the honest stand-in for the verbs: every call refuses with a stated
- * reason rather than silently succeeding.
+ * Plugin health (§10.2, §11): gated on `LIVE` like every other seam in this
+ * file. Epic 7.1's host has a load/ping/dispose skeleton
+ * (`packages/plugin-sdk/src/host.ts`) but no enable/disable/remove verbs and
+ * no health event stream yet (see `docs/plugin-contract-draft.md`'s "known
+ * gaps"), so in `LIVE` mode there is nothing real to report —
+ * `createEmptyPluginHealthDataSource` resolves zero entries and the panel's
+ * own "no plugins installed" state renders, rather than the fixture rows
+ * being shown as if they were live data (an honest absence, never a
+ * manufactured "connected" — `plugins/types.ts`). Fixture mode keeps the
+ * fixture rows for tests/offline dev. `createUnavailableLifecycleActions`
+ * is the honest stand-in for the verbs either way: every call refuses with
+ * a stated reason rather than silently succeeding.
  */
-const pluginHealthDataSource = createFixturePluginHealthDataSource(
-  FIXTURE_PLUGIN_HEALTH,
-);
+const pluginHealthDataSource = LIVE
+  ? createEmptyPluginHealthDataSource()
+  : createFixturePluginHealthDataSource(FIXTURE_PLUGIN_HEALTH);
 const pluginLifecycleActions = createUnavailableLifecycleActions();
 
 /**

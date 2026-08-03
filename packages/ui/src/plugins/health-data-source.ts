@@ -34,3 +34,24 @@ export function createFixturePluginHealthDataSource(
     },
   };
 }
+
+/**
+ * The honest live stand-in: the host has no enable/disable/remove verbs and
+ * no lifecycle event stream yet (see this file's own doc comment and
+ * `docs/plugin-contract-draft.md`'s "known gaps"), so there is nothing real
+ * to report. Resolves zero entries rather than manufacturing fixture rows —
+ * `types.ts`'s own words are "an honest absence, not a manufactured
+ * 'connected'" — and the panel's own empty state ("no plugins installed")
+ * renders for it. `subscribe` never fires, for the same reason the fixture
+ * source's never does: there is no live event source behind it yet.
+ */
+export function createEmptyPluginHealthDataSource(): PluginHealthDataSource {
+  return {
+    load(): Promise<readonly PluginHealthEntry[]> {
+      return Promise.resolve([]);
+    },
+    subscribe(): Unsubscribe {
+      return () => {};
+    },
+  };
+}
