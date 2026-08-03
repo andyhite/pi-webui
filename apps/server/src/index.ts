@@ -64,6 +64,16 @@ export function startServer(config = loadServerConfig()) {
     return recovery;
   })();
 
+  // §10.2's plugin platform, started beside recovery rather than before serving:
+  // one worker per plugin has to load and say what it is, and a product that
+  // waited for that to bind would be a product a broken plugin stops from
+  // starting — the exact failure §10.2 rules out. `/api/plugins` answers honestly
+  // meanwhile (an empty list, then `loading`, then whatever each turned out to be).
+  const pluginsBooted = runtime.plugins.boot().catch((err: unknown) => {
+    logger.error("the plugin platform failed to boot", { err: String(err) });
+    return [];
+  });
+
   const server = serve({
     fetch: app.fetch,
     port: config.port,
@@ -85,6 +95,9 @@ export function startServer(config = loadServerConfig()) {
     logger,
     /** Resolves once boot-time recovery has been recorded. */
     recovered,
+    /** Resolves once every in-box and directory plugin has reported its health. */
+    pluginsBooted,
+    plugins: runtime.plugins,
     hub: runtime.hub,
     runs: runtime.runs,
     queue: runtime.queue,
@@ -119,6 +132,11 @@ export function startServer(config = loadServerConfig()) {
       // just tidiness; leaving a timer behind would keep a test process alive.
       runtime.compaction.stop();
       runtime.integrationRefresh.stop();
+
+      // Every plugin worker is disposed, and nothing on disk is touched: a plugin
+      // came from a directory the operator owns (§10.2, principle 10).
+      await pluginsBooted;
+      await runtime.plugins.shutdown();
 
       await new Promise<void>((resolve) => {
         server.close(() => {

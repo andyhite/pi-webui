@@ -6,23 +6,33 @@ import type {
 import type { Renderings } from "@plotroom/core";
 
 /**
- * The integration producer registry — Epic 7.2's direct-invocation seam
- * standing in for Track C's plugin host.
+ * The integration producer registry (§9.1–§9.3, Epic 7.2) — **now backed by the
+ * real worker host** (§10.2, Epic 7.1's freeze).
  *
- * **This is a stand-in, and it says so on every export.** Track C's host
- * (`packages/plugin-sdk`) still speaks only load/ping/dispose; nothing loads a
- * real out-of-process plugin yet. Until it does, a producer is a same-process
- * object registered here directly rather than discovered from a worker. When
- * C's host lands, this registry's `register`/`get`/`list` surface is what a
- * loader calls into — the substrate above it (the store, the service, the
- * routes, the catalog tools) does not change, because none of it assumes
- * same-process execution; it only ever calls `producer.read(...)` and
- * `action.perform(...)`, both already `Promise`-returning per the frozen
- * contract.
+ * This used to be a same-process direct-invocation seam standing in for Track C's
+ * plugin host, and its own docstring said it would be **replaced rather than
+ * extended** when that host landed. It has been:
+ * `apps/server/src/plugins/producers.ts` builds an {@link IntegrationProducer} whose
+ * `read` and `perform` are `PluginHost.invoke` — one worker thread per plugin,
+ * permissions gated at the boundary, credentials injected per call and redacted out
+ * of the answer — and `PluginService` registers those when a plugin is enabled and
+ * unregisters them when it is disabled.
  *
- * Rebased onto the frozen contract (`packages/plugin-sdk/src/contract/`,
- * `docs/plugin-contract.md`); `draft.*` is gone. One extension survives the
- * freeze, additive rather than a change to the contract's own field list:
+ * **Nothing above this registry changed**, which was the seam's whole claim: the
+ * store, the service, the routes and the catalog tools only ever call
+ * `producer.read(...)` and `action.perform(...)`, both `Promise`-returning per the
+ * frozen contract, and none of them assumed same-process execution.
+ *
+ * A registration is therefore live rather than permanent — {@link
+ * IntegrationRegistry.unregister} exists because "disable, per plugin, without
+ * restarting" (§10.2) has to mean the producer stops being reachable, not merely
+ * that its worker stopped. An integration connected to a disabled plugin's producer
+ * keeps its row and its objects (§3.1: present-or-absent, never degraded); what it
+ * loses is the ability to refresh, and `IntegrationService` reports that as the
+ * unknown producer it now is.
+ *
+ * One extension of the contract's own shape survives here, additive rather than a
+ * change to its field list:
  * `ConceptProducer`/`WriteAction` name no plugin, and a registry needs to
  * group a producer's actions and know which plugin owns which credential
  * namespace, so {@link IntegrationProducer} adds `pluginId`.
@@ -73,6 +83,11 @@ export class IntegrationRegistry {
 
   register(producer: IntegrationProducer): void {
     this.producers.set(producer.id, producer);
+  }
+
+  /** Take a producer away again: what a plugin being disabled means (§10.2). */
+  unregister(producerId: string): void {
+    this.producers.delete(producerId);
   }
 
   get(producerId: string): IntegrationProducer | undefined {

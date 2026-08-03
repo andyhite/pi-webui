@@ -199,8 +199,10 @@ export function applyEvent(state: BoardState, event: DomainEvent): BoardState {
     // attention derivation have their own surfaces (§3.4's claims panel, §4.1's
     // queue, §8's fleet panel, §6.4's bubbles, §6.6's approvals, §7.1's queue),
     // and nothing about a node's label or running state is derived from any of
-    // them. A pre-grant, an outbound route, and an integration instance are
-    // configuration and are never on the board at all (§6.6, §7.3, §9.1–§9.3).
+    // them. A pre-grant, an outbound route, an integration instance, and a
+    // plugin's own lifecycle/health are configuration and are never on the board
+    // at all (§6.6, §7.3, §9.1–§9.3, §10.2) — the plugin health panel reads that
+    // event through its own seam.
     case "version":
     case "session_observation":
     case "session_transcript":
@@ -218,6 +220,7 @@ export function applyEvent(state: BoardState, event: DomainEvent): BoardState {
     case "attention":
     case "notification_route":
     case "integration":
+    case "plugin":
       return next;
   }
 }

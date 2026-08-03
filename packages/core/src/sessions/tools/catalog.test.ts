@@ -209,6 +209,38 @@ const OPERATOR_ONLY_ROUTES: readonly {
     why: "editing or removing one, for the same reason as creating one (\u00a77.3).",
   },
   {
+    path: "/api/plugins",
+    why: "\u00a710.2's health surface is a read, and it deliberately has no agent tool: \u00a78 explicitly grants a session sight of what remains of its budget, and no line of the spec grants a session enumeration of what plugins are installed. Inventing that capability would be a product decision nobody asked for \u2014 this declares the read tool-less, never 403-for-sessions, and is revisitable the moment a spec need for it appears.",
+  },
+  {
+    path: "/api/plugins/:id",
+    why: "the same read, for one plugin (\u00a710.2).",
+  },
+  {
+    path: "/api/plugins/install",
+    why: "principle 1, \u00a710.2: installing a plugin is the operator granting the product new reach. A session installing one would be granting itself capabilities \u2014 the same hole that makes a budget-raising tool impossible.",
+  },
+  {
+    path: "/api/plugins/scan",
+    why: "scanning the configured plugins directory is the operator's gesture and never a timer (\u00a710.2, principle 2); a session asking for it would be initiating the discovery of new capability for itself.",
+  },
+  {
+    path: "/api/plugins/:id/enable",
+    why: "enabling a plugin makes its contributions reachable (\u00a710.2). A session enabling one is principle 1 again: it cannot grant itself capabilities.",
+  },
+  {
+    path: "/api/plugins/:id/disable",
+    why: "the same decision from the other side (\u00a710.2) \u2014 a session disabling a plugin would be deciding what the operator's product can do.",
+  },
+  {
+    path: "/api/plugins/:id",
+    why: "removing a plugin forgets the operator's own installation (\u00a710.2, principle 10); it deletes nothing on disk, and it is not a gesture the product mirrors for a session.",
+  },
+  {
+    path: "/api/plugins/:id/grants",
+    why: "\u00a710.2's grants are operator-only acts, recorded as such in AGENTS.md: \"there is no agent tool that grants a permission, for the same reason there is none that raises a budget\" (principle 1). A session answering its own plugin's permission request is the silent reach \u00a710.2 rules out.",
+  },
+  {
     path: "/api/nodes/:id/position",
     why: "the arrangement is the operator's authored spatial work (§5): an agent rearranging the canvas somebody else is reading is not a wanted gesture, and nothing an agent does depends on where a node sits.",
   },

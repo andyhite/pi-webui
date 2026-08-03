@@ -110,6 +110,9 @@ async function boot(
         trustedOrigins: [],
         staticDir: join(tmpdir(), "plotroom-no-such-renderer-dir"),
         logLevel: "error",
+        // No plugin workers: these suites assert nothing about plugins, and a
+        // worker per in-box plugin per boot is time nothing here spends usefully.
+        pluginsInBox: [],
         ...overrides,
         runtime: { adapterId: "scripted", ...overrides.runtime },
         workspace: {

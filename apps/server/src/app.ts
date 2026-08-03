@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { UpgradeWebSocket } from "hono/ws";
-import type { PlotroomDatabase } from "@plotroom/db";
+import { PluginGrantStore, type PlotroomDatabase } from "@plotroom/db";
 import type { ServerConfig } from "./config.js";
 import { createConditionChecks } from "./conditions/registry.js";
 import { startCompactionJob } from "./maintenance/compaction.js";
@@ -56,16 +56,14 @@ import { nodeCommandExec } from "./workspaces/exec.js";
 import { createWorkspaceKinds } from "./workspaces/kinds.js";
 import { mountWsRoute } from "./ws/route.js";
 import {
-  createFakeIntegrationState,
-  createFakeProducer,
-} from "./integrations/fake-plugin.js";
-import {
   startRefreshJob,
   type RefreshJob,
 } from "./integrations/refresh-job.js";
 import { IntegrationRegistry } from "./integrations/registry.js";
 import { IntegrationService } from "./integrations/service.js";
 import { integrationWorldDeclarations } from "./integrations/world.js";
+import { pluginRoutes } from "./routes/plugins.js";
+import { PluginService } from "./plugins/service.js";
 
 export interface AppDependencies {
   readonly config: ServerConfig;
@@ -102,6 +100,15 @@ export interface AppRuntime {
   /** §9.1's integration substrate, and its own scheduled-read tick. */
   readonly integrations: IntegrationService;
   readonly integrationRefresh: RefreshJob;
+  /**
+   * §10.2's plugin platform. `boot()` is deliberately **not** called here: it is
+   * asynchronous (a worker per plugin has to load and report its health), and
+   * `configureApp` is synchronous, so `apps/server/src/index.ts` starts it and the
+   * routes answer honestly meanwhile — an empty list, then `loading`, then whatever
+   * each plugin turned out to be. A plugin platform that made the server wait to
+   * bind would be one whose failure is a product that will not start (§10.2).
+   */
+  readonly plugins: PluginService;
 }
 
 /**
@@ -170,22 +177,15 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   const approvals = new ApprovalService({ stores, bus, logger, hub, claims });
   const unsubscribeClaimApprovals = approvals.subscribeToClaimWaits();
 
-  // The integration substrate (§9.1–§9.3, Epic 7.2). Registered here, before the
+  // The integration substrate (§9.1–§9.3, Epic 7.2). Constructed here, before the
   // gate, because the gate's own `world` declarations are built from exactly
   // these producers' write actions — the Batch-4 external-write seam
   // (`decideToolPermission`) a plugin's declared reversibility plugs into.
   //
-  // The fake producer is Epic 7.2 scope item 5's in-repo fixture: a
-  // direct-invocation stand-in for Track C's still-unfinished plugin host
-  // (`packages/plugin-sdk` speaks only load/ping/dispose). It is registered
-  // unconditionally rather than behind a flag because it contributes nothing
-  // to the board on its own — an operator has to connect it through
-  // `POST /api/integrations` naming its producer id, exactly like a real
-  // plugin's producer would be connected once Track C's host loads one.
+  // It starts **empty**: every producer in it arrives from an enabled plugin's
+  // worker (`plugins/producers.ts`), which is what replaced the direct-invocation
+  // stand-in this registry used to be handed at boot.
   const integrationRegistry = new IntegrationRegistry();
-  integrationRegistry.register(
-    createFakeProducer(createFakeIntegrationState()),
-  );
   const integrations = new IntegrationService({
     stores,
     registry: integrationRegistry,
@@ -197,6 +197,22 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     logger,
     intervalSeconds: config.integrationTickSeconds,
     now: stores.clock,
+  });
+
+  // §10.2's plugin platform. Constructed after approvals (a raise is a §6.6 ask)
+  // and after the two registries a plugin's contributions land in, and started by
+  // `index.ts` rather than here — see `AppRuntime.plugins`.
+  const conditions = createConditionChecks(nodeCommandExec());
+  const plugins = new PluginService({
+    stores,
+    grants: new PluginGrantStore(db, stores.clock),
+    bus,
+    logger,
+    integrations: integrationRegistry,
+    conditions,
+    approvals,
+    inBox: config.pluginsInBox,
+    directory: config.pluginsDirectory,
   });
 
   const gate = createSessionGate({
@@ -221,7 +237,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     budgets,
     runtimes: createRuntimeRegistry(config, logger),
     workspaceKinds,
-    conditions: createConditionChecks(nodeCommandExec()),
+    conditions,
     hub,
     claims,
     gate,
@@ -338,6 +354,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", restorableRoutes(stores));
   app.route("/api", snapshotRoutes(stores));
   app.route("/api", integrationRoutes(integrations));
+  app.route("/api", pluginRoutes(plugins));
 
   mountWsRoute({ app, path: "/ws", upgradeWebSocket, bus, logger });
 
@@ -412,5 +429,6 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     stopNotifications: unsubscribeNotifications,
     integrations,
     integrationRefresh,
+    plugins,
   };
 }

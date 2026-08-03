@@ -28,6 +28,7 @@ import {
 } from "./fake-plugin.js";
 import { IntegrationRegistry } from "./registry.js";
 import { IntegrationService, type IntegrationApprovals } from "./service.js";
+import { createEventBus } from "../events/bus.js";
 import type { ApiStores } from "../routes/api.js";
 import { Logger } from "../logging/logger.js";
 
@@ -40,7 +41,7 @@ let fakeState: FakeIntegrationState;
 let registry: IntegrationRegistry;
 let stores: Pick<
   ApiStores,
-  "clock" | "objects" | "integrations" | "credentials" | "sessions"
+  "bus" | "clock" | "objects" | "integrations" | "credentials" | "sessions"
 >;
 let integrations: IntegrationService;
 let workstreamId: string;
@@ -65,6 +66,9 @@ beforeEach(() => {
   const credentials = new CredentialStore(db, clock.now);
   const sessions = new SessionStore(db, clock.now);
   stores = {
+    // Real, because every integration state change announces itself on the one
+    // event stream now (§9.1–§9.3) and a stub would make that unproven here.
+    bus: createEventBus(clock.now),
     clock: clock.now,
     objects,
     integrations: integrationStore,

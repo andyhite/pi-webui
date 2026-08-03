@@ -34,6 +34,10 @@ beforeEach(async () => {
         trustedOrigins: [],
         staticDir: join(tmpdir(), "plotroom-no-such-renderer-dir"),
         logLevel: "error",
+        // No plugin workers: this suite is about the graph's own mutations and the
+        // events they publish, and a plugin reporting its health on the same stream
+        // is noise here. `plugins/plugins.integration.test.ts` mounts them.
+        pluginsInBox: [],
       },
     ),
   );

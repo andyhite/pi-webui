@@ -44,6 +44,17 @@ export class ConditionCheckRegistry {
     this.#checkers.set(checker.predicate, checker);
   }
 
+  /**
+   * Take a checker away — what a plugin being disabled means (§10.2).
+   *
+   * A condition whose checker has gone is not quietly passed: `evaluate` answers
+   * "nobody checked, which is not proof" for a predicate it no longer knows, which
+   * is the same honest answer it gives for one nothing ever supplied.
+   */
+  unregister(predicate: string): void {
+    this.#checkers.delete(predicate);
+  }
+
   predicates(): readonly string[] {
     return [...this.#checkers.keys()];
   }

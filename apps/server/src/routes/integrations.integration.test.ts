@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   at,
-  boot,
+  boot as bootServer,
   cleanupHarnesses,
   list,
   str,
@@ -9,16 +9,31 @@ import {
 } from "../testing/harness.js";
 
 /**
- * The integration substrate, end to end (§9.1–§9.3, Epic 7.2).
+ * The integration substrate, end to end (§9.1–§9.3, Epics 7.2/7.3).
  *
- * Every server boot registers the fake/test producer directly (scope item 5):
- * `pluginId: "fake-plugin"`, `producerId: "fake-tickets"` — the direct-invocation
- * seam standing in for Track C's still-unfinished host. What is proved here is
- * that the substrate is actually **reached** over HTTP: connect, scope without
- * restart, refresh, disconnect, and — the property with no exception anywhere in
- * this file — a credential's value never once appears in a response body.
+ * Every boot in this file mounts one **real plugin in the real worker host**:
+ * `plugins/test-fixtures/fake-tickets-plugin.ts`, whose producer is `fake-tickets`
+ * and whose two write actions have opposite reversibility. That fixture replaced the
+ * in-process producer this suite was first written against, so the same assertions
+ * now prove the substrate is reached over HTTP **and across the worker boundary**:
+ * connect, scope without restart, refresh, disconnect, and — the property with no
+ * exception anywhere in this file — a credential's value never once appears in a
+ * response body.
  */
 afterEach(cleanupHarnesses);
+
+/** The fixture plugin, mounted as an in-box entry (§10.2's first channel). */
+const FAKE_PLUGIN = {
+  pluginId: "fake-plugin",
+  packageName: "fixture:fake-tickets-plugin.ts",
+  entry: new URL(
+    "../plugins/test-fixtures/fake-tickets-plugin.ts",
+    import.meta.url,
+  ).href,
+};
+
+const boot = (): Promise<Harness> =>
+  bootServer({ pluginsInBox: [FAKE_PLUGIN] });
 
 const SECRET = "sk-super-secret-token-do-not-log-me";
 

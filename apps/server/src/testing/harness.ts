@@ -147,6 +147,11 @@ export async function boot(
         trustedOrigins: [],
         staticDir: join(tmpdir(), "plotroom-no-such-renderer-dir"),
         logLevel: "error",
+        // No plugin workers unless the suite asks for them: a boot that started
+        // three worker threads no assertion mentions would make every suite pay
+        // for the plugin platform. `plugins.integration.test.ts` is where the
+        // in-box list and the fixtures are mounted deliberately.
+        pluginsInBox: [],
         ...overrides,
         runtime: { adapterId: "scripted", ...overrides.runtime },
         workspace: {
@@ -158,6 +163,9 @@ export async function boot(
     ),
   );
   await handle.recovered;
+  // Whatever plugins this boot was given have loaded and reported their health, so
+  // a test reads a settled `/api/plugins` rather than racing the workers.
+  await handle.pluginsBooted;
 
   const base = `http://127.0.0.1:${thisPort}/api`;
   const origin = `http://localhost:${thisPort}`;

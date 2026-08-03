@@ -8,20 +8,25 @@ import type {
 import type { IntegrationProducer } from "./registry.js";
 
 /**
- * The fake/test integration (Epic 7.2 scope item 5).
+ * The fake integration producer — **test-only, and in-process on purpose.**
  *
- * An in-repo fixture, usable without the finished plugin host — coordinate with
- * Track C's own test plugin at rebase; if C's host lands mid-batch, this is
- * ported onto it, and until then it is invoked directly through
- * {@link IntegrationRegistry}. **Say so, not paper over it**: nothing here
- * proves a worker-isolated plugin behaves — it proves the substrate around one
- * (refresh scheduling, reconciliation, write-action approval routing, read-back
- * honesty) behaves, against a producer shaped exactly like the draft contract
- * says a real one will be.
+ * The production path is worker-hosted: `plugins/producers.ts` builds every
+ * `IntegrationProducer` out of `PluginHost.invoke`, and nothing registers this one at
+ * boot any more. What is left for it is `service.test.ts`: `IntegrationService`'s
+ * rules — refresh scheduling, reconciliation through `ObjectStore`, write-action
+ * approval routing, read-back honesty — are transport-agnostic, and a unit test of
+ * them wants a producer whose state it can reach into mid-test (a record changing
+ * between refreshes, a source going unavailable, a write that does something other
+ * than what was asked). A worker boundary makes exactly that impossible, which is
+ * why the HTTP-level suite uses a real plugin instead:
+ * `plugins/test-fixtures/fake-tickets-plugin.ts` is this producer as a conforming
+ * manifest, loaded by the real host, and `routes/integrations.integration.test.ts`
+ * proves the same behaviours across the worker boundary.
  *
- * State is in-memory and mutated by calls, so a test can drive scenarios
- * (a record changing between refreshes, a source going unavailable, a write
- * that does something other than what was asked) without a real API.
+ * **Say what this does and does not prove**: nothing here shows a worker-isolated
+ * plugin behaves — `plugins/plugins.integration.test.ts` is where that is proven —
+ * it shows the substrate around one behaves, against a producer shaped exactly as
+ * the frozen contract says a real one is.
  */
 export interface FakeTicket {
   externalId: string;

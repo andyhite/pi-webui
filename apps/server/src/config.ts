@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_BRANCH_TEMPLATE } from "@plotroom/core";
+import { IN_BOX_PLUGINS, type InBoxPluginEntry } from "./plugins/in-box.js";
 
 /**
  * Server configuration (Epic 2.1, spec §11/§12).
@@ -65,6 +66,24 @@ export interface ServerConfig {
    * object) stays available regardless.
    */
   readonly integrationTickSeconds: number;
+  /**
+   * §10.2's configured plugins directory: one subdirectory per plugin, scanned on
+   * demand — at boot and on an operator gesture — and **never on a timer**
+   * (principle 2). Null means none is configured, which is the ordinary case: the
+   * in-box plugins need no directory. A plugin's id comes from its manifest, never
+   * from the directory name the operator can rename.
+   */
+  readonly pluginsDirectory: string | null;
+  /**
+   * Which plugins ship **in the box** (§10.2's first distribution channel).
+   *
+   * Configuration rather than a hard-coded call list so the set is data — Jira
+   * joins it by gaining a line in {@link IN_BOX_PLUGINS} — and so a test can boot a
+   * server with fixtures, or with none at all, instead of three worker threads it
+   * has no assertion about. There is no environment variable for it: which plugins
+   * the app ships is a property of the build, not of the machine it runs on.
+   */
+  readonly pluginsInBox: readonly InBoxPluginEntry[];
 }
 
 export interface RuntimeConfig {
@@ -162,6 +181,8 @@ export interface ServerConfigOverrides {
   readonly concurrencyLimit?: number;
   readonly attentionTickSeconds?: number;
   readonly integrationTickSeconds?: number;
+  readonly pluginsDirectory?: string | null;
+  readonly pluginsInBox?: readonly InBoxPluginEntry[];
 }
 
 export const DEFAULT_RUNTIME_ADAPTER = "pi-coding-agent";
@@ -332,6 +353,11 @@ export function loadServerConfig(
         env.PLOTROOM_INTEGRATION_TICK_SECONDS,
         DEFAULT_INTEGRATION_TICK_SECONDS,
       ),
+    pluginsInBox: overrides.pluginsInBox ?? IN_BOX_PLUGINS,
+    pluginsDirectory:
+      overrides.pluginsDirectory !== undefined
+        ? overrides.pluginsDirectory
+        : (env.PLOTROOM_PLUGINS_DIR ?? null),
     runtime: {
       adapterId:
         overrides.runtime?.adapterId ??

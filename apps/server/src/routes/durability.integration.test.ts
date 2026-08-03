@@ -90,6 +90,9 @@ async function boot(
         // The sweep is driven explicitly here; a schedule would make these
         // tests depend on wall-clock time.
         compactionIntervalSeconds: 0,
+        // No plugin workers: these suites assert nothing about plugins, and a
+        // worker per in-box plugin per boot is time nothing here spends usefully.
+        pluginsInBox: [],
         ...overrides,
         workspace: {
           kind: "git",

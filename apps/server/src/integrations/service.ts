@@ -24,6 +24,7 @@ import type {
 import { forbidden, notFound, refused } from "../http/errors.js";
 import type { Logger } from "../logging/logger.js";
 import type { ApiStores } from "../routes/api.js";
+import { isPluginRefusal } from "../plugins/errors.js";
 import {
   type IntegrationProducer,
   type IntegrationRegistry,
@@ -127,13 +128,14 @@ export class IntegrationService {
   connect(input: ConnectIntegrationInput, actor: Author): Integration {
     this.requireOperator(actor, "connecting an integration");
     const producer = this.requireProducer(input.producerId);
-    const integration = this.deps.stores.integrations.connect({
+    const connected = this.deps.stores.integrations.connect({
       pluginId: input.pluginId,
       producerId: input.producerId,
       name: input.name,
       system: producer.id,
       scope: input.scope ?? null,
     });
+    const integration = this.publish(connected, "created", actor);
 
     if (
       input.credentialName !== undefined &&
@@ -157,12 +159,42 @@ export class IntegrationService {
     this.requireOperator(actor, "disconnecting an integration");
     const integration = this.deps.stores.integrations.disconnect(id);
     this.deps.stores.credentials.clear(id);
-    return integration;
+    return this.publish(integration, "updated", actor);
   }
 
   updateScoping(id: string, scope: string | null, actor: Author): Integration {
     this.requireOperator(actor, "updating an integration's scoping");
-    return this.deps.stores.integrations.updateScoping(id, scope);
+    return this.publish(
+      this.deps.stores.integrations.updateScoping(id, scope),
+      "updated",
+      actor,
+    );
+  }
+
+  /**
+   * Announce an integration's own state on the one event stream (§9.1–§9.3).
+   *
+   * The `integration` entity was in `@plotroom/core`'s vocabulary from the start and
+   * nothing published it, which had one consequence worth naming rather than living
+   * with: a connection **breaking** is one of §7.2's five health alerts, and the
+   * attention derivation re-derives when something is *observed* to change. With no
+   * event, a broken connection waited for the slow tick (up to
+   * `PLOTROOM_ATTENTION_TICK_SECONDS`) before it reached the queue — a stall the
+   * operator sees late for no reason. Publishing here is what makes it immediate;
+   * the derivation is still a read and still initiates nothing (principle 2).
+   */
+  private publish(
+    integration: Integration,
+    verb: "created" | "updated",
+    author: Author = { kind: "human" },
+  ): Integration {
+    this.deps.stores.bus.publish({
+      entity: "integration",
+      verb,
+      integration,
+      author,
+    });
+    return integration;
   }
 
   /**
@@ -213,8 +245,18 @@ export class IntegrationService {
         this.buildCallContext(null),
       );
     } catch (error) {
+      // A refusal the **host** made before the plugin ran the call is not a broken
+      // connection (§10.2 vs §9.3): an unanswered permission, a denied one, an
+      // unknown contribution. Marking the integration broken for one of those would
+      // send the operator to re-enter a credential that was never the problem, and
+      // would report a plugin state as a connection state. It travels on as the
+      // answer it already is — the ask, or the refusal.
+      if (isPluginRefusal(error)) throw error;
       const reason = error instanceof Error ? error.message : String(error);
-      const broken = this.deps.stores.integrations.markBroken(id, reason);
+      const broken = this.publish(
+        this.deps.stores.integrations.markBroken(id, reason),
+        "updated",
+      );
       this.deps.logger.warn("integration refresh failed", {
         integrationId: id,
         reason,
@@ -233,7 +275,10 @@ export class IntegrationService {
       written += 1;
     }
 
-    const refreshed = this.deps.stores.integrations.markRefreshed(id);
+    const refreshed = this.publish(
+      this.deps.stores.integrations.markRefreshed(id),
+      "updated",
+    );
     return {
       ok: true,
       integration: refreshed,
