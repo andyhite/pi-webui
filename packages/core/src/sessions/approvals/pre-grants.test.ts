@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { humanAuthor, sessionAuthor } from "../../author.js";
 import { session, ws } from "../../claims/testing.js";
-import { destructionAsk, toolCallAsk, type ApprovalAsk } from "./ask.js";
+import {
+  destructionAsk,
+  proposalAsk,
+  toolCallAsk,
+  type ApprovalAsk,
+} from "./ask.js";
 import type { PreGrantId } from "./ids.js";
 import {
   ALL_APPROVAL_EXTENTS,
@@ -112,6 +117,41 @@ describe("declaring a pre-grant (§6.6)", () => {
     });
     expect(refused.ok).toBe(false);
     if (!refused.ok) expect(refused.refusal.reason).toBe("covers_nothing");
+  });
+
+  it("refuses one over proposals, rather than recording a grant that could never fire (§3.8)", () => {
+    const refused = declarePreGrant({
+      id: "pregrant_x" as PreGrantId,
+      scope: { kind: "session", sessionId: A },
+      effect: "allow",
+      kinds: ["standing-instruction"],
+      by: humanAuthor,
+      at: 1,
+    });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.refusal.reason).toBe("proposals_not_pre_grantable");
+    }
+
+    // And generalizing from one is the same refusal, named the same way: an
+    // operator answering a proposal is never also declaring a standing rule.
+    const generalized = declarePreGrant({
+      id: "pregrant_y" as PreGrantId,
+      scope: { kind: "session", sessionId: A },
+      effect: "allow",
+      kinds: ["tool-permission"],
+      by: humanAuthor,
+      at: 1,
+      generalizing: proposalAsk({
+        proposalId: "proposal_1",
+        tool: "standing_instruction_declare",
+        summary: "apply everywhere",
+      }),
+    });
+    expect(generalized.ok).toBe(false);
+    if (!generalized.ok) {
+      expect(generalized.refusal.reason).toBe("proposals_not_pre_grantable");
+    }
   });
 
   it("refuses to generalize from an irreversible ask rather than accepting a grant that would never fire", () => {
@@ -318,6 +358,20 @@ describe("irreversibility pierces pre-grants (§6.6, §9.2)", () => {
     expect(pierced?.description).toContain("github_*");
     // Nothing to pierce when the ask can be covered honestly.
     expect(preGrantPiercedBy([covering], commentAsk, subject)).toBeNull();
+  });
+
+  it("has no pre-grantable form for a proposal, so nothing can cover one (§3.8)", () => {
+    // Principle 1's own rule, structurally: a proposal is confirmed, never applied
+    // silently, so "allow always" must have no expression that reaches one.
+    expect(
+      preGrantable(
+        proposalAsk({
+          proposalId: "proposal_1",
+          tool: "standing_instruction_declare",
+          summary: "apply everywhere",
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("cannot be asked for a coverage verdict on an irreversible ask, at all", () => {

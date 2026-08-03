@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { humanAuthor, sessionAuthor } from "../../author.js";
 import { session, ws } from "../../claims/testing.js";
 import { answerApproval, raiseApproval } from "./approval.js";
-import { claimAsk, destructionAsk, toolCallAsk } from "./ask.js";
+import { claimAsk, destructionAsk, proposalAsk, toolCallAsk } from "./ask.js";
 import { decideApproval } from "./decide.js";
 import type { ApprovalId, PreGrantId } from "./ids.js";
 import { ALL_APPROVAL_EXTENTS, type PreGrant } from "./pre-grants.js";
@@ -276,5 +276,72 @@ describe("decideApproval (§6.6)", () => {
       summary: "claim migrations for sess_a",
     });
     expect(decideApproval(ask, context).kind).toBe("must-ask");
+  });
+
+  it("asks for a proposal in its own words, and no pre-grant can answer for one (§3.8)", () => {
+    const ask = proposalAsk({
+      proposalId: "proposal_1",
+      tool: "standing_instruction_declare",
+      summary: "sess_a proposes that obj_1 apply everywhere",
+    });
+
+    // Even a grant that names every kind and every tool: coverage for a proposal
+    // has no expression at all, so this asks (principle 1).
+    const verdict = decideApproval(ask, {
+      ...context,
+      preGrants: [
+        preGrant({
+          kinds: [
+            "tool-permission",
+            "integration-write",
+            "destruction",
+            "claim",
+          ],
+        }),
+      ],
+    });
+    expect(verdict.kind).toBe("must-ask");
+    if (verdict.kind === "must-ask") {
+      expect(verdict.pierced).toBeNull();
+      expect(verdict.reason).toContain("never applied silently");
+      // Not the irreversible-write sentence: nothing here is about undoing.
+      expect(verdict.reason).not.toContain("cannot be undone");
+    }
+  });
+
+  it("is not settled by an approval of another kind over the same tool name (§3.8)", () => {
+    // A proposal's tool name is a real tool name, so tool-and-target matching alone
+    // would let a write-gate raise over `standing_instruction_declare` settle the
+    // proposal — applying it without anybody confirming it.
+    const proposal = proposalAsk({
+      proposalId: "proposal_1",
+      tool: "standing_instruction_declare",
+      summary: "sess_a proposes that obj_1 apply everywhere",
+    });
+    const permission = toolCallAsk({
+      toolName: "standing_instruction_declare",
+      summary: "standing_instruction_declare",
+      intent: { kind: "unbounded", reason: "undeclared" },
+      world: null,
+    });
+    const approvedPermission = answerApproval(
+      raiseApproval({
+        id: "appr_4" as ApprovalId,
+        sessionId: A,
+        workstreamId: W,
+        ask: permission,
+        at: 10,
+      }),
+      { decision: "approve-once", by: humanAuthor, at: 11 },
+    );
+    expect(approvedPermission.ok).toBe(true);
+    if (!approvedPermission.ok) return;
+
+    expect(
+      decideApproval(proposal, {
+        ...context,
+        approval: approvedPermission.value,
+      }).kind,
+    ).toBe("must-ask");
   });
 });

@@ -28,7 +28,7 @@ import { isIrreversibleWrite } from "../outside-world.js";
  * **write-gate raise** for a tool whose write extent nothing declared
  * (`decideToolPermission`). They are the same event to the operator, so they are
  * one record here with a `kind`, and the attention feed renders one row shape
- * (§7.1). The kinds are not four subsystems; they are four things a session can
+ * (§7.1). The kinds are not five subsystems; they are five things a session can
  * be asking for.
  */
 export const APPROVAL_KINDS = [
@@ -40,6 +40,20 @@ export const APPROVAL_KINDS = [
   "destruction",
   /** A write to an external system, whose reversibility is declared (§9.2). */
   "integration-write",
+  /**
+   * A **proposal**: a call whose target includes the caller, so the session
+   * proposes and a human accepts (principle 1, §3.8 — a standing instruction is
+   * its worked example, and what named this kind).
+   *
+   * Its own kind rather than a `tool-permission` raise carrying the proposal id:
+   * this vocabulary is what every attention surface, every pre-grant, and every
+   * outbound route reads, and a row whose kind said "tool-permission" and meant
+   * "proposal" would be one word doing two jobs. It is the one kind **nothing can
+   * pre-grant** — `preGrantable` cannot produce a coverage check for it, because an
+   * "allow always" over proposals would apply them silently, which is the one thing
+   * principle 1 says a proposal must never be.
+   */
+  "standing-instruction",
 ] as const;
 
 export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
@@ -90,6 +104,13 @@ export const APPROVAL_TRIGGERS = [
   "outside-policy",
   /** A session destroying authored state (§6.6, principle 10). */
   "destruction",
+  /**
+   * The call's target includes the caller, so nothing narrower could authorize it
+   * (principle 1). Distinct from `"none"`, which says nothing would have raised
+   * this: a proposal always asks, and there is no configuration under which it
+   * would not.
+   */
+  "self-proposal",
 ] as const;
 
 export type ApprovalTrigger = (typeof APPROVAL_TRIGGERS)[number];
@@ -272,6 +293,36 @@ export function destructionAsk(input: {
     paths: [],
     world: null,
     target: input.target,
+  };
+}
+
+/**
+ * The ask behind a session's proposal (§3.8, principle 1).
+ *
+ * The proposal **is** the target, so answering settles that proposal and no other —
+ * the precision `settlesAsk` gives a destruction ask, for the same reason. The
+ * summary is the sentence core already words for the proposal
+ * (`describeStandingInstructionProposal`), so no surface words it twice (§7.1).
+ *
+ * Write extent `none`, and truthfully: accepting authors a marker in PlotRoom's own
+ * graph and writes no path anywhere (§3.4 governs paths). It still always asks —
+ * `trigger` is `"self-proposal"`, never `"none"` — and it cannot be pre-granted at
+ * all, which is enforced where coverage is computed rather than restated here.
+ */
+export function proposalAsk(input: {
+  readonly proposalId: string;
+  readonly tool: string;
+  readonly summary: string;
+}): ApprovalAsk {
+  return {
+    kind: "standing-instruction",
+    trigger: "self-proposal",
+    tool: input.tool,
+    summary: input.summary,
+    writeExtent: "none",
+    paths: [],
+    world: null,
+    target: { kind: "proposal", id: input.proposalId },
   };
 }
 

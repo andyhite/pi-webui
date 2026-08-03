@@ -209,11 +209,19 @@ export function isApprovalAnswered(approval: Approval): boolean {
  * rather than at each call site so the destruction path, the gate, and whatever Track
  * A wires next cannot each get it slightly differently.
  *
- * Matched on the two facts that identify the gesture: the tool, and the record it
- * would act on. Deliberately not the summary — wording is for humans, and matching on
- * it would make a reworded row stop settling its own call.
+ * Matched on the facts that identify the gesture: the **kind** of thing being asked
+ * for, the tool, and the record it would act on. Deliberately not the summary —
+ * wording is for humans, and matching on it would make a reworded row stop settling
+ * its own call.
+ *
+ * The kind is part of the match because two kinds can name one tool and mean
+ * different acts: a `standing_instruction_declare` **proposal** (§3.8) and a
+ * write-gate raise over the same name are not each other's answers, and a proposal
+ * settled by anything but its own acceptance would be applied without being
+ * confirmed (principle 1).
  */
 export function settlesAsk(approval: Approval, ask: ApprovalAsk): boolean {
+  if (approval.ask.kind !== ask.kind) return false;
   if (approval.ask.tool !== ask.tool) return false;
   return sameTarget(approval.ask.target, ask.target);
 }

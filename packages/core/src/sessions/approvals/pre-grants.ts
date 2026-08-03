@@ -96,6 +96,12 @@ export const ALL_APPROVAL_EXTENTS: readonly ApprovalWriteExtent[] = [
  * the code refuses at runtime — it is something no call site can write down.
  * `pre-grants.test.ts` asserts the `@ts-expect-error`, which is what keeps it
  * structural rather than incidental.
+ *
+ * A **proposal** (§3.8's `standing-instruction` kind) is the second thing it returns
+ * `null` for, and for a reason of the same shape: "the agent proposes and a human
+ * accepts; a proposal is confirmed, never applied silently" (principle 1). An
+ * "allow always" covering proposals would apply them silently, so there must be no
+ * expression of coverage for one anywhere.
  */
 declare const preGrantableBrand: unique symbol;
 
@@ -112,7 +118,16 @@ export type PreGrantableAsk = ApprovalAsk & {
  */
 export function preGrantable(ask: ApprovalAsk): PreGrantableAsk | null {
   if (isIrreversibleAsk(ask)) return null;
+  if (isProposalAsk(ask)) return null;
   return ask as PreGrantableAsk;
+}
+
+/**
+ * Whether this ask is a proposal, in one place so the refusal below and the
+ * coverage gate above cannot disagree about which kind that is (principle 8).
+ */
+export function isProposalAsk(ask: ApprovalAsk): boolean {
+  return ask.kind === "standing-instruction";
 }
 
 export type PreGrantVerdict =
@@ -222,6 +237,14 @@ export const PRE_GRANT_REFUSAL_REASONS = [
    * message that says why (§6.6).
    */
   "irreversible_not_pre_grantable",
+  /**
+   * The declaration names the proposal kind. Refused for the same reason and with
+   * the same shape: `preGrantable` can never produce a coverage check for one, so a
+   * grant that named it would read as "proposals are pre-approved" and behave as
+   * absent — and a proposal applied without being confirmed is precisely what
+   * principle 1 forbids (§3.8).
+   */
+  "proposals_not_pre_grantable",
 ] as const;
 
 export type PreGrantRefusalReason = (typeof PRE_GRANT_REFUSAL_REASONS)[number];
@@ -277,9 +300,22 @@ export function declarePreGrant(
     };
   }
   if (
+    input.kinds.includes("standing-instruction") ||
+    (input.generalizing !== undefined && isProposalAsk(input.generalizing))
+  ) {
+    return {
+      ok: false,
+      refusal: {
+        reason: "proposals_not_pre_grantable",
+        message:
+          "a proposal is confirmed by a human, never applied silently, so it cannot be pre-granted — accepting one is the gesture (§3.8, principle 1)",
+      },
+    };
+  }
+  if (
     input.effect === "allow" &&
     input.generalizing !== undefined &&
-    preGrantable(input.generalizing) === null
+    isIrreversibleAsk(input.generalizing)
   ) {
     return {
       ok: false,

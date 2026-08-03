@@ -60,6 +60,8 @@ import type {
   PreGrant,
   QuestionOption,
   SessionQuestion,
+  StandingInstruction,
+  StandingInstructionOptIn,
 } from "./sessions/index.js";
 import type { QueuedRun, Run, RunBatch } from "./runs.js";
 import type {
@@ -128,6 +130,19 @@ export const EVENT_ENTITIES = [
   "approval",
   /** A standing decision about capability, declared or withdrawn (§6.6). */
   "pre_grant",
+  /**
+   * Content marked as applying everywhere, or retired (§3.8). Its own entity
+   * because it belongs to no workstream: it is world-scoped by construction, and
+   * every opted-in workstream's next assembly changes when it does.
+   */
+  "standing_instruction",
+  /**
+   * One workstream's opt-in or opt-out (§3.8). Separate from the instruction
+   * because it is a different decision by a different author — what a workstream's
+   * sessions know, decided per workstream (principle 1) — and a surface drawing the
+   * toggle has to hear one move without refetching the other.
+   */
+  "standing_instruction_opt_in",
   /**
    * One row of the attention derivation (§7). Full-entity like everything else
    * here, keyed by the item's own stable id — so applying one twice changes
@@ -469,6 +484,23 @@ export type DomainEventBody =
       readonly entity: "pre_grant";
       readonly verb: "created" | "deleted";
       readonly preGrant: PreGrant;
+    }
+  /**
+   * A standing instruction declared (`created`) or retired (`updated`, carrying
+   * `retiredAt`). There is no `deleted`: markers retire rather than being removed,
+   * so "retired yesterday" and "never standing" stay different facts (§3.8).
+   */
+  | {
+      readonly entity: "standing_instruction";
+      readonly verb: "created" | "updated";
+      readonly instruction: StandingInstruction;
+      /** The object whose content applies everywhere, so a row can name it. */
+      readonly objectId: ObjectId;
+    }
+  | {
+      readonly entity: "standing_instruction_opt_in";
+      readonly verb: "created" | "updated";
+      readonly optIn: StandingInstructionOptIn;
     }
   | {
       readonly entity: "attention";

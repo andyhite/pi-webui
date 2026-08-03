@@ -4,6 +4,7 @@ import { settlesAsk, type Approval } from "./approval.js";
 import {
   describePreGrant,
   evaluatePreGrants,
+  isProposalAsk,
   preGrantable,
   preGrantPiercedBy,
   type PiercedPreGrant,
@@ -117,6 +118,20 @@ export function decideApproval(
   }
 
   const preGrants = context.preGrants ?? [];
+
+  // A proposal asks, and says so in its own words. It reaches the same `must-ask`
+  // as an irreversible write and for a rule of the same shape (nothing declared in
+  // advance can cover it), but "cannot be undone" is not why: a proposal is
+  // confirmed by a human, never applied silently (principle 1, §3.8). Named here so
+  // the sentence the operator reads is about what is actually being asked.
+  if (isProposalAsk(ask)) {
+    return {
+      kind: "must-ask",
+      ask,
+      pierced: null,
+      reason: `${describeAsk(ask)} — a proposal is confirmed by a human, never applied silently, and nothing pre-granted covers one (§3.8, principle 1)`,
+    };
+  }
 
   // §6.6, structurally: there is no `PreGrantableAsk` for an irreversible ask, so
   // the pre-grants below are unreachable for one. The pierced rule is named in the
