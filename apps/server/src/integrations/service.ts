@@ -104,7 +104,10 @@ export type PerformWriteOutcome =
  * Three responsibilities, each traced to a spec section in its method:
  *
  * - **connect/disconnect/updateScoping** (§9.1, §9.3): the connect-flow state
- *   machine, over `IntegrationStore` and `CredentialStore`.
+ *   machine, over `IntegrationStore` and `CredentialStore` — **operator-only**,
+ *   enforced here by the request's actor (mirroring `ClaimService`'s own
+ *   `requireOperator`, `claims/service.ts`), not by a catalog flag alone,
+ *   because a flag describes and this is the gate.
  * - **refresh** (§9.1, §3.2): a read, reconciled through `ObjectStore` —
  *   external identity reconciles, identical content writes nothing, changed
  *   content bumps a version and therefore drifts. A failed read marks the
@@ -121,7 +124,8 @@ export class IntegrationService {
     return this.deps.registry.list();
   }
 
-  connect(input: ConnectIntegrationInput): Integration {
+  connect(input: ConnectIntegrationInput, actor: Author): Integration {
+    this.requireOperator(actor, "connecting an integration");
     const producer = this.requireProducer(input.producerId);
     const integration = this.deps.stores.integrations.connect({
       pluginId: input.pluginId,
@@ -149,14 +153,31 @@ export class IntegrationService {
     return integration;
   }
 
-  disconnect(id: string): Integration {
+  disconnect(id: string, actor: Author): Integration {
+    this.requireOperator(actor, "disconnecting an integration");
     const integration = this.deps.stores.integrations.disconnect(id);
     this.deps.stores.credentials.clear(id);
     return integration;
   }
 
-  updateScoping(id: string, scope: string | null): Integration {
+  updateScoping(id: string, scope: string | null, actor: Author): Integration {
+    this.requireOperator(actor, "updating an integration's scoping");
     return this.deps.stores.integrations.updateScoping(id, scope);
+  }
+
+  /**
+   * A session cannot connect, disconnect, or rescope an integration — a
+   * credential is entered at connect (§9.3) and scoping is a standing
+   * configuration change, neither of which is a gesture the spec gives an
+   * agent (principle 1). Enforced by the actor on the request, the same
+   * convention `ClaimService.requireOperator` uses, rather than left to the
+   * tool catalog's `humanOnly` flag to describe alone.
+   */
+  private requireOperator(actor: Author, gesture: string): void {
+    if (actor.kind === "human") return;
+    throw forbidden(
+      `${gesture} is the operator's gesture; a session cannot make it (§9.3)`,
+    );
   }
 
   list(): readonly Integration[] {

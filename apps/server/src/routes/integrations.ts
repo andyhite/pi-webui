@@ -59,18 +59,21 @@ export function integrationRoutes(
 
   app.post("/integrations", validateJsonBody(connectBody), (c) => {
     const input = body<z.infer<typeof connectBody>>(c);
-    const integration = integrations.connect({
-      pluginId: input.pluginId,
-      producerId: input.producerId,
-      name: input.name,
-      scope: input.scope ?? null,
-      ...(input.credentialName === undefined
-        ? {}
-        : { credentialName: input.credentialName }),
-      ...(input.credentialValue === undefined
-        ? {}
-        : { credentialValue: input.credentialValue }),
-    });
+    const integration = integrations.connect(
+      {
+        pluginId: input.pluginId,
+        producerId: input.producerId,
+        name: input.name,
+        scope: input.scope ?? null,
+        ...(input.credentialName === undefined
+          ? {}
+          : { credentialName: input.credentialName }),
+        ...(input.credentialValue === undefined
+          ? {}
+          : { credentialValue: input.credentialValue }),
+      },
+      actorOf(c),
+    );
     return c.json({ integration }, 201);
   });
 
@@ -86,13 +89,13 @@ export function integrationRoutes(
   app.patch("/integrations/:id", validateJsonBody(scopingBody), (c) => {
     const id = param(c, "id");
     const input = body<z.infer<typeof scopingBody>>(c);
-    const integration = integrations.updateScoping(id, input.scope);
+    const integration = integrations.updateScoping(id, input.scope, actorOf(c));
     return c.json({ integration });
   });
 
   app.post("/integrations/:id/disconnect", (c) => {
     const id = param(c, "id");
-    const integration = integrations.disconnect(id);
+    const integration = integrations.disconnect(id, actorOf(c));
     return c.json({ integration });
   });
 

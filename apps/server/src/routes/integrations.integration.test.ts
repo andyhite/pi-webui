@@ -111,6 +111,52 @@ describe("connect flow (§9.3)", () => {
   });
 });
 
+describe("connect / scoping / disconnect are operator-only (§9.3, principle 1)", () => {
+  it("refuses a session actor's connect with a 403", async () => {
+    const harness = await boot();
+    const result = await harness.call("/integrations", {
+      method: "POST",
+      body: {
+        pluginId: "fake-plugin",
+        producerId: "fake-tickets",
+        name: "Fake tickets",
+      },
+      actor: "session:session-1",
+    });
+    expect(result.status).toBe(403);
+  });
+
+  it("refuses a session actor's scoping update with a 403", async () => {
+    const harness = await boot();
+    const { id } = await connectFake(harness);
+
+    const result = await harness.call(`/integrations/${id}`, {
+      method: "PATCH",
+      body: { scope: 'status = "open"' },
+      actor: "session:session-1",
+    });
+    expect(result.status).toBe(403);
+
+    // Unchanged: the operator-only refusal never took effect.
+    const got = await harness.ok(`/integrations/${id}`);
+    expect(at(got, "integration.scope")).toBeNull();
+  });
+
+  it("refuses a session actor's disconnect with a 403", async () => {
+    const harness = await boot();
+    const { id } = await connectFake(harness);
+
+    const result = await harness.call(`/integrations/${id}/disconnect`, {
+      method: "POST",
+      actor: "session:session-1",
+    });
+    expect(result.status).toBe(403);
+
+    const got = await harness.ok(`/integrations/${id}`);
+    expect(at(got, "integration.connectionState")).toBe("connected");
+  });
+});
+
 describe("refresh (§9.1) — manual, per integration and per object", () => {
   it("refreshes a whole integration on demand", async () => {
     const harness = await boot();

@@ -88,22 +88,28 @@ afterEach(() => {
 });
 
 function connect() {
-  return integrations.connect({
-    pluginId: "fake-plugin",
-    producerId: "fake-tickets",
-    name: "Fake tickets",
-  });
+  return integrations.connect(
+    {
+      pluginId: "fake-plugin",
+      producerId: "fake-tickets",
+      name: "Fake tickets",
+    },
+    humanAuthor,
+  );
 }
 
 describe("connect / disconnect / scoping", () => {
   it("connects, stores a credential, and never returns its value from any read", () => {
-    const integration = integrations.connect({
-      pluginId: "fake-plugin",
-      producerId: "fake-tickets",
-      name: "Fake tickets",
-      credentialName: "api-token",
-      credentialValue: "sk-super-secret",
-    });
+    const integration = integrations.connect(
+      {
+        pluginId: "fake-plugin",
+        producerId: "fake-tickets",
+        name: "Fake tickets",
+        credentialName: "api-token",
+        credentialValue: "sk-super-secret",
+      },
+      humanAuthor,
+    );
 
     expect(JSON.stringify(integration)).not.toContain("sk-super-secret");
     expect(JSON.stringify(integrations.list())).not.toContain(
@@ -116,7 +122,7 @@ describe("connect / disconnect / scoping", () => {
 
   it("updates scoping without touching connection state, and it takes effect on the next read (§9.1: no restart)", async () => {
     const integration = connect();
-    integrations.updateScoping(integration.id, 'status = "open"');
+    integrations.updateScoping(integration.id, 'status = "open"', humanAuthor);
     const outcome = await integrations.refresh(integration.id);
     expect(outcome.ok).toBe(true);
     // The producer's own `read` receives whatever scope is on the row *right
@@ -125,15 +131,46 @@ describe("connect / disconnect / scoping", () => {
   });
 
   it("disconnecting clears credentials", () => {
-    const integration = integrations.connect({
-      pluginId: "fake-plugin",
-      producerId: "fake-tickets",
-      name: "Fake tickets",
-      credentialName: "api-token",
-      credentialValue: "sk-super-secret",
-    });
-    integrations.disconnect(integration.id);
+    const integration = integrations.connect(
+      {
+        pluginId: "fake-plugin",
+        producerId: "fake-tickets",
+        name: "Fake tickets",
+        credentialName: "api-token",
+        credentialValue: "sk-super-secret",
+      },
+      humanAuthor,
+    );
+    integrations.disconnect(integration.id, humanAuthor);
     expect(stores.credentials.names(integration.id)).toEqual([]);
+  });
+
+  it("refuses a session actor's connect, disconnect, and scoping update (§9.3, principle 1)", () => {
+    expect(() =>
+      integrations.connect(
+        {
+          pluginId: "fake-plugin",
+          producerId: "fake-tickets",
+          name: "Fake tickets",
+        },
+        sessionAuthor("session-1" as never),
+      ),
+    ).toThrow(/operator/);
+
+    const integration = connect();
+    expect(() =>
+      integrations.disconnect(
+        integration.id,
+        sessionAuthor("session-1" as never),
+      ),
+    ).toThrow(/operator/);
+    expect(() =>
+      integrations.updateScoping(
+        integration.id,
+        'status = "open"',
+        sessionAuthor("session-1" as never),
+      ),
+    ).toThrow(/operator/);
   });
 });
 
@@ -268,7 +305,7 @@ describe("dueForScheduledRefresh — reads only, never runs (principle 2)", () =
 
   it("excludes a disconnected integration", async () => {
     const integration = connect();
-    integrations.disconnect(integration.id);
+    integrations.disconnect(integration.id, humanAuthor);
     expect(integrations.dueForScheduledRefresh(clock.now())).toEqual([]);
   });
 });
