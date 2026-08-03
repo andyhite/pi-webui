@@ -2209,15 +2209,17 @@ hidden, and panels/palette entries as declarations until their dispatch lands._
 - [x] Declared refresh modes: interval / on-demand / observed; manual refresh per integration and per object; **scheduled reads only, never scheduled runs** (§9.1, principle 2)
 - [x] Runtime-configurable scoping in the source's query language (§9.1)
 - [ ] Refresh → version bump → drift; changes as deltas (§9.1, §3.2) — _the version-bump/drift half landed and is tested; the delta half is a deferral, see the landed-note_
-- [x] Writes: UI action + agent tool per write, reversibility declared per action, results read back never assumed (§9.2)
-- [x] In-app connect flows; visible connection state; broken connection = health problem, never missing data (§9.3)
+- [x] Writes: UI action + agent tool per write, reversibility declared per action, results read back never assumed (§9.2) — _the **API and agent-tool** half landed here (Track A): `POST /integrations/:id/write-actions/:actionId` is the one endpoint both a UI action and an agent tool call, with the approval routing and the read-back fix below. **The UI action surface itself is Track B's**, this batch — not built here, and the tick is for the substrate a UI plugs into, not a rendered button_
+- [x] In-app connect flows; visible connection state; broken connection = health problem, never missing data (§9.3) — _the **API** half landed here (Track A): connect/disconnect/scoping-update, `connectionState`, and the broken-connection health alert are all real and tested. **The in-app connect *flow* — the UI that walks an operator through it — is Track B's**, this batch; nothing here renders a form_
 - [x] Concepts present-or-absent, never degraded (§3.1)
 
 _**Landed in Batch 5 (Track A), against the plugin-contract draft
-(`packages/plugin-sdk/src/draft/`), not the frozen contract — Epic 7.1 has not
-frozen anything yet.** `apps/server/src/integrations/` is the substrate:
+(`packages/plugin-sdk/src/draft/`) and reconciled onto the frozen v1 contract
+(`packages/plugin-sdk/src/contract/`, `docs/plugin-contract.md`) at rebase, once
+Epic 7.1 froze it.** `apps/server/src/integrations/` is the substrate:
 `IntegrationRegistry` (the direct-invocation seam standing in for Track C's
-still-unfinished host, which speaks only load/ping/dispose), `IntegrationService`
+plugin host — real and frozen since this rebase, but not yet wired to this
+registry; see the deferred note below), `IntegrationService`
 (connect/disconnect/scoping, refresh with reconciliation through `ObjectStore`,
 and write-action execution with a read-back that is never assumed), and
 `refresh-job.ts` (the scheduled-read tick, timers injected, structurally unable
@@ -2240,36 +2242,51 @@ nothing until an operator connects it, and its `comment` write action
 deliberately mutates differently than asked (appends a system note) so the
 read-back tests prove honesty rather than an echo.
 
-**Deviations from the draft, recorded rather than silently patched into
-Track C's subtree:**
+**Deviations from the frozen contract, recorded rather than silently patched
+into Track C's subtree (reconciled at rebase; see `docs/plugin-contract.md`
+§7 for the draft's full deviation list):**
 
-- `DraftRenderings.card` is `string`; `@plotroom/core`'s `Renderings.card` is
-  `Readonly<Record<string, unknown>>`. Bridged in `registry.ts`'s
-  `toCoreRenderings` (parses as JSON, falls back to `{ text: <string> }`).
-- `DraftConceptKind` spells one member `"pull-request"`; `@plotroom/core`'s
-  `ObjectKind` spells it `"pull_request"`. Bridged by `toCoreObjectKind`.
-- `DraftConceptProducer`/`DraftWriteAction` name no plugin; `IntegrationProducer`
-  (this package) adds `pluginId`, additively.
+- The contract's `Renderings.card` is `string`; `@plotroom/core`'s
+  `Renderings.card` is `Readonly<Record<string, unknown>>`. Bridged in
+  `registry.ts`'s `toCoreRenderings` (parses as JSON, falls back to
+  `{ text: <string> }`) — unchanged by the freeze, so the bridge stays.
+- The draft's `DraftConceptKind` spelled one member `"pull-request"` against
+  `@plotroom/core`'s `"pull_request"`; the freeze corrected the contract's
+  `ConceptKind` to match core exactly (§7.13), so the former `toCoreObjectKind`
+  bridge is **deleted at this rebase** rather than kept as an identity
+  function — a producer's declared kind is a core kind, no translation.
+- `ConceptProducer`/`WriteAction` name no plugin; `IntegrationProducer` (this
+  package) adds `pluginId`, additively — unchanged by the freeze.
+- The frozen contract added a mandatory `PluginCallContext` as the last
+  argument to `read`/`perform` (§7.5) and a mandatory `permissions` list per
+  contribution (§7.7), neither of which the draft had. The direct-invocation
+  seam builds a minimal context per call (`IntegrationService.buildCallContext`
+  — an invocation id, the calling session's actor when a session's write-action
+  call is what is running and `null` otherwise, no credentials or grants wired
+  yet); the fake/test producer declares `permissions: []` on every
+  contribution, having none to declare.
 
 **Deferred, and what it waits on:**
 
-- **Per-kind delta expression** (`DraftContentRenderer.renderDelta`) is not
-  wired: the draft has no `DraftContentRenderer` registered anywhere in this
-  substrate, so every refresh writes full content and lets `ObjectStore`'s own
+- **Per-kind delta expression** (the contract's `ContentRenderer.renderDelta`)
+  is not wired: no `ContentRenderer` is registered anywhere in this substrate,
+  so every refresh writes full content and lets `ObjectStore`'s own
   `chooseDelta` decide there is no delta to prefer. Version bump and drift are
   real and tested; "four new review comments arrived" being smaller than a
   re-rendered pull request is not, because no in-box plugin needing it has
   landed yet (Epic 7.3, Track C, later this batch). The seam
   (`ObjectStore.write`'s `delta` parameter) already exists from Epic 1.1 and
   takes a delta the moment a producer offers one.
-- **A real, worker-isolated plugin host** is Track C's Epic 7.1, still
-  in-flight. `IntegrationRegistry` is same-process and says so on every
-  export; when the host lands, it is the thing that calls `register` with a
-  worker-backed producer, and nothing above the registry changes.
-- **The permission-grant UX** (declared but not decided, per
-  `docs/plugin-contract-draft.md`) is not implemented: connecting the fake
-  producer stores a credential with no grant dialog, because there is no
-  grant model yet to route through.
+- **A real, worker-isolated plugin host now exists** (Track C's Epic 7.1 froze
+  it this batch), but this substrate is not wired to it yet —
+  `IntegrationRegistry` is still the same-process direct-invocation seam and
+  says so on every export. Wiring `register` to a worker-backed producer
+  through the frozen host is the next step, and nothing above the registry
+  changes when it happens.
+- **The permission-grant UX** (declared but not decided — see AGENTS.md's
+  "Decided" log for Epic 7.1's plugin distribution/permission-grant record) is
+  not implemented: connecting the fake producer stores a credential with no
+  grant dialog, because there is no grant model yet to route through.
 - **The four in-box plugins** (git, GitHub, filesystem, Jira) build on this
   substrate next (Epic 7.3): each is a real `IntegrationProducer` (and, for
   GitHub/Jira, `writeActions`) registered the same way the fake one is._
