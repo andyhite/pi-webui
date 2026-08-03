@@ -37,5 +37,6 @@ export * from "./session-transcript.js";
 export * from "./session-store.js";
 export * from "./integration-store.js";
 export * from "./credential-store.js";
+export * from "./plugin-grant-store.js";
 export * from "./maintenance.js";
 export { migrations, type Migration } from "./migrations.js";

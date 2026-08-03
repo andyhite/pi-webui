@@ -51,6 +51,7 @@ import type {
   WorkstreamId,
 } from "./ids.js";
 import type { PlotObject } from "./objects.js";
+import type { PluginStatus } from "./plugins.js";
 import type {
   Approval,
   ApprovalAttention,
@@ -142,6 +143,14 @@ export const EVENT_ENTITIES = [
    * alert describe the same row rather than two.
    */
   "integration",
+  /**
+   * A plugin's lifecycle or health moving (§10.2). Its own entity because a
+   * plugin is not a property of anything else on the board: it is installed,
+   * enabled, and it degrades on its own, and the health surface has to hear that
+   * happen rather than poll for it. `deleted` is a removal — the record is gone,
+   * and nothing on disk was touched (principle 10).
+   */
+  "plugin",
 ] as const;
 
 export type EventEntity = (typeof EVENT_ENTITIES)[number];
@@ -496,6 +505,16 @@ export type DomainEventBody =
       readonly entity: "integration";
       readonly verb: "deleted";
       readonly integrationId: string;
+    }
+  | {
+      readonly entity: "plugin";
+      readonly verb: "created" | "updated";
+      readonly status: PluginStatus;
+    }
+  | {
+      readonly entity: "plugin";
+      readonly verb: "deleted";
+      readonly pluginId: string;
     };
 
 /** One message on the state-change stream: envelope plus a typed body. */

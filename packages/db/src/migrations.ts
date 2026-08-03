@@ -1775,4 +1775,30 @@ export const migrations: readonly Migration[] = [
         ON integration_credentials (integration_id, name);
     `,
   },
+  {
+    id: 25,
+    name: "plugin_grants",
+    sql: `
+      -- What the operator has answered about one plugin's declared permission
+      -- (§10.2, §9.3; \`docs/plugin-contract.md\` §4's "persisted grant shape").
+      --
+      -- One row per (plugin, permission), and **two states only**: \`granted\` and
+      -- \`denied\`. Absent is \`never-asked\` — the state that raises through §6.6 — so
+      -- withdrawing a grant is deleting the row rather than writing a third state,
+      -- the same shape budgets use for "raise or remove". There is deliberately no
+      -- expiry column: a grant that lapsed on a clock would change what a plugin may
+      -- do with nobody behind it (principle 2), which is why \`PermissionState\` has
+      -- no \`expired\` member either.
+      --
+      -- \`answered_at\` is NOT NULL because a row exists only because somebody
+      -- answered; an unanswered permission has no row.
+      CREATE TABLE plugin_grants (
+        plugin_id     TEXT NOT NULL,
+        permission_id TEXT NOT NULL,
+        state         TEXT NOT NULL CHECK (state IN ('granted', 'denied')),
+        answered_at   INTEGER NOT NULL,
+        PRIMARY KEY (plugin_id, permission_id)
+      );
+    `,
+  },
 ];

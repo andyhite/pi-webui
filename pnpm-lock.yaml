@@ -69,6 +69,15 @@ importers:
       '@plotroom/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@plotroom/plugin-filesystem':
+        specifier: workspace:*
+        version: link:../../packages/plugins/filesystem
+      '@plotroom/plugin-git':
+        specifier: workspace:*
+        version: link:../../packages/plugins/git
+      '@plotroom/plugin-github':
+        specifier: workspace:*
+        version: link:../../packages/plugins/github
       '@plotroom/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk

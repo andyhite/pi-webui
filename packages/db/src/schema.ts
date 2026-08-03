@@ -1462,7 +1462,28 @@ export const integrationCredentials = sqliteTable(
   ],
 );
 
+/**
+ * The operator's answer about one plugin permission (§10.2, migration 25).
+ *
+ * Two states, and absent is the third: a permission with no row here is
+ * `never-asked`, which is what raises through §6.6 at the moment a plugin reaches
+ * for it. Removing a grant deletes the row — the same "raise or remove" shape
+ * budgets use — and there is no expiry column, because a grant lapsing on a clock
+ * would change what a plugin may do with nobody behind it (principle 2).
+ */
+export const pluginGrants = sqliteTable(
+  "plugin_grants",
+  {
+    pluginId: text("plugin_id").notNull(),
+    permissionId: text("permission_id").notNull(),
+    state: text("state", { enum: ["granted", "denied"] }).notNull(),
+    answeredAt: integer("answered_at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.pluginId, table.permissionId] })],
+);
+
 export type IntegrationRow = typeof integrations.$inferSelect;
+export type PluginGrantRow = typeof pluginGrants.$inferSelect;
 export type IntegrationCredentialRow =
   typeof integrationCredentials.$inferSelect;
 
