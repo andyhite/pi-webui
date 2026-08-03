@@ -5,6 +5,7 @@
     { "path": "packages/db" },
     { "path": "packages/plugin-sdk" },
     { "path": "packages/plugins/git" },
+    { "path": "packages/plugins/github" },
     { "path": "packages/ui" },
     { "path": "apps/server" },
     { "path": "apps/web" },

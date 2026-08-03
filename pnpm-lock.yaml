@@ -159,6 +159,15 @@ importers:
         specifier: ^26.1.2
         version: 26.1.2
 
+  packages/plugins/github:
+    devDependencies:
+      '@plotroom/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../plugin-sdk
+      '@types/node':
+        specifier: ^26.1.2
+        version: 26.1.2
+
   packages/ui:
     dependencies:
       '@plotroom/core':
