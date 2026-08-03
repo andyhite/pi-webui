@@ -285,18 +285,27 @@ export class IntegrationService {
       this.buildCallContext(pluginActor),
     );
 
-    // Read-back, never assumed: re-derive what is true now, whatever `perform`
-    // claimed, and reconcile it like any other refresh (§9.1, §3.2).
+    // Read-back, never assumed (§9.2): re-derive what is true now, whatever
+    // `perform` self-reported, and reconcile it like any other refresh (§9.1,
+    // §3.2). The response's `readBack` is this re-read's finding, not
+    // `result.readBack` — a producer's own claim about its write is exactly
+    // what "never assumed" refuses to trust.
     const externalId = readBackExternalId(result, input.actionInput);
+    let readBack: ProducedObject | null = null;
     if (externalId !== null) {
-      await this.refresh(integration.id, { externalId });
+      const reread = await this.refresh(integration.id, { externalId });
+      if (reread.ok) {
+        readBack =
+          reread.objects.find((object) => object.externalId === externalId) ??
+          null;
+      }
     }
 
     return {
       kind: "executed",
       ok: result.ok,
       message: result.message,
-      readBack: result.readBack,
+      readBack,
     };
   }
 

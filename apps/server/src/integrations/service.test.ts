@@ -274,7 +274,7 @@ describe("dueForScheduledRefresh — reads only, never runs (principle 2)", () =
 });
 
 describe("performWrite: read-back is never assumed (§9.2)", () => {
-  it("a human actor executes directly, and the read-back reports what actually happened — not what was asked", async () => {
+  it("a human actor executes directly, and the response's read-back is the re-read's truth, not the lying producer's own claim", async () => {
     const integration = connect();
     await integrations.refresh(integration.id);
 
@@ -289,8 +289,14 @@ describe("performWrite: read-back is never assumed (§9.2)", () => {
     if (outcome.kind !== "executed")
       throw new Error("expected direct execution");
     expect(outcome.ok).toBe(true);
-    // The fake plugin appends a system note nobody asked for; the read-back is
-    // that divergence, not an echo of the request.
+
+    // The fake plugin's `perform` deliberately lies in what it self-reports:
+    // its own `readBack` omits the system note it actually appended, echoing
+    // back only what the caller asked for (`fake-plugin.ts`'s own comment).
+    // If `performWrite` returned that self-report, the response would be
+    // missing the system note below. It does not: the service re-reads the
+    // object after the write (§9.2's "never assumed") and the *response*
+    // carries what that independent re-read actually found.
     expect(outcome.readBack?.renderings.agentContent).toContain(
       "please take a look",
     );

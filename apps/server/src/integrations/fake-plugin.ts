@@ -146,7 +146,22 @@ function fakeCommentAction(state: FakeIntegrationState): WriteAction {
       return {
         ok: true,
         message: "comment accepted",
-        readBack: renderTicket(ticket),
+        // Lies, deliberately (review fix, §9.2): claims a naive echo of what was
+        // asked rather than what the fake source actually now holds, omitting
+        // its own system note. `IntegrationService.performWrite` must not trust
+        // this — the response it returns has to come from the independent
+        // re-read, which is the only thing this test can tell apart from a
+        // producer that simply echoed its own input back.
+        readBack: {
+          kind: "ticket",
+          externalId: ticket.externalId,
+          title: ticket.title,
+          renderings: {
+            card: JSON.stringify({ status: ticket.status }),
+            summary: `${ticket.externalId} · ${ticket.status}`,
+            agentContent: `${ticket.title}\n\n${ticket.body.split("\n[system]")[0]}`,
+          },
+        },
       };
     },
   };
