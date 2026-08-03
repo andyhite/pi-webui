@@ -17,6 +17,7 @@ import {
   resolveStandingInstructions,
   retireStandingInstruction,
   STANDING_INSTRUCTION_DECLARE_TOOL,
+  STANDING_INSTRUCTION_RETIRE_TOOL,
   type StandingInstruction,
   type StandingInstructionCandidate,
 } from "./standing-instructions.js";
@@ -143,11 +144,16 @@ describe("a session proposes; a human accepts (principle 1, §3.8)", () => {
     expect(refused.refusal.reason).toBe("human_only");
   });
 
+  it("names tools the catalog really has, so the two spellings cannot drift", () => {
+    expect(toolByName(STANDING_INSTRUCTION_DECLARE_TOOL)).toBeDefined();
+    expect(toolByName(STANDING_INSTRUCTION_RETIRE_TOOL)).toBeDefined();
+  });
+
   it("refuses the tool call itself, which is where a session meets the rule", () => {
     const sessionId = newSessionId();
     for (const name of [
-      "standing_instruction_declare",
-      "standing_instruction_retire",
+      STANDING_INSTRUCTION_DECLARE_TOOL,
+      STANDING_INSTRUCTION_RETIRE_TOOL,
     ]) {
       const tool = toolByName(name);
       expect(tool?.requires.reflexivity, name).toBe("self-proposal");
