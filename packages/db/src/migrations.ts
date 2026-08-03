@@ -1801,4 +1801,181 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    id: 26,
+    name: "standing_instructions_and_proposals",
+    sql: `
+      -- Standing instructions (§3.8, Epic 7.4), at rest.
+      --
+      -- A **marker on a world object, never a tenth ObjectKind**: §3.1's kinds are
+      -- closed and §3.2 already lists a standing instruction among the objects that
+      -- live at world scope. So this table names an object and holds no content of
+      -- its own — an edit to that object is a new version that drifts consumers like
+      -- any other change, which a copied body here would silently stop being true.
+      --
+      -- \`declared_by_kind\` can only say \`human\`. \`markStandingInstruction\` already
+      -- refuses every session author (principle 1: content applying everywhere
+      -- applies to the caller's own chain), and a column that could record otherwise
+      -- would let a store reached without the predicate write down the one fact the
+      -- rule exists to prevent. There is no \`declared_by_session_id\` beside it for
+      -- the same reason: there is no session to name.
+      --
+      -- Retired, never deleted, like a claim row and a pre-grant: "retired yesterday"
+      -- and "never standing" are different facts, and the content object survives
+      -- either way (principle 10).
+      CREATE TABLE standing_instructions (
+        id               TEXT PRIMARY KEY,
+        object_id        TEXT NOT NULL REFERENCES objects (id),
+        declared_by_kind TEXT NOT NULL CHECK (declared_by_kind = 'human'),
+        declared_at      INTEGER NOT NULL,
+        retired_at       INTEGER
+      );
+
+      -- Principle 9's \`already_standing\`, enforced by the schema as well as by the
+      -- predicate: one object is standing once at a time. Partial, so retiring and
+      -- marking again is a second row rather than a refusal.
+      CREATE UNIQUE INDEX standing_instructions_live_idx
+        ON standing_instructions (object_id) WHERE retired_at IS NULL;
+
+      -- Which workstreams opted in (§3.8). **Opt-in only**: nothing appears that
+      -- nobody put there (principle 6), so an absent row means not available rather
+      -- than not yet decided.
+      --
+      -- Each row records its author, because it decides what that workstream's
+      -- sessions know (principle 1) — and an opt-in **may** be a session's, which is
+      -- why \`by_kind\` is not pinned to 'human' the way the marker's is: opting a
+      -- workstream in is ordinary authoring, lineage-checked rather than
+      -- proposal-shaped. Opted out, never deleted, for the marker's own reason.
+      CREATE TABLE standing_instruction_opt_ins (
+        workstream_id  TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        instruction_id TEXT NOT NULL REFERENCES standing_instructions (id) ON DELETE CASCADE,
+        by_kind        TEXT NOT NULL CHECK (by_kind IN ('human', 'session')),
+        by_session_id  TEXT,
+        at             INTEGER NOT NULL,
+        opted_out_at   INTEGER,
+        PRIMARY KEY (workstream_id, instruction_id),
+        CHECK ((by_kind = 'session') = (by_session_id IS NOT NULL))
+      );
+
+      CREATE INDEX standing_instruction_opt_ins_instruction_idx
+        ON standing_instruction_opt_ins (instruction_id);
+
+      -- A session's proposal awaiting a human's acceptance (principle 1, §3.8).
+      --
+      -- This is \`ToolProposal\` at rest and it decides nothing: \`decideProposal\` is
+      -- the only transition, and \`acceptedStandingInstruction\` the only path from an
+      -- accepted one to a marker. \`target_kind\`/\`target_id\` are nullable because a
+      -- standing-instruction proposal deliberately names no target — "it applies
+      -- everywhere, including to the caller" is exactly why there is nothing narrower
+      -- to resolve.
+      --
+      -- \`decided_by_kind\` can only say \`human\`, for the marker's reason: a session
+      -- accepting a proposal applies it silently, which is the one thing principle 1
+      -- says a proposal must never be.
+      CREATE TABLE proposals (
+        id              TEXT PRIMARY KEY,
+        proposed_by     TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        tool            TEXT NOT NULL,
+        input_json      TEXT NOT NULL,
+        target_kind     TEXT,
+        target_id       TEXT,
+        rationale       TEXT,
+        proposed_at     INTEGER NOT NULL,
+        state           TEXT NOT NULL CHECK (state IN ('pending', 'accepted', 'rejected')),
+        decided_at      INTEGER,
+        decided_by_kind TEXT CHECK (decided_by_kind = 'human'),
+        CHECK ((state = 'pending') = (decided_at IS NULL)),
+        CHECK ((decided_at IS NULL) = (decided_by_kind IS NULL)),
+        CHECK ((target_kind IS NULL) = (target_id IS NULL))
+      );
+
+      CREATE INDEX proposals_state_idx ON proposals (state, proposed_at);
+      CREATE INDEX proposals_session_idx ON proposals (proposed_by);
+    `,
+  },
+  {
+    id: 27,
+    name: "standing_instruction_approval_kind",
+    // The CHECK on approvals.kind has to change, and SQLite cannot alter one in
+    // place — see `Migration.rebuildsTable`, and migrations 9 and 21 for the
+    // worked examples this follows.
+    rebuildsTable: true,
+    sql: `
+      -- A pending proposal reaches §7.1 as an approval of its own kind (Epic 7.4).
+      --
+      -- The alternative was raising it as an ordinary 'tool-permission' with the
+      -- proposal id as its target, which needs no migration — and which would leave a
+      -- row whose kind says one thing and means another. \`ApprovalKind\` is the one
+      -- vocabulary every surface, every pre-grant, and every outbound route reads
+      -- (§7.3); a fifth thing a session can be asking for is a fifth member, not a
+      -- reused fourth one.
+      --
+      -- Nothing about this kind is pre-grantable, and that is enforced in
+      -- \`@plotroom/core\`, not here: \`preGrantable\` returns null for it, so no call
+      -- site can even express a coverage check — an "allow always" over proposals
+      -- would apply them silently, which is the one thing principle 1 says a proposal
+      -- must never be.
+      CREATE TABLE approvals_new (
+        id              TEXT PRIMARY KEY,
+        session_id      TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+        workstream_id   TEXT NOT NULL REFERENCES workstreams (id) ON DELETE CASCADE,
+        kind            TEXT NOT NULL CHECK (kind IN ('tool-permission', 'claim', 'destruction', 'integration-write', 'standing-instruction')),
+        ask_json        TEXT NOT NULL,
+        request_id      TEXT,
+        call_id         TEXT,
+        pierced_json    TEXT,
+        raised_at       INTEGER NOT NULL,
+        answer_decision TEXT CHECK (answer_decision IN ('approve-once', 'deny')),
+        answer_reason   TEXT,
+        answer_by_kind  TEXT CHECK (answer_by_kind = 'human'),
+        answered_at     INTEGER,
+        CHECK ((answer_decision IS NULL) = (answered_at IS NULL)),
+        CHECK ((answer_decision IS NULL) = (answer_by_kind IS NULL)),
+        CHECK (answer_decision IS NOT 'deny' OR answer_reason IS NOT NULL)
+      );
+
+      INSERT INTO approvals_new (
+        id, session_id, workstream_id, kind, ask_json, request_id, call_id,
+        pierced_json, raised_at, answer_decision, answer_reason, answer_by_kind,
+        answered_at
+      )
+      SELECT
+        id, session_id, workstream_id, kind, ask_json, request_id, call_id,
+        pierced_json, raised_at, answer_decision, answer_reason, answer_by_kind,
+        answered_at
+      FROM approvals;
+
+      DROP TABLE approvals;
+      ALTER TABLE approvals_new RENAME TO approvals;
+
+      CREATE INDEX approvals_session_idx ON approvals (session_id, raised_at);
+      CREATE INDEX approvals_open_idx ON approvals (raised_at) WHERE answered_at IS NULL;
+      CREATE UNIQUE INDEX approvals_call_idx ON approvals (session_id, call_id)
+        WHERE call_id IS NOT NULL;
+    `,
+  },
+  {
+    id: 28,
+    name: "plugin_enablement",
+    sql: `
+      -- Which plugins the operator has **disabled** (§10.2).
+      --
+      -- A row means disabled and an absence means enabled, which is the same shape
+      -- \`plugin_grants\` uses for never-asked and budgets use for removed: enabling
+      -- deletes the row rather than writing a second state. The reason it exists at
+      -- all is that the registry's state is a running process's property, and a
+      -- disable held only there came back enabled at the next boot — the operator's
+      -- decision undone by a restart, which is the failure "removal stays removed"
+      -- was written about.
+      --
+      -- No expiry column, for the reason a grant has none: a plugin re-enabling itself
+      -- on a clock would change what it may do with nobody behind it (principle 2).
+      -- Nothing here says *why*; a plugin that is unavailable because it broke is
+      -- health, observed on the running record, and never this row.
+      CREATE TABLE plugin_disablements (
+        plugin_id   TEXT PRIMARY KEY,
+        disabled_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];

@@ -301,3 +301,84 @@ describe("migration 22 re-keys the spend ledger by cause", () => {
     }
   });
 });
+
+describe("migration 27 widens the approval kinds by rebuild (§3.8)", () => {
+  /** A store at 26 with one open approval: what an install upgrades from. */
+  function storeWithApproval(): void {
+    const file = storeAtMigration(26);
+    const sqlite = new Database(file);
+    sqlite.exec(`
+      INSERT INTO approvals
+        (id, session_id, workstream_id, kind, ask_json, call_id, raised_at)
+        VALUES ('appr_1', 'sess_1', 'ws_1', 'tool-permission',
+                '{"kind":"tool-permission"}', 'call-1', 1000);
+      INSERT INTO pre_grants
+        (id, scope, session_id, effect, kinds_json, tool_pattern, extents_json,
+         granted_by, granted_at)
+        VALUES ('pregrant_1', 'session', 'sess_1', 'allow', '["tool-permission"]',
+                '**', '["none"]', 'human', 1000);
+    `);
+    sqlite.close();
+  }
+
+  it("keeps every approval and every row beside it, foreign keys intact", () => {
+    storeWithApproval();
+
+    const state = openDatabase({ stateDir: dir });
+    try {
+      const kept = state.sqlite
+        .prepare<[], Record<string, unknown>>(
+          "SELECT * FROM approvals WHERE id = 'appr_1'",
+        )
+        .get() as Record<string, unknown>;
+      expect(kept["kind"]).toBe("tool-permission");
+      expect(kept["call_id"]).toBe("call-1");
+      // A rebuild drops the old table, and a drop with foreign keys on cascades:
+      // the pre-grant beside it is what proves the pragma was off in time.
+      expect(
+        state.sqlite
+          .prepare<[], { count: number }>(
+            "SELECT COUNT(*) AS count FROM pre_grants",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+      expect(state.sqlite.pragma("foreign_key_check")).toEqual([]);
+
+      // The indexes came back with the table, including the one that makes a
+      // re-raised call find its own approval rather than stacking a second.
+      const indexes = state.sqlite
+        .prepare<[], { name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'approvals'",
+        )
+        .all()
+        .map((row) => row.name);
+      expect(indexes).toContain("approvals_call_idx");
+      expect(indexes).toContain("approvals_open_idx");
+    } finally {
+      state.close();
+    }
+  });
+
+  it("accepts the proposal kind it was rebuilt for, and still refuses a made-up one", () => {
+    storeWithApproval();
+
+    const state = openDatabase({ stateDir: dir });
+    try {
+      const insert = (id: string, kind: string) =>
+        state.sqlite
+          .prepare(
+            `INSERT INTO approvals
+               (id, session_id, workstream_id, kind, ask_json, raised_at)
+             VALUES (?, 'sess_1', 'ws_1', ?, '{}', 2000)`,
+          )
+          .run(id, kind);
+
+      insert("appr_2", "standing-instruction");
+      expect(() => insert("appr_3", "invented-kind")).toThrow(
+        /CHECK constraint failed/,
+      );
+    } finally {
+      state.close();
+    }
+  });
+});

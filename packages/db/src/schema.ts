@@ -1289,7 +1289,14 @@ export const approvals = sqliteTable(
       .notNull()
       .references(() => workstreams.id, { onDelete: "cascade" }),
     kind: text("kind", {
-      enum: ["tool-permission", "claim", "destruction", "integration-write"],
+      enum: [
+        "tool-permission",
+        "claim",
+        "destruction",
+        "integration-write",
+        /** A session's proposal, awaiting the human who accepts it (§3.8). */
+        "standing-instruction",
+      ],
     }).notNull(),
     /** The ask whole, as core built it — one value to every reader. */
     askJson: text("ask_json").notNull(),
@@ -1482,8 +1489,115 @@ export const pluginGrants = sqliteTable(
   (table) => [primaryKey({ columns: [table.pluginId, table.permissionId] })],
 );
 
+/**
+ * Which plugins the operator disabled (§10.2, migration 28).
+ *
+ * A row means disabled; an absence means enabled. The registry's own state is a
+ * running process's property, so without this a restart re-enabled everything the
+ * operator had turned off — their decision undone by a reboot, which is the failure
+ * "removal stays removed" was written about.
+ */
+export const pluginDisablements = sqliteTable("plugin_disablements", {
+  pluginId: text("plugin_id").primaryKey(),
+  disabledAt: integer("disabled_at").notNull(),
+});
+
+/**
+ * A standing instruction: content marked as applying everywhere (§3.8, migration
+ * 26).
+ *
+ * A **marker on a world object**, never a tenth `ObjectKind` and never a copy of
+ * its content — an edit to the object is a new version that drifts consumers like
+ * any other change (§3.2). `declaredByKind` can only say `human`, because content
+ * applying everywhere applies to the caller's own chain (principle 1), and retiring
+ * writes `retiredAt` rather than deleting the row.
+ */
+export const standingInstructions = sqliteTable(
+  "standing_instructions",
+  {
+    id: text("id").primaryKey(),
+    objectId: text("object_id")
+      .notNull()
+      .references(() => objects.id),
+    declaredByKind: text("declared_by_kind", { enum: ["human"] }).notNull(),
+    declaredAt: integer("declared_at").notNull(),
+    retiredAt: integer("retired_at"),
+  },
+  (table) => [
+    uniqueIndex("standing_instructions_live_idx")
+      .on(table.objectId)
+      .where(sql`retired_at IS NULL`),
+  ],
+);
+
+/**
+ * One workstream's opt-in (§3.8). Opt-in only, so an absent row means the
+ * instruction does not reach that workstream (principle 6); each row records its
+ * author, because it decides what that workstream's sessions know (principle 1).
+ */
+export const standingInstructionOptIns = sqliteTable(
+  "standing_instruction_opt_ins",
+  {
+    workstreamId: text("workstream_id")
+      .notNull()
+      .references(() => workstreams.id, { onDelete: "cascade" }),
+    instructionId: text("instruction_id")
+      .notNull()
+      .references(() => standingInstructions.id, { onDelete: "cascade" }),
+    byKind: text("by_kind", { enum: ["human", "session"] }).notNull(),
+    bySessionId: text("by_session_id"),
+    at: integer("at").notNull(),
+    optedOutAt: integer("opted_out_at"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workstreamId, table.instructionId] }),
+    index("standing_instruction_opt_ins_instruction_idx").on(
+      table.instructionId,
+    ),
+  ],
+);
+
+/**
+ * A session's proposal awaiting a human's acceptance (principle 1, §3.8, migration
+ * 26).
+ *
+ * `ToolProposal` at rest. It decides nothing — `decideProposal` is the only
+ * transition — and `decidedByKind` can only say `human`, because a session
+ * accepting a proposal applies it silently.
+ */
+export const proposals = sqliteTable(
+  "proposals",
+  {
+    id: text("id").primaryKey(),
+    proposedBy: text("proposed_by")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    tool: text("tool").notNull(),
+    inputJson: text("input_json").notNull(),
+    /** Null for a standing-instruction proposal, which names no target (§3.8). */
+    targetKind: text("target_kind"),
+    targetId: text("target_id"),
+    rationale: text("rationale"),
+    proposedAt: integer("proposed_at").notNull(),
+    state: text("state", {
+      enum: ["pending", "accepted", "rejected"],
+    }).notNull(),
+    decidedAt: integer("decided_at"),
+    decidedByKind: text("decided_by_kind", { enum: ["human"] }),
+  },
+  (table) => [
+    index("proposals_state_idx").on(table.state, table.proposedAt),
+    index("proposals_session_idx").on(table.proposedBy),
+  ],
+);
+
 export type IntegrationRow = typeof integrations.$inferSelect;
 export type PluginGrantRow = typeof pluginGrants.$inferSelect;
+export type PluginDisablementRow = typeof pluginDisablements.$inferSelect;
+export type StandingInstructionRow = typeof standingInstructions.$inferSelect;
+export type StandingInstructionOptInRow =
+  typeof standingInstructionOptIns.$inferSelect;
+export type ProposalRow = typeof proposals.$inferSelect;
 export type IntegrationCredentialRow =
   typeof integrationCredentials.$inferSelect;
 
