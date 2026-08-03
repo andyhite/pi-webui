@@ -71,7 +71,19 @@ export function createContributionRegistry(): ContributionRegistry {
 
   return {
     registerManifest(pluginId, manifest) {
-      manifests.set(pluginId, manifest);
+      // The manifest carries its own identity (`manifest.id` — the plugin's
+      // identity per `docs/plugin-contract.md` §1, "the plugin's own id,
+      // unique across installed plugins"); `pluginId` is the caller's own
+      // statement of the same fact (the in-box list's key, or a directory
+      // scan's discovered id). The two silently disagreeing would key the
+      // registry on one identity while every contribution inside answers to
+      // another — asserted rather than the parameter being ignored.
+      if (pluginId !== manifest.id) {
+        throw new Error(
+          `registerManifest called with pluginId "${pluginId}" but manifest.id is "${manifest.id}" — they must match`,
+        );
+      }
+      manifests.set(manifest.id, manifest);
     },
     unregisterManifest(pluginId) {
       manifests.delete(pluginId);

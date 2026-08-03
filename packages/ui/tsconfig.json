@@ -8,5 +8,9 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src/**/*"],
-  "references": [{ "path": "../core" }, { "path": "../plugin-sdk" }]
+  "references": [
+    { "path": "../core" },
+    { "path": "../plugin-sdk" },
+    { "path": "../plugins/filesystem" }
+  ]
 }

@@ -60,6 +60,16 @@ describe("createContributionRegistry", () => {
     ]);
   });
 
+  it("refuses to register a manifest whose id disagrees with the caller's pluginId", () => {
+    const registry = createContributionRegistry();
+    expect(() =>
+      registry.registerManifest(
+        "filesystem",
+        manifest({}, { id: "github", name: "github" }),
+      ),
+    ).toThrow(/pluginId "filesystem" but manifest\.id is "github"/);
+  });
+
   it("unregisterManifest removes a manifest and everything it contributed", () => {
     const registry = createContributionRegistry();
     registry.registerManifest(
