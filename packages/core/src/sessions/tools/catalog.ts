@@ -1173,11 +1173,13 @@ const sessionTools: readonly AgentTool[] = [
     //
     // The lineage class is declared for `session_stop`'s reason — a session must
     // not take work in its own chain off the board to escape a gate — and it binds
-    // wherever a call goes through `checkToolCall`. Over HTTP the enforcement is
-    // the destruction guard: every session-authored delete raises §6.6 whoever the
-    // target is. The gap that leaves is a *pre-granted* destruction, which pre-
-    // grants match by tool and never by target, so it would cover a session's own
-    // chain: see issue #75.
+    // wherever a call goes through `checkToolCall`. Over HTTP that is
+    // `sessionLineageGuard` (`apps/server/src/approvals/lineage.ts`), which mounts
+    // `sessionTargetedTools()` **before** the destruction guard: principle 1 refuses
+    // a delete inside the caller's own chain before §6.6 is consulted at all, which
+    // is what keeps a *pre-granted* destruction — pre-grants match by tool and never
+    // by target — from covering that chain. Everything outside it still raises the
+    // approval.
     requires: {
       reflexivity: "target-session",
       approval: "always",
@@ -2213,6 +2215,53 @@ export function isDestructionTool(tool: AgentTool): tool is AgentTool & {
   };
 } {
   return tool.requires.destroys !== undefined;
+}
+
+/**
+ * The lineage-checked tools whose target is **the session its path names**
+ * (principle 1, §4.1).
+ *
+ * These are the calls for which `ToolTargetIndex`'s resolution is exactly right
+ * rather than approximately: every one of them declares "the session named by
+ * the id, and nothing else", so the id in the path *is* the session the call
+ * would reach. That is what makes the set mountable as one HTTP-level refusal
+ * (`apps/server/src/approvals/lineage.ts`) without a per-route list.
+ *
+ * Deliberately narrower than "every lineage-checked tool". The rest name
+ * something the path cannot resolve to a session on its own — a queue entry, a
+ * batch, a workstream, or a body full of node ids — and a guard that treated one
+ * of those ids as the lineage target would refuse the wrong calls. Those are
+ * checked where the gesture resolves its own scope, and the lineage rule has two
+ * live entry points there: `checkRunGesture` (the run spine, resume, fork, and the
+ * scoped stop) calls `checkToolCall`, while `checkInjection` and `planBatch` call
+ * `checkAuthoring` directly.
+ */
+export function sessionTargetedTools(): readonly AgentTool[] {
+  return AGENT_TOOL_CATALOG.filter(
+    (tool) =>
+      tool.requires.reflexivity === "target-session" &&
+      !tool.requires.humanOnly &&
+      isSessionPathTarget(tool.endpoint),
+  );
+}
+
+/**
+ * Whether an endpoint names a session in its path: `/api/sessions/:id` and its
+ * verbs.
+ *
+ * Says nothing about how many parameters follow, on purpose. One is what the guard
+ * can address, and that arity rule is already stated where it is enforced
+ * (`toolRoutes`, which skips a tool it cannot address and says so in the log).
+ * Stating it twice would mean a malformed declaration disappeared here, silently,
+ * before the place that reports it ever saw it.
+ */
+function isSessionPathTarget(endpoint: string): boolean {
+  const segments = endpoint.split("/");
+  return (
+    segments[1] === "api" &&
+    segments[2] === "sessions" &&
+    (segments[3]?.startsWith(":") ?? false)
+  );
 }
 
 /** The path parameters an endpoint pattern declares, in order. */

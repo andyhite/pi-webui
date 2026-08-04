@@ -10,6 +10,7 @@ import {
   liveTools,
   pathParametersOf,
   sessionCallableTools,
+  sessionTargetedTools,
   toolByName,
   TOOL_INPUT_TYPES,
   type AgentTool,
@@ -414,6 +415,44 @@ describe("the catalog", () => {
     }
     // And there really are some, so this cannot pass by matching nothing.
     expect(destructionTools().length).toBeGreaterThan(0);
+  });
+
+  it("names every session-targeted verb, so none ships enforced by nothing", () => {
+    // `sessionLineageGuard` (`apps/server/src/approvals/lineage.ts`) refuses a
+    // session's call into its own chain by the session the path names, and this is
+    // the set it mounts. Pinned in both directions: the members are the six
+    // single-session verbs, and every `target-session` tool under
+    // `/api/sessions/:id` is a member — so a seventh one declared tomorrow either
+    // joins the guard or fails here, rather than shipping with a lineage class that
+    // binds nothing (issue #75).
+    const covered = sessionTargetedTools();
+    expect(covered.map((tool) => tool.name).sort()).toEqual([
+      "session_delete",
+      "session_end",
+      "session_fork",
+      "session_inject",
+      "session_resume",
+      "session_stop",
+    ]);
+
+    for (const tool of covered) {
+      // One path parameter, and it is the session: that is the whole reason the
+      // guard can resolve this target exactly rather than approximately.
+      expect(pathParametersOf(tool.endpoint), tool.name).toEqual(["id"]);
+      expect(tool.requires.reflexivity, tool.name).toBe("target-session");
+      expect(tool.requires.targetResolution, tool.name).toContain(
+        "nothing else",
+      );
+    }
+
+    const underSessions = AGENT_TOOL_CATALOG.filter(
+      (tool) =>
+        tool.requires.reflexivity === "target-session" &&
+        tool.endpoint.startsWith("/api/sessions/:"),
+    );
+    expect(underSessions.map((tool) => tool.name).sort()).toEqual(
+      covered.map((tool) => tool.name).sort(),
+    );
   });
 
   it("states how every lineage-checked tool's target must resolve", () => {

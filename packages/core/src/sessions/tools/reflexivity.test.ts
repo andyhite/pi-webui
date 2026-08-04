@@ -127,6 +127,32 @@ describe("checkToolCall", () => {
     expect(check.refusal.message).toContain("grant capability to");
   });
 
+  it("does not tell a session it authored context when it deleted a record", () => {
+    // `session_delete` is `target-session` and destroys; `session_stop`'s catalog
+    // entry states the distinction ("stopping is not authoring: it takes capability
+    // away rather than granting any"). The refusal an agent parses names the
+    // gesture it made, so the general word is "act on" and only the expansion
+    // classes name what they expand.
+    const check = checkToolCall(
+      {
+        actor: sessionAuthor(CHILD),
+        lineage,
+        // A session target resolves to itself, which is what the six
+        // `/api/sessions/:id` verbs declare (`sessionTargetedTools`).
+        targets: targetsOf({ [ROOT]: [ROOT] }),
+      },
+      {
+        tool: "session_delete",
+        input: { sessionId: ROOT },
+        target: { kind: "session", id: ROOT },
+      },
+    );
+    expect(check.allowed).toBe(false);
+    if (check.allowed) return;
+    expect(check.refusal.message).toContain("session_delete would act on");
+    expect(check.refusal.message).not.toContain("author context into");
+  });
+
   it("refuses the operator's own gestures to a session", () => {
     for (const tool of [
       "claim_grant",

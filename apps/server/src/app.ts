@@ -27,6 +27,7 @@ import { settingsRoutes } from "./routes/settings.js";
 import type { CompactionSchedule } from "./maintenance/compaction.js";
 import { ApprovalService } from "./approvals/service.js";
 import { destructionGuard } from "./approvals/guard.js";
+import { sessionLineageGuard } from "./approvals/lineage.js";
 import { AttentionService } from "./attention/service.js";
 import { NotificationRouter } from "./attention/routing.js";
 import { startAttentionTick, type AttentionTick } from "./attention/tick.js";
@@ -429,6 +430,15 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
         integrationRefresh.reschedule(value as number),
     },
   });
+
+  // Principle 1, before §6.6 and before any route can act: a session's call into its
+  // own initiation chain is refused outright — for the verbs whose path names the
+  // session it would reach (`sessionTargetedTools()`), which is what this can resolve
+  // exactly. Ordered before the destruction guard deliberately: a pre-grant matches
+  // by tool and never by target, so an "allow always" evaluated there would otherwise
+  // cover a delete inside the granting session's own chain with nobody asked (§4.1,
+  // issue #75).
+  app.use("/api/*", sessionLineageGuard({ stores, logger }));
 
   // §6.6, before any route can act: a session's destructive gesture raises an
   // approval instead of executing. Registered as middleware over the whole API

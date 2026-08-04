@@ -169,6 +169,17 @@ export function checkToolCall(
   return { allowed: true, tool };
 }
 
+/**
+ * The sentence a refused session reads, and it has to be true of the verb it
+ * refused. `target-session` covers two kinds of gesture: authoring context into
+ * whatever the target feeds, and acting on the target without authoring anything
+ * — `session_stop`'s own catalog entry says so outright ("stopping is not
+ * authoring: it takes capability away rather than granting any"), and so does
+ * `authorsIntent` in `batch.ts`. So the general word is "act on", and only the two
+ * classes whose whole subject is expansion get to name what they expand. A message
+ * telling an agent it tried to author context by deleting a record would be
+ * describing a different call than the one refused.
+ */
 function messageFor(
   tool: AgentTool,
   target: SessionId,
@@ -179,7 +190,7 @@ function messageFor(
       ? "grant capability to"
       : tool.requires.reflexivity === "budget"
         ? "raise the budget of"
-        : "author context into";
+        : "act on";
   const relation =
     target === actor ? "itself" : "a session in its own initiation chain";
   return `${tool.name} would ${what} ${relation} (${target}); principle 1 refuses this, including routed through a chain it started`;

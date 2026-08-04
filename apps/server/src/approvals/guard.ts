@@ -1,13 +1,9 @@
 import type { MiddlewareHandler } from "hono";
-import {
-  approvalAttention,
-  destructionTools,
-  pathParametersOf,
-  type AgentTool,
-} from "@plotroom/core";
+import { approvalAttention, destructionTools } from "@plotroom/core";
 import { forbidden } from "../http/errors.js";
 import type { Logger } from "../logging/logger.js";
 import { actorOf, type ApiEnv } from "../routes/api.js";
+import { matchToolRoute, toolRoutes } from "./routes.js";
 import type { ApprovalService } from "./service.js";
 
 /**
@@ -32,6 +28,13 @@ import type { ApprovalService } from "./service.js";
  * refusal here for an unknown route would be this middleware deciding something
  * it was not asked about.
  *
+ * **`sessionLineageGuard` runs before this one, and that ordering is the rule.**
+ * §6.6 answers "may this session do it"; principle 1 answers "is this even a
+ * thing a session may be granted", and the second question has to be settled
+ * first — a pre-grant matches by tool and never by target, so an "allow always"
+ * evaluated here would otherwise cover a delete inside the caller's own chain
+ * with nobody asked (`lineage.ts`, issue #75).
+ *
  * **What catches a call that gets past this.** `performDestruction` — the one
  * function that actually destroys anything on a session's behalf — asks
  * `checkDeletion` first, and that predicate refuses a session-authored deletion
@@ -47,81 +50,24 @@ export interface DestructionGuardDeps {
   readonly logger: Logger;
 }
 
-interface GuardedRoute {
-  readonly tool: AgentTool;
-  readonly segments: readonly string[];
-  readonly idIndex: number;
-}
-
-/**
- * The routes to guard, derived once from the catalog. Every destruction tool
- * declares **exactly one** path parameter — the record it would remove — and
- * `catalog.test.ts` pins that in both directions, so the skip below cannot
- * quietly become the hole through which an unguarded destructive verb ships.
- *
- * It is still a skip rather than a throw, because a boot-time crash would take
- * the whole server down over one malformed declaration; instead it is **loud**.
- * A tool this cannot address is named in the log at construction, once, at error
- * level: the honest report of a route that is now enforced by nothing.
- */
-function guardedRoutes(logger: Logger): readonly GuardedRoute[] {
-  const routes: GuardedRoute[] = [];
-
-  for (const tool of destructionTools()) {
-    const segments = tool.endpoint.split("/");
-    const parameters = pathParametersOf(tool.endpoint);
-    const idIndex = segments.findIndex((segment) => segment.startsWith(":"));
-
-    if (parameters.length !== 1 || idIndex < 0) {
-      logger.error("a destruction tool cannot be guarded", {
-        tool: tool.name,
-        endpoint: tool.endpoint,
-        pathParameters: parameters.length,
-        why: "§6.6 routes a session's destruction by the target its endpoint names; a tool with anything but one path parameter names no single target, so this route is not guarded",
-      });
-      continue;
-    }
-
-    routes.push({ tool, segments, idIndex });
-  }
-
-  return routes;
-}
-
-function match(
-  routes: readonly GuardedRoute[],
-  method: string,
-  path: string,
-): { readonly tool: AgentTool; readonly targetId: string } | null {
-  const segments = path.split("/");
-
-  for (const route of routes) {
-    if (route.tool.method !== method) continue;
-    if (route.segments.length !== segments.length) continue;
-    const matches = route.segments.every(
-      (segment, index) =>
-        segment.startsWith(":") || segment === segments[index],
-    );
-    if (!matches) continue;
-
-    const targetId = segments[route.idIndex];
-    if (targetId === undefined || targetId.length === 0) continue;
-    return { tool: route.tool, targetId };
-  }
-
-  return null;
-}
-
 export function destructionGuard(
   deps: DestructionGuardDeps,
 ): MiddlewareHandler<ApiEnv> {
-  const routes = guardedRoutes(deps.logger);
+  // The routes to guard, derived once from the catalog. Every destruction tool
+  // declares **exactly one** path parameter — the record it would remove — and
+  // `catalog.test.ts` pins that in both directions, so `toolRoutes`' skip cannot
+  // quietly become the hole through which an unguarded destructive verb ships.
+  const routes = toolRoutes(
+    destructionTools(),
+    deps.logger,
+    "§6.6 routes a session's destruction by the target its endpoint names; a tool with anything but one path parameter names no single target, so this route is not guarded",
+  );
 
   return async (c, next) => {
     const actor = actorOf(c);
     if (actor.kind !== "session") return next();
 
-    const matched = match(routes, c.req.method, c.req.path);
+    const matched = matchToolRoute(routes, c.req.method, c.req.path);
     if (matched === null) return next();
 
     const session = deps.approvals.sessionOf(actor.sessionId);
