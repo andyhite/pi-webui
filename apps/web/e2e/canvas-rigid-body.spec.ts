@@ -38,12 +38,22 @@ import {
 
 let server: MilestoneServer | undefined;
 
-test.beforeAll(async () => {
+// A fresh server *per test*, not per file: both tests here reason about the
+// exact set of nodes on the graph (row order, which node lands where, exact
+// node counts read back from the server) and the second test's "never
+// reaches" claim depends on starting from a graph containing only its own
+// three nodes. Sharing one server across both tests left the first test's
+// leftover nodes on the graph when the second one ran, polluting that
+// baseline — confirmed the hard way. `canvas-mid-drag-refusal.spec.ts` hit
+// the same shape of problem for a different reason (fitView's zoom) and
+// fixed it the same way; see its own `beforeEach` doc comment.
+test.beforeEach(async () => {
   server = await startMilestoneServer();
 });
 
-test.afterAll(async () => {
+test.afterEach(async () => {
   if (server) await server.stop();
+  server = undefined;
 });
 
 function requireServer(): MilestoneServer {
