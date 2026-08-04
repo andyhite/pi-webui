@@ -467,14 +467,13 @@ if the ambient token is the wrong account).
 
 **Board Status columns (the workflow, in order):**
 
-| Status                 | Meaning                                                      |
-| ---------------------- | ------------------------------------------------------------ |
-| `Backlog`              | Captured, not committed to — includes open `decision` issues |
-| `To Do`                | Committed; next up. Ordered top-down by priority             |
-| `In Progress`          | Someone (human or agent) is actively working it              |
-| `Review`               | Implementation complete, awaiting independent review         |
-| `Done`                 | Reviewed and merged to `main`                                |
-| `Directional (icebox)` | Spec §13 intentions — pulled in deliberately, never by drift |
+| Status        | Meaning                                                                                       |
+| ------------- | --------------------------------------------------------------------------------------------- |
+| `Backlog`     | Captured, not committed to — open `decision` issues and §13 `directional` intentions included |
+| `To Do`       | Committed; next up. Ordered top-down by priority                                              |
+| `In Progress` | Someone (human or agent) is actively working it                                               |
+| `Review`      | Implementation complete, awaiting independent review                                          |
+| `Done`        | Reviewed and merged to `main`                                                                 |
 
 Closed issues are the permanent Done record; the board tracks **open** work
 (a finished item is closed with `Fixes #N` / `gh issue close`, and its board
@@ -506,11 +505,16 @@ item moves to `Done` or is archived off the board).
 6. **Labels:** `epic` (large multi-task efforts), `follow-up`, `bug`,
    `decision`, `directional`. Use task-list checkboxes in the issue body for a
    breakdown; sub-issues for real child work.
-7. **Orchestrators** (fleet runs): create/move issues for each track as part
+7. **`directional`-labeled issues are never promoted out of `Backlog` without
+   an explicit operator decision** — they are spec §13's recorded intentions
+   ("pulled in deliberately, never by drift"), and the label is the guard now
+   that they share the Backlog with ordinary captured work. An agent choosing
+   its next task skips them unconditionally.
+8. **Orchestrators** (fleet runs): create/move issues for each track as part
    of spawn/merge duties; a track's final report links its issues. Subagents
    without `gh` access report status to the orchestrator, who updates the
    board.
-8. The rebuild's development plan and batch reports were removed from the
+9. The rebuild's development plan and batch reports were removed from the
    working tree so the tracker is the single source; issues #1–#41 are the
    closed historical record of the rebuild, and the deep per-epic landed notes
    remain readable in git history
