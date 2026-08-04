@@ -30,6 +30,7 @@ import {
   nodes,
   objects,
   sessionLineage,
+  sessions,
   type EdgeRow,
   type NodeRow,
 } from "./schema.js";
@@ -51,9 +52,16 @@ export class ScopeRefused extends Error {
   }
 }
 
-/** Why a subject cannot be placed right now, distinct from an illegal wire. */
+/**
+ * Why a subject cannot be on the board right now, distinct from an illegal wire.
+ *
+ * Two facts, and they are opposites: `node_deleted` refuses *placing* a subject
+ * whose node was removed (restore it instead), and `subject_deleted` refuses
+ * *restoring* a node whose subject is gone (restore that instead). Both keep the
+ * board and the records saying the same thing about what exists.
+ */
 export type PlacementRefusal = {
-  readonly reason: "node_deleted";
+  readonly reason: "node_deleted" | "subject_deleted";
   readonly message: string;
 };
 
@@ -591,9 +599,27 @@ export class GraphStore {
     });
   }
 
+  /**
+   * Put a node back, with exactly the edges its removal took down (principle 10).
+   *
+   * **Refused while its subject is deleted.** A node stands for a record, and the
+   * reads the board is drawn from filter deleted records out — so restoring the
+   * node alone produces a card with nothing behind it, and an undo that produced
+   * one would be returning more than its own removal took. The subject's own
+   * restore is the gesture that brings the node back with it, which is why that
+   * one restores the record *first* and reaches this method with the subject
+   * already live.
+   */
   restoreNode(nodeId: string): NodeRemoval {
     const row = this.node(nodeId);
     if (row.deletedAt === null) return { node: row, edges: [], changed: false };
+
+    if (this.subjectIsDeleted(row)) {
+      throw new PlacementRefused({
+        reason: "subject_deleted",
+        message: `that ${row.role}'s record is deleted; restore it instead — its node comes back with it`,
+      });
+    }
 
     const at = row.deletedAt;
 
@@ -846,6 +872,38 @@ export class GraphStore {
       scope: row.scope,
       workstreamId: (row.workstreamId ?? null) as WorkstreamId | null,
     };
+  }
+
+  /**
+   * Whether the record a node stands for is itself deleted.
+   *
+   * A subject with **no row at all** is not this: a node may stand for something
+   * this store cannot see (the same tolerance `objectScopeOf` has for content
+   * that was never materialized), and reading an absence as a deletion would
+   * refuse a gesture over a fact nobody recorded. Only a row that says it was
+   * deleted says it was deleted.
+   */
+  private subjectIsDeleted(row: NodeRow): boolean {
+    const deletedAt =
+      row.role === "content"
+        ? this.state.db
+            .select({ deletedAt: objects.deletedAt })
+            .from(objects)
+            .where(eq(objects.id, row.refId))
+            .get()?.deletedAt
+        : row.role === "command"
+          ? this.state.db
+              .select({ deletedAt: commands.deletedAt })
+              .from(commands)
+              .where(eq(commands.id, row.refId))
+              .get()?.deletedAt
+          : this.state.db
+              .select({ deletedAt: sessions.deletedAt })
+              .from(sessions)
+              .where(eq(sessions.id, row.refId))
+              .get()?.deletedAt;
+
+    return deletedAt != null;
   }
 
   /**
