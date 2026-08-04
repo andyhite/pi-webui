@@ -443,16 +443,16 @@ injection, near-native fork), embedded in a PlotRoom-owned Bun sidecar; the seco
 adapter, proving the seam, is the **Claude Agent SDK**. ACP is tracked but is not
 the boundary.
 
-**Adapter v1 is being retargeted** (issue #73, decided in #66): from `pi --mode
-rpc` to **omp embedded in a PlotRoom-owned Bun sidecar**, one process per
-session. `apps/session-host` is that process and is the only package that
-imports a vendor agent SDK; `core/src/sessions/adapters/omp/` owns its lifecycle
-and its frame protocol and translates nothing, because the sidecar emits
-`RuntimeObservation` values it is typechecked against. It is registered only when
-the operator selects it (`PLOTROOM_RUNTIME=omp-session-host`) and its permission
-gate is not wired yet, so `enforcesPermissions` is false and
-`checkPermissionEnforcement` refuses every run on it — the pi adapter stays the
-default until that lands (issue #81) and is retired in #83.
+**Where the sidecar lives.** `apps/session-host` is that process — the only
+package in the repo that imports a vendor agent SDK — and
+`core/src/sessions/adapters/omp/` owns its lifecycle and its frame protocol
+while translating nothing, because the sidecar emits `RuntimeObservation`
+values it is typechecked against. It is landing in tracks (issue #73), so it is
+registered only when the operator selects it
+(`PLOTROOM_RUNTIME=omp-session-host`): its permission gate is issue #81, and
+until that lands `enforcesPermissions` is false and
+`checkPermissionEnforcement` refuses every run on it. The pi adapter is the
+default meanwhile and is retired in #83.
 
 Non-negotiables at this seam:
 

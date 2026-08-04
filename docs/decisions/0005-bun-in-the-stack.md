@@ -7,10 +7,9 @@
 
 ## Context
 
-Embedding omp (see 0001's amendment) requires Bun. The package is not a dependency
-of this repository yet, so the figures below are as measured in #66 rather than
-something the tree can confirm: `@oh-my-pi/pi-coding-agent` ships its entry as raw
-TypeScript (`main: ./src/index.ts`), declares
+Embedding omp (see 0001's amendment) requires Bun. `@oh-my-pi/pi-coding-agent` is
+now a dependency of `apps/session-host`, pinned exactly at 17.2.8: it ships its
+entry as raw TypeScript (`main: ./src/index.ts`), declares
 `engines.bun >= 1.3.14`, touches Bun APIs in 177 of its 1,165 source files, and
 carries a per-platform native addon that is 296 MB on disk for linux-x64. Importing
 it under Node fails outright. So the question was never whether Bun enters the
