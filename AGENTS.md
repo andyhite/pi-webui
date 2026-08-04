@@ -480,6 +480,15 @@ see each other's context. Every rule in this section exists because of that.
 - **Anything another agent needs to know goes where work is tracked**, not into
   these files — a shared seam you had to touch, a bug you found, a convention you
   had to invent. There is no other channel between concurrent sessions.
+- **Tracked state is only true if it is current, so you MUST move it as soon as
+  it changes.** Claim the item before your first edit and name the branch you
+  will work on; record a blocker, a scope change or a hand-off to review the
+  moment it is true rather than batching them up at the end; close it when the
+  work lands. An item nobody moved reads to every other session as work
+  available, which is how two agents end up writing the same change on two
+  branches at once — and a state change nobody recorded is invisible for exactly
+  as long as it goes unwritten. If you find an item whose state is already
+  wrong, correct it, whoever left it that way.
 
 **Work tracking lives outside this repository** (see "Documentation").
 
