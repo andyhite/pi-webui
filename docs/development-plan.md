@@ -2758,8 +2758,8 @@ default outline (design gate, fleet rule 5)._
 
 ### Epic 8.2 — Search and archive (`app`)
 
-- [ ] FTS search over sessions incl. archived, ranked over title/location/content; archived reported as archived (§6.8)
-- [ ] Archive-by-default posture: canvas holds what you placed; the rest browsable/searchable (§6.8, §3.3)
+- [x] FTS search over sessions incl. archived, ranked over title/location/content; archived reported as archived (§6.8)
+- [x] Archive-by-default posture: canvas holds what you placed; the rest browsable/searchable (§6.8, §3.3)
 
 _Track A's server half landed: the FTS scaffolding (migration 1) widened from one
 indexed column to three — title, location, body — weighted with bm25 so a
@@ -2775,10 +2775,39 @@ Deferred, honestly: the Search panel itself (Track B); only the `session` kind
 is indexed this batch — the table is kind-agnostic, so a future producer (a
 note, a ticket) writes into the same index without a new endpoint._
 
+_Track B's UI half landed: a Search panel (`packages/ui/src/search/`), wired
+into the dock rail alongside every other in-box panel. A real combobox
+(`aria-activedescendant`, the same shape `CommandPalette` already uses) over
+`GET /api/search`; results render in exactly the order the API returns them —
+nothing here re-ranks — and an archived hit stays a row with an explicit
+"(archived)" marker rather than being dropped from the list, proven end to end
+by archiving a session's workstream mid-test and watching the same hit gain
+the marker (`apps/web/e2e/search-settings-logs.spec.ts`). Selecting a hit
+calls the one selection-as-route primitive (`onSelectNode`, §5) and nothing
+else. A real bug surfaced while wiring this up rather than an assumption:
+`GET /api/search`'s `q` is passed straight into FTS5's `MATCH` expression
+(`packages/db/src/search.ts`), which is FTS5's own *query grammar*, not a
+plain term — an unquoted `-` is its NOT-operator, so an ordinary hyphenated
+word (a ticket id, a branch name) either changed what the query meant or, for
+some inputs, raised a raw SQLite error the route surfaced as a 500 (verified
+against the real server, not inferred). Nothing in §6.8 asks an operator
+typing a search box to know FTS5's grammar, so the client (`search/
+data-source.ts`) quotes every word of `q` as its own FTS5 phrase before
+sending it — adjacent quoted phrases still AND together exactly like bare
+terms would, and a hyphen or colon inside one is just a character again. This
+is a client-side mitigation, not a server fix (out of this track's file
+ownership); the underlying route still accepts raw FTS5 grammar from any
+other caller (a raw `curl`, a future consumer) and a future Track A pass may
+want to sanitize or reject query-grammar characters at the route itself.
+Deferred, honestly: no command-palette entry point for Search (the dock rail
+button is keyboard-reachable already, so no new keybinding was needed or
+added); still only the `session` kind, matching the index's own current
+scope._
+
 ### Epic 8.3 — Settings and logs (`app`)
 
-- [ ] Settings: grouped, searchable, applied without restart; env vars supply defaults only (§11)
-- [ ] Logs panel over the structured log, filtered (§8, §11)
+- [x] Settings: grouped, searchable, applied without restart; env vars supply defaults only (§11)
+- [x] Logs panel over the structured log, filtered (§8, §11)
 
 _Track A's server half landed: Epic 2.1's deliberately deferred seam is filled
 — a settings catalog (`apps/server/src/settings/catalog.ts`), persisted
@@ -2813,6 +2842,36 @@ file's own `OPERATOR_ONLY_ROUTES` exceptions (a narrow, orchestrator-granted
 cross-track exception, its own commit); and that same test's route-scanner does
 not catch `PUT /api/settings/:key`, a real coverage gap for Track C or the
 invariant/e2e work to close._
+
+_Track B's UI half landed: a Settings panel (`packages/ui/src/settings/`) —
+grouped (the catalog's own group order, preserved rather than re-sorted) and
+searchable over the API's own `q`. Two verbs, matching the API's shape rather
+than folding them into one: **save** (`PUT`) writes a new value, **remove
+override** (`DELETE`) reverts to the catalog default — never a save with an
+empty value standing in for "unset". `appliesWithoutRestart`/`restartReason`
+render exactly what the catalog asserts, never optimistically; a sensitive
+setting's current value renders the server's own redaction (`"[redacted]"` or
+"not set") and writing a new one is a plain, unprefilled input — the real
+value is never echoed back into it. Live updates fold through the `setting`
+`/ws` entity (a signal to refetch, not a full row carried over the wire). Also
+landed: a Logs panel (`packages/ui/src/logs/`) — level ("at least this
+level") and component filters straight onto `GET /api/logs`'s own query
+parameters; `droppedTotal` surfaced honestly whenever greater than zero,
+never silently. Live-following is an operator gesture, not a background
+timer this component starts on its own: a visible "follow" toggle is what
+turns on a bounded, `sinceSeq`-scoped poll (every few seconds, never
+heavier), and the `log` `/ws` drop notice triggers exactly one bounded
+refetch on its own, event-driven rather than a second timer. Both panels
+proven end to end against the real server (`apps/web/e2e/
+search-settings-logs.spec.ts`): a live-applying setting write lands
+immediately and "remove override" reverts it; a request line is queryable
+and a component filter that matches nothing renders the panel's own honest
+empty state rather than stale rows. Deferred, honestly: no settings surface
+yet lets a session read even the non-`humanOnly` slice §8 mentions — there is
+none in the catalog today, so the panel's own read path was never exercised
+against one; `component` filtering is exactly as comprehensive as the
+server's own tagging (§8.3's server note), so the panel's filter box is
+honest but sparse until more call sites are tagged._
 
 ### Epic 8.4 — Packaging and deployment (`desktop`, `server`)
 
