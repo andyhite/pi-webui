@@ -11,8 +11,8 @@
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests",
     "deploy:server": "node scripts/stage-resources.mjs",
-    "package": "node scripts/stage-resources.mjs && electron-builder build --config electron-builder.yml",
-    "package:linux": "node scripts/stage-resources.mjs && electron-builder build --linux --config electron-builder.yml"
+    "package": "node scripts/stage-resources.mjs && node scripts/package.mjs",
+    "package:linux": "node scripts/stage-resources.mjs && node scripts/package.mjs --linux"
   },
   "description": "PlotRoom desktop shell (Electron main process)",
   "author": "PlotRoom",
