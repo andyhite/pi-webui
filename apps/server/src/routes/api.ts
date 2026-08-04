@@ -126,6 +126,16 @@ export interface ApiEnv {
   readonly Variables: {
     actor: Author;
     body: unknown;
+    /**
+     * Set by `destructionGuard` when §6.6 already answered for this call — a
+     * pre-grant, a standing decision, or an approval the operator answered.
+     *
+     * A destructive route passes it to the effect, which asks `checkDeletion`.
+     * That is what makes the predicate a real second line rather than a comment:
+     * a session's destructive call that never went through the guard arrives
+     * with nothing stating anybody agreed, and the effect refuses it.
+     */
+    destructionApproved?: boolean;
   };
 }
 
@@ -144,6 +154,11 @@ export interface BodyAware {
   get(key: "body"): unknown;
 }
 
+export interface DestructionAware {
+  get(key: "actor"): Author;
+  get(key: "destructionApproved"): boolean | undefined;
+}
+
 export interface ParamAware {
   readonly req: { param(name: string): string | undefined };
 }
@@ -155,6 +170,24 @@ export function body<T>(c: BodyAware): T {
 
 export function actorOf(c: ActorAware): Author {
   return c.get("actor");
+}
+
+/**
+ * What a destructive route hands the effect: who is doing it, and whether §6.6
+ * answered before the route ran.
+ *
+ * Absent means nobody stated an answer, which is the only safe reading of a
+ * call that did not pass `destructionGuard` — the operator is never gated by
+ * `checkDeletion`, so this only ever decides a session's own gesture.
+ */
+export function destructionGate(c: DestructionAware): {
+  readonly author: Author;
+  readonly approved: boolean;
+} {
+  return {
+    author: c.get("actor"),
+    approved: c.get("destructionApproved") ?? false,
+  };
 }
 
 /**

@@ -6,10 +6,19 @@ import {
   type ObjectVersion,
   type PlotObject,
 } from "@plotroom/core";
+import { destroyObject } from "../approvals/destruction.js";
+import { atomically } from "../events/atomic.js";
 import { notFound } from "../http/errors.js";
 import { validateJsonBody } from "../http/validate.js";
-import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
-import { announceRemoval, announceRestoration } from "./announce.js";
+import {
+  actorOf,
+  body,
+  destructionGate,
+  param,
+  type ApiEnv,
+  type ApiStores,
+} from "./api.js";
+import { announceRestoration } from "./announce.js";
 import { toPlotObject } from "./mappers.js";
 
 const renderings = z.object({
@@ -156,51 +165,58 @@ export function objectRoutes(stores: ApiStores): Hono<ApiEnv> {
     return c.json({ object: announce(actorOf(c), id, "updated") });
   });
 
+  /**
+   * Delete an object (§3.2, principle 10) — the operator's own gesture; a
+   * session's reaches this route only once §6.6 has answered
+   * (`destructionGuard`), and lands on the same effect either way. The effect
+   * is one transaction over the object and the node the board draws for it, and
+   * it asks `checkDeletion` before it writes: the route states what the guard
+   * decided rather than deciding again.
+   */
   app.delete("/objects/:id", (c) => {
     const id = param(c, "id");
-    const author = actorOf(c);
-    const existed = readObject(id).id;
-    const wasLive = objects.get(id)?.deletedAt === null;
-    const row = objects.delete(id);
+    // An id that names nothing is a 404 before anything else happens, which is
+    // what it was when this route did the deleting itself.
+    readObject(id);
+    destroyObject(stores, bus, id, destructionGate(c));
 
-    // The placement goes with it, so the board matches the model; restoring
-    // the object puts the node and its wires back (principle 10). The cascade
-    // is announced, not inferred — a subscriber told only "object deleted"
-    // would keep drawing the node and every wire into it.
-    const node = graph.findNodeFor("content", id);
-    if (node) announceRemoval(bus, author, graph.removeNode(node.id));
-
-    if (wasLive) {
-      bus.publish({
-        entity: "object",
-        verb: "deleted",
-        objectId: existed,
-        author,
-      });
-    }
-
-    return c.json({ object: toPlotObject(row), restorable: true });
+    // Read back rather than returned by the effect: a soft delete leaves the row
+    // exactly where it was, and the response says which one went.
+    return c.json({ object: readObject(id), restorable: true });
   });
 
+  /**
+   * Undo one (principle 10): the object, its node, and the wires it had — in one
+   * transaction, because a restore that half-landed is the same desync its
+   * removal would have been.
+   */
   app.post("/objects/:id/restore", (c) => {
     const id = param(c, "id");
     const author = actorOf(c);
-    const wasDeleted = objects.get(id)?.deletedAt !== null;
-    const row = objects.restore(id);
 
-    if (wasDeleted) {
-      bus.publish({
-        entity: "object",
-        verb: "created",
-        object: toPlotObject(row),
-        author,
-      });
-    }
+    const row = atomically(stores.db, bus, (announce) => {
+      const wasDeleted = objects.get(id)?.deletedAt !== null;
+      const restored = objects.restore(id);
 
-    // Roots before leaves: the object exists again before anything that
-    // refers to it does.
-    const node = graph.findNodeFor("content", id);
-    if (node) announceRestoration(bus, author, graph.restoreNode(node.id));
+      if (wasDeleted) {
+        announce.publish({
+          entity: "object",
+          verb: "created",
+          object: toPlotObject(restored),
+          author,
+        });
+      }
+
+      // Roots before leaves: the object exists again before anything that
+      // refers to it does — which is also what lets the node's own restore
+      // check that its subject is back (`GraphStore.restoreNode`).
+      const node = graph.findNodeFor("content", id);
+      if (node) {
+        announceRestoration(announce, author, graph.restoreNode(node.id));
+      }
+
+      return restored;
+    });
 
     return c.json({ object: toPlotObject(row) });
   });

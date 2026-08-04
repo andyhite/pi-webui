@@ -13,7 +13,7 @@ import { openDatabase, type PlotroomDatabase } from "@plotroom/db";
 import { createEventBus } from "../events/bus.js";
 import { ApiError } from "../http/errors.js";
 import { createStores, type ApiStores } from "../routes/api.js";
-import { performDestruction } from "./destruction.js";
+import { destroyObject, performDestruction } from "./destruction.js";
 
 /**
  * The backstop under the destruction guard (§6.6, principle 10).
@@ -100,7 +100,8 @@ describe("performDestruction", () => {
     const agent = sessionAuthor("sess-1" as SessionId);
 
     await expect(
-      performDestruction(stores, stores.bus, "object", objectId, agent, {
+      performDestruction(stores, stores.bus, "object", objectId, {
+        author: agent,
         stopSession: stopper().stop,
       }),
     ).rejects.toThrowError(ApiError);
@@ -117,8 +118,7 @@ describe("performDestruction", () => {
       stores.bus,
       "object",
       objectId,
-      agent,
-      { approved: true, stopSession: stopper().stop },
+      { author: agent, approved: true, stopSession: stopper().stop },
     );
 
     expect(outcome.changed).toBe(true);
@@ -133,12 +133,77 @@ describe("performDestruction", () => {
       stores.bus,
       "object",
       objectId,
-      humanAuthor,
-      { stopSession: stopper().stop },
+      { author: humanAuthor, stopSession: stopper().stop },
     );
 
     expect(outcome.changed).toBe(true);
     expect(stores.objects.get(objectId)?.deletedAt).not.toBeNull();
+  });
+
+  it("refuses at the entry point the routes call, not only through the dispatch", async () => {
+    const objectId = note();
+
+    // The routes call these directly — they have no session to stop and no kind
+    // to dispatch — so the gate has to be in each of them rather than in
+    // `performDestruction` alone. Before that, the middleware was the only
+    // enforcement for `objects.ts`, `graph.ts`, `commands.ts` and
+    // `workstreams.ts` (issue #76).
+    expect(() =>
+      destroyObject(stores, stores.bus, objectId, {
+        author: sessionAuthor("sess-1" as SessionId),
+      }),
+    ).toThrowError(ApiError);
+    expect(stores.objects.get(objectId)?.deletedAt).toBeNull();
+  });
+});
+
+/**
+ * A cascade is one unit (issue #76, principle 10).
+ *
+ * A destruction soft-deletes its subject **and** takes the node the board draws
+ * for it off the board. Those were two statements, so a failure between them left
+ * a live node whose subject the reads filter out — a card with nothing behind it
+ * — and, worse, an approval whose recorded effect failure said the destruction
+ * did not happen about one that half did.
+ */
+describe("a destruction that cannot finish leaves nothing behind", () => {
+  /** The board write fails, after the record's own has already run. */
+  function breakTheBoard(): void {
+    stores.graph.removeNode = () => {
+      throw new Error("the board write failed");
+    };
+  }
+
+  it("rolls the subject's deletion back with it", () => {
+    const objectId = note();
+    stores.graph.place({ role: "content", refId: objectId, workstreamId });
+    breakTheBoard();
+
+    expect(() =>
+      destroyObject(stores, stores.bus, objectId, { author: humanAuthor }),
+    ).toThrowError(/board write failed/);
+
+    // Either the whole gesture happened or none of it did: "approved, but it
+    // could not be carried out" is only a true record while this holds.
+    expect(stores.objects.get(objectId)?.deletedAt).toBeNull();
+  });
+
+  it("still announces the whole cascade when it does commit", () => {
+    const objectId = note();
+    const node = stores.graph.place({
+      role: "content",
+      refId: objectId,
+      workstreamId,
+    });
+    const announced: string[] = [];
+    stores.bus.subscribe((event) => announced.push(`${event.entity}`));
+
+    destroyObject(stores, stores.bus, objectId, { author: humanAuthor });
+
+    // Leaves first, then the record: the order the announce helpers established,
+    // preserved by buffering rather than lost to it.
+    expect(announced).toEqual(["node", "object"]);
+    expect(stores.graph.node(node.id).deletedAt).not.toBeNull();
   });
 });
 
@@ -159,8 +224,7 @@ describe("destroying a session", () => {
       stores.bus,
       "session",
       sessionId,
-      humanAuthor,
-      { stopSession: stop.stop },
+      { author: humanAuthor, stopSession: stop.stop },
     );
 
     expect(outcome.changed).toBe(true);
@@ -181,14 +245,10 @@ describe("destroying a session", () => {
     });
     const stop = stopper();
 
-    await performDestruction(
-      stores,
-      stores.bus,
-      "session",
-      sessionId,
-      humanAuthor,
-      { stopSession: stop.stop },
-    );
+    await performDestruction(stores, stores.bus, "session", sessionId, {
+      author: humanAuthor,
+      stopSession: stop.stop,
+    });
 
     expect(stop.stopped).toEqual([]);
     // The outcome it ended with is the outcome it keeps: a deletion is not a
@@ -204,14 +264,10 @@ describe("destroying a session", () => {
       turn: 1,
     });
 
-    await performDestruction(
-      stores,
-      stores.bus,
-      "session",
-      sessionId,
-      humanAuthor,
-      { stopSession: stopper().stop },
-    );
+    await performDestruction(stores, stores.bus, "session", sessionId, {
+      author: humanAuthor,
+      stopSession: stopper().stop,
+    });
 
     // §3.6: readable *always*. The observation log is the record (decision
     // 0001), so a restore that lost it would put back a session in name only.
@@ -241,14 +297,10 @@ describe("destroying a session", () => {
       author: humanAuthor,
     });
 
-    await performDestruction(
-      stores,
-      stores.bus,
-      "session",
-      sessionId,
-      humanAuthor,
-      { stopSession: stopper().stop },
-    );
+    await performDestruction(stores, stores.bus, "session", sessionId, {
+      author: humanAuthor,
+      stopSession: stopper().stop,
+    });
     expect(stores.graph.node(node.id).deletedAt).not.toBeNull();
     // The wire goes with the node, or the board draws an edge to nothing.
     expect(stores.graph.edge(edge.id).deletedAt).not.toBeNull();
@@ -273,30 +325,20 @@ describe("destroying a session", () => {
 
     // The second gesture lands while the first is suspended in its stop — the
     // one interleaving the awaited stop makes reachable.
-    const slow = performDestruction(
-      stores,
-      stores.bus,
-      "session",
-      sessionId,
-      humanAuthor,
-      {
-        stopSession: async (id) => {
-          stores.sessions.end(id, {
-            kind: "stopped",
-            by: "user",
-            at: clock.now(),
-          });
-          await performDestruction(
-            stores,
-            stores.bus,
-            "session",
-            sessionId,
-            humanAuthor,
-            { stopSession: stopper().stop },
-          );
-        },
+    const slow = performDestruction(stores, stores.bus, "session", sessionId, {
+      author: humanAuthor,
+      stopSession: async (id) => {
+        stores.sessions.end(id, {
+          kind: "stopped",
+          by: "user",
+          at: clock.now(),
+        });
+        await performDestruction(stores, stores.bus, "session", sessionId, {
+          author: humanAuthor,
+          stopSession: stopper().stop,
+        });
       },
-    );
+    });
 
     // One deletion happened, so one deletion is announced and only one gesture
     // reports having changed anything.
@@ -306,14 +348,10 @@ describe("destroying a session", () => {
 
   it("is idempotent: a second delete changes nothing and stops nothing", async () => {
     const sessionId = session();
-    await performDestruction(
-      stores,
-      stores.bus,
-      "session",
-      sessionId,
-      humanAuthor,
-      { stopSession: stopper().stop },
-    );
+    await performDestruction(stores, stores.bus, "session", sessionId, {
+      author: humanAuthor,
+      stopSession: stopper().stop,
+    });
 
     const again = stopper();
     const outcome = await performDestruction(
@@ -321,8 +359,7 @@ describe("destroying a session", () => {
       stores.bus,
       "session",
       sessionId,
-      humanAuthor,
-      { stopSession: again.stop },
+      { author: humanAuthor, stopSession: again.stop },
     );
 
     expect(outcome.changed).toBe(false);
@@ -335,7 +372,8 @@ describe("destroying a session", () => {
     const stop = stopper();
 
     await expect(
-      performDestruction(stores, stores.bus, "session", sessionId, agent, {
+      performDestruction(stores, stores.bus, "session", sessionId, {
+        author: agent,
         stopSession: stop.stop,
       }),
     ).rejects.toThrowError(ApiError);

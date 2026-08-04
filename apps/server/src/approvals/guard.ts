@@ -35,15 +35,16 @@ import type { ApprovalService } from "./service.js";
  * evaluated here would otherwise cover a delete inside the caller's own chain
  * with nobody asked (`lineage.ts`, issue #75).
  *
- * **What catches a call that gets past this.** `performDestruction` — the one
- * function that actually destroys anything on a session's behalf — asks
- * `checkDeletion` first, and that predicate refuses a session-authored deletion
- * with no approval behind it. So a future call site that forgets to route through
- * here fails closed rather than deleting. Note the honest limit: the *routes*
- * still perform their own soft deletes inline (`objects.ts`, `graph.ts`,
- * `commands.ts`, `workstreams.ts`) and do not call that predicate, so for those
- * this middleware is the enforcement and not a second line — which is why the
- * catalog test pins every destruction tool's endpoint to a shape this can match.
+ * **What catches a call that gets past this.** Every destructive effect goes
+ * through `destruction.ts`, and the gate there asks `checkDeletion` before it
+ * writes anything — the predicate refuses a session-authored deletion with no
+ * approval behind it. That covers the routes too, because they no longer delete
+ * inline: `objects.ts`, `graph.ts`, `commands.ts` and `workstreams.ts` perform
+ * their soft deletes through those functions, so this middleware is a first line
+ * and the predicate is a real second one. What the middleware contributes there
+ * is the *statement* that §6.6 answered — a pre-grant or a standing decision
+ * that allowed the call sets `destructionApproved`, without which the effect
+ * would refuse the gesture the operator already agreed to.
  */
 export interface DestructionGuardDeps {
   readonly approvals: ApprovalService;
@@ -84,7 +85,10 @@ export function destructionGuard(
     switch (routing.verdict.kind) {
       case "allowed":
         // Answered, or nothing gated it. The gesture executes as the session's
-        // own, which is what the operator agreed to.
+        // own, which is what the operator agreed to — and the route says so to
+        // the effect, whose `checkDeletion` would otherwise refuse a session's
+        // deletion for want of anybody stating that somebody agreed.
+        c.set("destructionApproved", true);
         return next();
 
       case "denied":

@@ -13,11 +13,19 @@ import {
 } from "@plotroom/core";
 import { destroySession } from "../approvals/destruction.js";
 import type { ClaimService } from "../claims/service.js";
+import { atomically } from "../events/atomic.js";
 import { validateJsonBody } from "../http/validate.js";
 import type { RunService } from "../runs/service.js";
 import { reindexSessionSearch } from "../search/session-index.js";
 import { announceRestoration } from "./announce.js";
-import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
+import {
+  actorOf,
+  body,
+  destructionGate,
+  param,
+  type ApiEnv,
+  type ApiStores,
+} from "./api.js";
 
 /**
  * Sessions as reads and verbs (§3.6).
@@ -236,12 +244,11 @@ export function sessionRoutes(
    */
   app.delete("/sessions/:id", async (c) => {
     const id = param(c, "id");
-    const author = actorOf(c);
     const outcome = await destroySession(
       stores,
       stores.bus,
       id,
-      author,
+      destructionGate(c),
       async (sessionId) => {
         await service.stopSession({
           sessionId,
@@ -262,40 +269,49 @@ export function sessionRoutes(
     });
   });
 
-  /** Undo one (principle 10): the record, its node, and the wires it had. */
+  /**
+   * Undo one (principle 10): the record, its node, and the wires it had — in one
+   * transaction, because a restore that half-landed leaves the same disagreement
+   * between board and records that a half-landed removal does.
+   */
   app.post("/sessions/:id/restore", (c) => {
     const id = param(c, "id");
     const author = actorOf(c);
-    const wasDeleted =
-      stores.sessions.get(id).session.deletion.deletedAt !== null;
-    const stored = stores.sessions.restore(id);
 
-    if (wasDeleted) {
-      // Roots before leaves, the order `announceRestoration` itself follows: the
-      // record is back before the node that stands for it, and the node before the
-      // wires that need it to exist.
-      stores.bus.publish({
-        entity: "session",
-        verb: "updated",
-        session: stored.session,
-        status: stores.sessions.status(id, {
-          now: systemMillisClock(),
-          waitingOnClaim: claims.isWaitingOnClaim(id),
-        }),
-        author,
-      });
+    const stored = atomically(stores.db, stores.bus, (announce) => {
+      const wasDeleted =
+        stores.sessions.get(id).session.deletion.deletedAt !== null;
+      const restored = stores.sessions.restore(id);
 
-      // Only inside this branch: an undo returns what its own removal removed, so
-      // a node the operator deleted separately stays deleted (principle 10).
-      const placement = stores.graph.findNodeFor("session", id);
-      if (placement) {
-        announceRestoration(
-          stores.bus,
+      if (wasDeleted) {
+        // Roots before leaves, the order `announceRestoration` itself follows: the
+        // record is back before the node that stands for it, and the node before the
+        // wires that need it to exist.
+        announce.publish({
+          entity: "session",
+          verb: "updated",
+          session: restored.session,
+          status: stores.sessions.status(id, {
+            now: systemMillisClock(),
+            waitingOnClaim: claims.isWaitingOnClaim(id),
+          }),
           author,
-          stores.graph.restoreNode(placement.id),
-        );
+        });
+
+        // Only inside this branch: an undo returns what its own removal removed, so
+        // a node the operator deleted separately stays deleted (principle 10).
+        const placement = stores.graph.findNodeFor("session", id);
+        if (placement) {
+          announceRestoration(
+            announce,
+            author,
+            stores.graph.restoreNode(placement.id),
+          );
+        }
       }
-    }
+
+      return restored;
+    });
 
     return c.json({
       session: stored.session,

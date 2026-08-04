@@ -556,8 +556,8 @@ export class ApprovalService {
       this.deps.bus,
       target.kind as never,
       target.id,
-      sessionAuthor(approval.sessionId),
       {
+        author: sessionAuthor(approval.sessionId),
         // Stated, not inferred: this branch is reached only for an `approve-once`
         // answer, which is exactly what `checkDeletion` is asking about.
         approved: true,

@@ -10,7 +10,18 @@ import {
 } from "@plotroom/core";
 import { toDefinition, toOutput, type EditDefinitionInput } from "@plotroom/db";
 import { validateJsonBody } from "../http/validate.js";
-import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
+import {
+  destroyCommand,
+  destroyCommandDefinition,
+} from "../approvals/destruction.js";
+import {
+  actorOf,
+  body,
+  destructionGate,
+  param,
+  type ApiEnv,
+  type ApiStores,
+} from "./api.js";
 import { toCommandNode, toEdge, toPlacedNode } from "./mappers.js";
 
 const permissions = z.object({
@@ -188,20 +199,12 @@ export function commandRoutes(stores: ApiStores): Hono<ApiEnv> {
 
   app.delete("/command-definitions/:id", (c) => {
     const id = param(c, "id");
-    const author = actorOf(c);
-    const wasLive = commands.definitionRow(id).deletedAt === null;
-    const definition = toDefinition(commands.deleteDefinition(id));
+    destroyCommandDefinition(stores, bus, id, destructionGate(c));
 
-    if (wasLive) {
-      bus.publish({
-        entity: "command_definition",
-        verb: "deleted",
-        definitionId: definition.id,
-        author,
-      });
-    }
-
-    return c.json({ definition, restorable: true });
+    return c.json({
+      definition: toDefinition(commands.definitionRow(id)),
+      restorable: true,
+    });
   });
 
   app.post("/command-definitions/:id/restore", (c) => {
@@ -293,29 +296,7 @@ export function commandRoutes(stores: ApiStores): Hono<ApiEnv> {
 
   app.delete("/commands/:id", (c) => {
     const id = param(c, "id");
-    const author = actorOf(c);
-    const wasLive = commands.command(id).deletedAt === null;
-    const effects = commands.delete(id);
-
-    if (wasLive) {
-      bus.publish({
-        entity: "command",
-        verb: "deleted",
-        commandId: toCommandNode(commands.command(id)).id,
-        author,
-      });
-      // A pre-bind placeholder is now visibly broken and its wires stay
-      // exactly where they are: nothing downstream is silently unblocked
-      // (§3.5).
-      for (const output of commands.outputs(id)) {
-        bus.publish({
-          entity: "command_output",
-          verb: "updated",
-          output,
-          author,
-        });
-      }
-    }
+    const { effects } = destroyCommand(stores, bus, id, destructionGate(c));
 
     return c.json({ effects, restorable: true });
   });
