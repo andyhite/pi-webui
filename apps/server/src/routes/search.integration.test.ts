@@ -141,4 +141,13 @@ describe("search (§6.8)", () => {
 
     expect(res.status).toBe(400);
   });
+
+  it("refuses a session actor (principle 1): a snippet of another session's transcript is not this session's to read", async () => {
+    const harness = await boot(repository());
+    const res = await harness.call("/search?q=anything", {
+      actor: "session:sess_curious",
+    });
+
+    expect(res.status).toBe(403);
+  });
 });

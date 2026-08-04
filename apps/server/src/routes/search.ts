@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import { badRequest } from "../http/errors.js";
-import type { ApiEnv, ApiStores } from "./api.js";
+import { badRequest, forbidden } from "../http/errors.js";
+import { actorOf, type ApiEnv, type ApiStores } from "./api.js";
 
 /**
  * FTS search (§6.8).
@@ -18,11 +18,27 @@ import type { ApiEnv, ApiStores } from "./api.js";
  * producer can write `note`, `ticket`, or any other kind into the same table
  * without a new endpoint, which is why `kinds` is already a filter here
  * rather than assumed to be `["session"]`.
+ *
+ * The operator's own surface, matching `/api/logs` and `/api/settings`: a
+ * search result carries transcript snippets across every workstream a
+ * session was never wired into, so a session reading it would be the exact
+ * silent reach principle 1 exists to prevent — not lessened by "only a
+ * snippet", since a snippet is exactly how much of another session's private
+ * content a session was never given. This route's own
+ * `OPERATOR_ONLY_ROUTES` entry already declares it operator-only
+ * (`packages/core/src/sessions/tools/catalog.test.ts`); this is that
+ * declaration enforced rather than merely documented (cross-cutting rule 3).
  */
 export function searchRoutes(stores: ApiStores): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
 
   app.get("/search", (c) => {
+    if (actorOf(c).kind !== "human") {
+      throw forbidden(
+        "search is the operator's browse/find surface (§6.8); a session cannot make it",
+      );
+    }
+
     const q = c.req.query("q")?.trim() ?? "";
     if (q.length === 0) {
       throw badRequest("q is required and must be non-empty");
