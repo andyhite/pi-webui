@@ -33,14 +33,29 @@ const ROUTES_DIR = fileURLToPath(
 
 const API_PREFIX = "/api";
 
+/**
+ * Every verb the scanner recognises — deliberately **wider** than `HttpMethod`,
+ * which is the set the catalog can express.
+ *
+ * A scanner that only looked for the verbs the catalog knows about could never
+ * report the one drift that matters most: a route mounted under a verb no tool can
+ * name. `PUT /api/settings/:key` was exactly that — unscanned, so neither
+ * direction below could see it, and a body-write endpoint shipped with the
+ * vocabulary check passing over it rather than judging it. Scanning the wider set
+ * is the fix: the route is found, and then it either has a tool or is declared
+ * operator-only like every other endpoint.
+ */
+type ScannedMethod = HttpMethod | "PUT";
+
 interface MountedRoute {
-  readonly method: HttpMethod;
+  readonly method: ScannedMethod;
   /** With `/api` prepended, and every `${...}` expanded to the literal it loops over. */
   readonly path: string;
   readonly source: string;
 }
 
-const ROUTE_CALL = /app\.(get|post|patch|delete)\(\s*(?:"([^"]+)"|`([^`]+)`)/g;
+const ROUTE_CALL =
+  /app\.(get|post|put|patch|delete)\(\s*(?:"([^"]+)"|`([^`]+)`)/g;
 
 /** `for (const gesture of ["archive", "unarchive"] as const)` — one route per value. */
 const LOOP_LITERAL = /for \(const (\w+) of \[([^\]]+)\]/g;
@@ -91,7 +106,7 @@ function mountedRoutes(): readonly MountedRoute[] {
     const source = readFileSync(join(ROUTES_DIR, file), "utf8");
     const values = loopValues(source);
     for (const match of source.matchAll(ROUTE_CALL)) {
-      const method = match[1]?.toUpperCase() as HttpMethod;
+      const method = match[1]?.toUpperCase() as ScannedMethod;
       const raw = match[2] ?? match[3];
       if (raw === undefined) continue;
       for (const path of expand(raw, values)) {
@@ -280,6 +295,15 @@ describe("the mounted routes", () => {
     // The templated loop really did expand, rather than being skipped.
     expect(
       routes.some((route) => route.path === "/api/workstreams/:id/archive"),
+    ).toBe(true);
+    // And a body-write mounted under a verb the catalog cannot express is still
+    // found: an unscanned route is a route this suite reports as covered by
+    // never having looked at it (§11's settings write is the live example).
+    expect(
+      routes.some(
+        (route) =>
+          route.method === "PUT" && route.path === "/api/settings/:key",
+      ),
     ).toBe(true);
   });
 
