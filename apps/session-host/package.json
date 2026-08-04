@@ -8,6 +8,11 @@
       "source": "./src/main.ts",
       "types": "./dist/main.d.ts",
       "default": "./dist/main.js"
+    },
+    "./compile": {
+      "source": "./src/compile.ts",
+      "types": "./dist/compile.d.ts",
+      "default": "./dist/compile.js"
     }
   },
   "scripts": {
