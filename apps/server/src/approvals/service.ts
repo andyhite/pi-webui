@@ -7,6 +7,7 @@ import {
   newApprovalId,
   newPreGrantId,
   raiseApproval,
+  recordApprovalEffectFailure,
   sessionAuthor,
   settlesAsk,
   type Approval,
@@ -138,6 +139,12 @@ export interface AnsweredApproval {
   readonly settled: boolean;
   /** True when approving executed the destruction it authorized. */
   readonly executed: boolean;
+  /**
+   * Why the authorized effect did not happen, when it did not: `executed` is false
+   * for a denial and for a failure alike, and those are not the same event. Null in
+   * every other case.
+   */
+  readonly effectFailure: string | null;
 }
 
 export class ApprovalService {
@@ -180,6 +187,27 @@ export class ApprovalService {
    * the answer, act on what it authorized, then tell the blocked call. Telling the
    * runtime first would let a session proceed on a decision that had not been
    * written down.
+   *
+   * **Nothing after the answer is written can stop the last step**, and none of it
+   * reopens the first. The answer is what a human decided and it stands; anything
+   * that then fails is recorded on the row (`recordApprovalEffectFailure`), which is
+   * what puts it back in §7.1 and what makes `approvalOutcome` deny rather than
+   * allow.
+   *
+   * The guarded region deliberately includes the **publish**: `EventBus.publish`
+   * calls its listeners inline and does not isolate them, and one of them
+   * (`PluginService.onEvent`) writes a grant and talks to a worker, so a listener
+   * throwing used to unwind straight out of here and reproduce this bug exactly —
+   * answered row, no effect, no record, no settle.
+   *
+   * On the blocked call: `settle` is a no-op for an approval raised with no runtime
+   * request behind it, which today is every kind whose effect can fail (a
+   * destruction arrives as an HTTP tool call the guard already answered 202; a claim
+   * wait has no request either). So the reachable damage this fixes is the 500, the
+   * row that read answered-and-done, and the silence in §7.1. Running `settle`
+   * unconditionally is what stops the *other* half from returning when a runtime
+   * raises a destruction with a request behind it — #81's gate — and it costs a
+   * null check to keep true now rather than to remember later.
    */
   async answer(request: AnswerApprovalRequest): Promise<AnsweredApproval> {
     const stores = this.deps.stores;
@@ -200,12 +228,24 @@ export class ApprovalService {
     if (!answered.ok) throw refused(answered.refusal);
 
     const saved = stores.approvals.answer(answered.value);
-    this.publish(saved, "updated");
 
-    const executed = await this.applyAnswer(saved);
-    const settled = await this.settle(saved);
+    let executed = false;
+    let record = saved;
+    try {
+      this.publish(saved, "updated");
+      executed = await this.applyAnswer(saved);
+    } catch (error) {
+      record = this.recordEffectFailure(saved, error);
+    }
 
-    return { approval: saved, settled, executed };
+    const settled = await this.settle(record);
+
+    return {
+      approval: record,
+      settled,
+      executed,
+      effectFailure: record.effectFailure?.message ?? null,
+    };
   }
 
   pending(sessionId?: string): readonly Approval[] {
@@ -223,15 +263,44 @@ export class ApprovalService {
   }
 
   /**
-   * The attention rows (§7.1), wording each approval once. A claim approval whose
-   * wait is gone is left out: the wait was withdrawn or granted elsewhere, so
+   * The approvals **still asking** (§7.1), wording each one once. A claim approval
+   * whose wait is gone is left out: the wait was withdrawn or granted elsewhere, so
    * there is nothing left to answer — the record stays as history rather than
    * sitting in the queue asking about something that no longer exists.
+   *
+   * Only unanswered rows, and that is load-bearing rather than incidental: this
+   * list is also what the health feed reads as "a question or approval nobody has
+   * answered yet" (§7.2's `unanswered` alert). An answered row in here becomes an
+   * alert claiming nobody answered, timed from the raise, that never clears.
    */
   attention(): readonly { approval: Approval; attention: ApprovalAttention }[] {
     const rows: { approval: Approval; attention: ApprovalAttention }[] = [];
     for (const approval of this.pending()) {
       if (!this.stillAsking(approval)) continue;
+      const attention = approvalAttention(approval);
+      if (attention === null) continue;
+      rows.push({ approval, attention });
+    }
+    return rows;
+  }
+
+  /**
+   * The approvals the operator answered whose authorized effect then **failed**
+   * (§7.1). Its own verb rather than more rows out of `attention()`, because the
+   * two are different facts and only one of them is a question: this list asks for
+   * nothing, it reports that a decision did not take effect.
+   *
+   * It leaves the queue when the operator triages it (§4.5's mute), like any other
+   * row §7.1 tells them about rather than asks them. Nothing here clears itself —
+   * the fact happened, and a record that quietly disappeared would be the state
+   * this whole thing exists to prevent.
+   */
+  effectFailureAttention(): readonly {
+    approval: Approval;
+    attention: ApprovalAttention;
+  }[] {
+    const rows: { approval: Approval; attention: ApprovalAttention }[] = [];
+    for (const approval of this.deps.stores.approvals.effectFailures()) {
       const attention = approvalAttention(approval);
       if (attention === null) continue;
       rows.push({ approval, attention });
@@ -498,6 +567,74 @@ export class ApprovalService {
     return outcome.changed;
   }
 
+  /**
+   * The effect did not happen. Write that down, tell every surface, and hand back
+   * the record the blocked call is settled from.
+   *
+   * Written to the row rather than logged, and this is the whole point of the
+   * record: a log line leaves an approval that reads answered-and-done next to a
+   * destruction that never occurred, which is the invisible state from the other
+   * side. The publish is `updated` — the same verb the answer used, because this is
+   * the same record changing again, and §7.1 re-derives from it.
+   *
+   * **Nothing in here may throw**, and that is why the store write and the publish
+   * are inside the guard rather than trusted: this function's whole job is to be the
+   * thing that runs when something else broke, and a listener or a full disk taking
+   * it down with them would leave the caller in the state it exists to prevent. When
+   * it cannot persist, the in-memory record is still returned, so the answer is
+   * still settled from a record that knows the effect failed — one lost sentence
+   * rather than one lost call.
+   */
+  private recordEffectFailure(approval: Approval, error: unknown): Approval {
+    const message = failureMessage(error, approval.kind);
+    this.deps.logger.error("an approved effect failed", {
+      approvalId: approval.id,
+      sessionId: approval.sessionId,
+      kind: approval.kind,
+      message,
+    });
+
+    const recorded = recordApprovalEffectFailure(approval, {
+      message,
+      at: this.deps.stores.clock(),
+    });
+    if (!recorded.ok) {
+      this.deps.logger.error("could not record a failed approval effect", {
+        approvalId: approval.id,
+        reason: recorded.refusal.reason,
+        message: recorded.refusal.message,
+      });
+      return approval;
+    }
+
+    try {
+      const saved = this.deps.stores.approvals.recordEffectFailure(
+        recorded.value,
+      );
+      this.publish(saved, "updated");
+      return saved;
+    } catch (writeError) {
+      this.deps.logger.error("could not store a failed approval effect", {
+        approvalId: approval.id,
+        message:
+          writeError instanceof Error ? writeError.message : String(writeError),
+      });
+      return recorded.value;
+    }
+  }
+
+  /**
+   * Settle the claim wait this approval stood for (§3.4).
+   *
+   * This one catches, and the asymmetry with the destruction branch is deliberate
+   * rather than the oversight it looks like. Most of what the claim manager refuses
+   * here is **self-resolving**: a wait that was authorized while the operator was
+   * deciding is "already authorized and only waiting for the path to free", and one
+   * whose granting claim has gone re-raises itself. Recording either as a failed
+   * effect would put a state that is fixing itself in front of the operator for
+   * ever, and §7.1's job is the opposite of that. A destruction is not like this:
+   * nothing retries it, so a failure there is final until somebody acts.
+   */
   private answerClaimWait(
     approval: Approval,
     decision: "grant" | "deny",
@@ -591,6 +728,36 @@ export class ApprovalService {
       author: approval.answer?.by ?? sessionAuthor(approval.sessionId),
     });
   }
+}
+
+/**
+ * How long a recorded failure may be. It becomes the §7.1 sentence and travels to
+ * an outbound route (§7.3), so an unbounded one turns the operator's queue row into
+ * a paragraph of system text — and it is bounded here rather than at the route,
+ * because the row is what everything else reads.
+ */
+const FAILURE_MESSAGE_MAX_CHARS = 240;
+
+/**
+ * What went wrong, in one line the operator can act on.
+ *
+ * This is PlotRoom's own error text rather than a tool's input, so it is not the
+ * credential hazard `buildToolSummary` refuses raw input over (§9.3) — but it is
+ * unbounded system text on its way to a queue row and a webhook, so it is
+ * collapsed to one line and capped, visibly, rather than passed through. An error
+ * that says nothing at all still has to say something: an unexplained failure sends
+ * the operator looking for a log they may not have kept.
+ */
+function failureMessage(error: unknown, kind: string): string {
+  const raw = (error instanceof Error ? error.message : String(error))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (raw.length === 0) {
+    return `the ${kind} this authorized failed without saying why`;
+  }
+  return raw.length <= FAILURE_MESSAGE_MAX_CHARS
+    ? raw
+    : `${raw.slice(0, FAILURE_MESSAGE_MAX_CHARS)}… (truncated; the whole message is in the log)`;
 }
 
 /** Exported for the gate: whether this answered approval settles that ask. */

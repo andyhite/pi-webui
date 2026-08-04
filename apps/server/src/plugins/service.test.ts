@@ -141,6 +141,10 @@ function answer(decision: "approve-once" | "deny"): void {
       by: humanAuthor,
       at: clock.now(),
     },
+    // Part of the record now (§6.6): `isApproved` reads it, because an approval
+    // whose authorized effect failed no longer authorizes anything. A permission
+    // raise has no effect of its own to fail, so it is always null here.
+    effectFailure: null,
   } as Approval;
   raised[raised.length - 1] = answered;
   bus.publish({

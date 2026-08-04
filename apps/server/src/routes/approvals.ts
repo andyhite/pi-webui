@@ -92,7 +92,10 @@ export function approvalRoutes(approvals: ApprovalService): Hono<ApiEnv> {
    *
    * `settled` says whether a blocked runtime call was told; `executed` says
    * whether approving performed the destruction it authorized, attributed to the
-   * session that asked rather than to the operator who agreed.
+   * session that asked rather than to the operator who agreed; `effectFailure`
+   * says why it did not, when it did not. The last one is not derivable from the
+   * first two — a denial and a failed destruction both report `executed: false`,
+   * and they are not the same event.
    */
   app.post("/approvals/:id/answer", validateJsonBody(answerBody), async (c) => {
     const input = body<z.infer<typeof answerBody>>(c);
@@ -107,6 +110,7 @@ export function approvalRoutes(approvals: ApprovalService): Hono<ApiEnv> {
       approval: result.approval,
       settled: result.settled,
       executed: result.executed,
+      effectFailure: result.effectFailure,
     });
   });
 

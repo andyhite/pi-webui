@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   claimPath,
+  destructionAsk,
   humanAuthor,
   INHERIT_APP_TOOLS,
   sessionAuthor,
@@ -32,6 +33,7 @@ let state: PlotroomDatabase;
 let clock: ManualClock;
 let stores: ApiStores;
 let attention: AttentionService;
+let approvals: ApprovalService;
 let workstreamId: string;
 
 const THRESHOLDS = {
@@ -57,7 +59,7 @@ beforeEach(() => {
     logger,
     clock: clock.now,
   });
-  const approvals = new ApprovalService({
+  approvals = new ApprovalService({
     stores,
     bus,
     logger,
@@ -272,6 +274,36 @@ describe("unanswered and blocked on you (§7.2)", () => {
     expect(alerts().map((entry) => entry.id)).toContain(
       `health:blocked-on-you:${sessionId}`,
     );
+  });
+
+  it("never calls a failed effect an approval nobody answered (#74)", async () => {
+    const sessionId = startSession();
+    const raised = approvals.raise({
+      sessionId,
+      ask: destructionAsk({
+        toolName: "session_delete",
+        target: { kind: "session", id: sessionId },
+      }),
+    });
+
+    // This fixture's `stopSession` refuses, so approving records a failed effect —
+    // the row is answered, and its unfinished gesture is §7.1's own item.
+    const answered = await approvals.answer({
+      approvalId: raised.id,
+      decision: "approve-once",
+      actor: humanAuthor,
+    });
+    expect(answered.effectFailure).not.toBeNull();
+
+    // Well past the unanswered threshold. A human answered this, so the queue must
+    // not also carry "an approval has been waiting N minutes" — an alert that ranks
+    // above the failure itself, reports a session blocked on the operator when none
+    // is, and never clears because nothing ever clears the failure.
+    clock.advance(600);
+    const ids = attention.items().map((item) => item.id);
+    expect(ids).toContain(`approval:${raised.id}:effect-failed`);
+    expect(ids).not.toContain(`health:unanswered:approval:${raised.id}`);
+    expect(alerts().map((entry) => entry.alert)).not.toContain("unanswered");
   });
 });
 

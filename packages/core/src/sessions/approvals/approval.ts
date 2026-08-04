@@ -53,6 +53,22 @@ export interface Approval {
    * configuration and the next thing they do is widen the rule.
    */
   readonly piercedPreGrant: PiercedPreGrant | null;
+  /**
+   * The effect this approval authorized, when it was attempted and failed.
+   *
+   * An approved destruction is two things: a decision, and an effect the decision
+   * authorizes. The decision is `answer` and it is final — a second answer is
+   * refused, because it would rewrite what a human decided (principle 9). So a
+   * failing effect cannot reopen the answer, and it must not be a log line
+   * either: the row would then read as answered and done while the destruction
+   * never happened, which is invisible from every surface at once. It is recorded
+   * here instead, so §7.1 keeps asking about it and `approvalOutcome` can tell the
+   * blocked call the truth rather than "allow".
+   *
+   * Null in the ordinary case, which includes an effect that succeeded: this
+   * names the failure, not the attempt.
+   */
+  readonly effectFailure: ApprovalEffectFailure | null;
 }
 
 /**
@@ -74,6 +90,19 @@ export interface ApprovalAnswer {
   readonly at: number;
 }
 
+/**
+ * An authorized effect that was attempted and did not happen (§6.6).
+ *
+ * The message is the failure in the operator's words, because it is what §7.1
+ * shows them and what the session is told: "the deletion could not be completed"
+ * with nothing after it names no remedy, and the operator's next move is to look
+ * for a log they do not have.
+ */
+export interface ApprovalEffectFailure {
+  readonly message: string;
+  readonly at: number;
+}
+
 export const APPROVAL_REFUSAL_REASONS = [
   /** Already answered: one gesture, one answer (principle 9). */
   "already_answered",
@@ -90,6 +119,25 @@ export const APPROVAL_REFUSAL_REASONS = [
    * session's next move is to retry the same call.
    */
   "deny_needs_reason",
+  /**
+   * An effect failure recorded against an approval nobody answered. Effects only
+   * run on an answer, so this state is a caller bug rather than a thing that can
+   * happen — refused here so it cannot be written, the way the schema's own CHECK
+   * refuses it at rest.
+   */
+  "effect_without_answer",
+  /**
+   * A second effect failure. The **first** one is kept, for the reason
+   * `SessionStore.end` keeps the first outcome: a doubled observation must not
+   * rewrite what actually went wrong.
+   */
+  "effect_failure_recorded",
+  /**
+   * A failed effect with nothing said about it. The message is the whole point of
+   * the record — §7.1 shows it and the session is told it — and "it failed" with
+   * no cause sends the operator looking for a log they do not have.
+   */
+  "effect_failure_needs_message",
 ] as const;
 
 export type ApprovalRefusalReason = (typeof APPROVAL_REFUSAL_REASONS)[number];
@@ -133,6 +181,7 @@ export function raiseApproval(input: RaiseApprovalInput): Approval {
     raisedAt: input.at,
     answer: null,
     piercedPreGrant: input.piercedPreGrant ?? null,
+    effectFailure: null,
   };
 }
 
@@ -178,6 +227,51 @@ export function answerApproval(
         at: input.at,
       },
     },
+  };
+}
+
+export interface RecordApprovalEffectFailureInput {
+  readonly message: string;
+  readonly at: number;
+}
+
+/**
+ * Record that the effect this approval authorized did not happen (§6.6).
+ *
+ * This is deliberately **not** a way back to `pending`. The answer is what a human
+ * decided and it stands: reopening it would erase that decision because something
+ * downstream broke, and a second `approve-once` would re-run an effect that may
+ * already have partly applied. What the failure changes is what everybody is
+ * told — §7.1 asks about it again through `approvalAttention`, and the blocked
+ * call is denied rather than allowed through `approvalOutcome`.
+ */
+export function recordApprovalEffectFailure(
+  approval: Approval,
+  input: RecordApprovalEffectFailureInput,
+): ApprovalResult<Approval> {
+  if (approval.answer === null) {
+    return refuse(
+      "effect_without_answer",
+      "nothing was authorized, so no effect can have failed: an approval's effect runs on its answer (§6.6)",
+    );
+  }
+  if (approval.effectFailure !== null) {
+    return refuse(
+      "effect_failure_recorded",
+      "this approval already records a failed effect; the first failure is what went wrong, and a second would rewrite it",
+    );
+  }
+  const message = input.message.trim();
+  if (message.length === 0) {
+    return refuse(
+      "effect_failure_needs_message",
+      "a failed effect carries what failed: an unexplained failure is the invisible state this record exists to prevent",
+    );
+  }
+
+  return {
+    ok: true,
+    value: { ...approval, effectFailure: { message, at: input.at } },
   };
 }
 
@@ -234,8 +328,21 @@ function sameTarget(
   return a.kind === b.kind && a.id === b.id;
 }
 
+/**
+ * Whether this approval authorizes the gesture it was raised for — **now**.
+ *
+ * A recorded effect failure takes that back, and it has to: this predicate is what
+ * the gate turns into `approvedCallIds` and what `decideApproval` allows on, so an
+ * approval that still said "approved" after its effect failed would let the session
+ * simply repeat the call and re-run a destruction that may have partly applied
+ * (§4.4's cascade), with no new decision from anybody. One answer, one attempt: a
+ * retry is a new question, and `decideApproval` asks it.
+ */
 export function isApproved(approval: Approval): boolean {
-  return approval.answer?.decision === "approve-once";
+  return (
+    approval.answer?.decision === "approve-once" &&
+    approval.effectFailure === null
+  );
 }
 
 /**
@@ -264,16 +371,27 @@ export function encodeApprovalAnswer(
   const answer = approval.answer;
   if (answer === null) return null;
   const asked = describeAsk(approval.ask);
-  const approved = answer.decision === "approve-once";
+  // An approved effect that failed is **not** something to proceed on: the operator
+  // agreed and the thing did not happen, so a session told "proceed" carries on as
+  // though it had — the one reading of this state that cannot be corrected later. A
+  // denial is unaffected: its feedback is the operator's reason whatever else went
+  // wrong afterwards, and a failure to settle a claim wait is not news the session
+  // can act on.
+  const failure =
+    answer.decision === "approve-once" ? approval.effectFailure : null;
+  const approved = answer.decision === "approve-once" && failure === null;
   return {
     approvalId: approval.id,
     asked,
     decision: answer.decision,
-    reason: answer.reason,
+    reason: failure?.message ?? answer.reason,
     disposition: approved ? "proceed" : "not-this-way",
-    sentence: approved
-      ? `approved for this call: ${asked}`
-      : `declined: ${answer.reason ?? "no reason given"} — this is feedback about how to proceed, not a failure`,
+    sentence:
+      failure !== null
+        ? `approved, but it could not be carried out: ${failure.message} — the operator agreed and this did not happen`
+        : approved
+          ? `approved for this call: ${asked}`
+          : `declined: ${answer.reason ?? "no reason given"} — this is feedback about how to proceed, not a failure`,
   };
 }
 
@@ -284,11 +402,25 @@ export function encodeApprovalAnswer(
  * hands the model as the tool's result. The gate's own wording and this one meet
  * at the same place (`RequestOutcome`), so a session cannot tell a claim refusal
  * apart from an approval denial by its shape — only by what it says.
+ *
+ * An approval whose authorized effect failed denies too, and names the failure.
+ * `allow` there would tell the session its deletion happened when nothing was
+ * deleted; the shape is the same one an approved-but-unwritable path already
+ * produces (§3.4), because "the operator agreed and it still cannot be done" is
+ * one fact with two causes. A denial's own reason still wins — it was already the
+ * answer, and the failure behind it is the operator's problem, not the session's.
  */
 export function approvalOutcome(approval: Approval): RequestOutcome | null {
   const answer = approval.answer;
   if (answer === null) return null;
-  if (answer.decision === "approve-once") return { kind: "allow" };
+  if (answer.decision === "approve-once") {
+    const failure = approval.effectFailure;
+    if (failure === null) return { kind: "allow" };
+    return {
+      kind: "deny",
+      reason: `the operator approved this, but it could not be carried out: ${failure.message}`,
+    };
+  }
   return {
     kind: "deny",
     reason:
@@ -318,6 +450,13 @@ export const APPROVAL_ANSWER_OPTIONS: readonly ApprovalAnswerOption[] = [
  * opening the session" means, and it is why `sentence` is built here rather than by
  * each surface. `null` once answered: an answered approval is history, and the feed
  * ranks what is still asking.
+ *
+ * With one exception, and it is the reason `effectFailure` is here: an approval
+ * whose authorized effect failed is answered and yet **unfinished**. Dropping it
+ * would leave the operator's own gesture undone with nothing anywhere saying so —
+ * the row reads as answered, the destruction never happened, and §7.1 shows
+ * nothing. So it comes back as a row that asks for nothing (`answers` is empty)
+ * and states what did not happen.
  */
 export interface ApprovalAttention {
   readonly kind: "approval";
@@ -335,12 +474,19 @@ export interface ApprovalAttention {
   readonly piercedPreGrant: string | null;
   readonly raisedAt: number;
   readonly answers: readonly ApprovalAnswerOption[];
+  /**
+   * Why the authorized effect did not happen, when it did not. Null for every
+   * ordinary row, which is what tells a surface these two rows are different
+   * things: one is a question, this one is a broken promise.
+   */
+  readonly effectFailure: string | null;
 }
 
 export function approvalAttention(
   approval: Approval,
 ): ApprovalAttention | null {
-  if (approval.answer !== null) return null;
+  const failure = approval.effectFailure;
+  if (approval.answer !== null && failure === null) return null;
   return {
     kind: "approval",
     approvalId: approval.id,
@@ -348,11 +494,36 @@ export function approvalAttention(
     workstreamId: approval.workstreamId,
     askKind: approval.kind,
     tool: approval.ask.tool,
-    sentence: describeAsk(approval.ask),
+    sentence: failureSentence(approval) ?? describeAsk(approval.ask),
     reversibility: approval.ask.world?.reversibility ?? null,
     irreversible: isIrreversibleAsk(approval.ask),
     piercedPreGrant: approval.piercedPreGrant?.description ?? null,
-    raisedAt: approval.raisedAt,
-    answers: APPROVAL_ANSWER_OPTIONS,
+    // The moment the fact is about: a failure carries its own time, so the queue
+    // orders it where it happened rather than where the question was asked, and
+    // an acknowledgement of the question does not cover it (§4.5).
+    raisedAt: failure?.at ?? approval.raisedAt,
+    // Nothing to answer. The decision was made; what is left is a failure to
+    // report, and offering "approve once" again would offer a gesture
+    // `answerApproval` refuses.
+    answers: failure === null ? APPROVAL_ANSWER_OPTIONS : [],
+    effectFailure: failure?.message ?? null,
   };
+}
+
+/**
+ * How a failed effect reads, by **what was decided** — the same split
+ * `approvalOutcome` and `encodeApprovalAnswer` make, so the three cannot tell one
+ * operator three stories. "Approved, but it could not be carried out" on a row the
+ * operator *denied* would misreport their own decision back to them, which is
+ * worse than saying nothing.
+ *
+ * Null when there is no failure to word.
+ */
+function failureSentence(approval: Approval): string | null {
+  const failure = approval.effectFailure;
+  if (failure === null) return null;
+  const asked = describeAsk(approval.ask);
+  return approval.answer?.decision === "approve-once"
+    ? `approved, but it could not be carried out: ${asked} — ${failure.message}`
+    : `declined, and what that settled did not happen either: ${asked} — ${failure.message}`;
 }

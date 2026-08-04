@@ -305,8 +305,17 @@ export class AttentionService {
     }));
   }
 
+  /**
+   * Both approval facts (§7.1): what is still asking, and what the operator
+   * answered whose effect then failed. Two calls rather than one, because
+   * `pendingAsks` below reads the first list as "nobody has answered this yet" and
+   * an answered row in it becomes a health alert saying something false.
+   */
   private approvalSources(): AttentionSources["approvals"] {
-    return this.deps.approvals.attention().map((row) => ({
+    return [
+      ...this.deps.approvals.attention(),
+      ...this.deps.approvals.effectFailureAttention(),
+    ].map((row) => ({
       attention: row.attention,
       target: this.sessionTarget(row.approval.sessionId),
     }));

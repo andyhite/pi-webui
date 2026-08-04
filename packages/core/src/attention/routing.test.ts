@@ -45,6 +45,26 @@ const blockedApproval: DerivedAttentionItem = {
   states: ["blocked", "wants-decision", "anything"],
 };
 
+/** The same approval, answered, whose authorized effect then failed (§6.6). */
+const failedApprovalEffect: DerivedAttentionItem = {
+  item: {
+    id: "approval:appr-1:effect-failed",
+    feed: "approval",
+    target: { nodeId: "node-1", workstreamId: "ws-1", sessionId: "sess-1" },
+    rank: 0,
+    summary:
+      "approved, but it could not be carried out: git_force_push — the remote refused it",
+    payload: {
+      kind: "approval",
+      approvalId: "appr-1",
+      capability: "git_force_push",
+    },
+    raisedAt: 1200,
+    snoozeUntil: null,
+  },
+  states: ["failed", "anything"],
+};
+
 const finished: DerivedAttentionItem = {
   item: {
     id: "completion:sess-2",
@@ -70,6 +90,40 @@ describe("a route attaches to a state, not to a node", () => {
     expect(
       routeMatches(route("anything", { enabled: false }), blockedApproval),
     ).toBe(false);
+  });
+
+  it("routes a failed effect as failed, and never as blocked (#74)", () => {
+    // Two facts about one approval, and they reach different routes on purpose: an
+    // ask holds a session still, a failed effect holds nothing and reports that the
+    // operator's own decision did not take effect.
+    expect(routeMatches(route("failed"), failedApprovalEffect)).toBe(true);
+    expect(routeMatches(route("anything"), failedApprovalEffect)).toBe(true);
+    expect(routeMatches(route("blocked"), failedApprovalEffect)).toBe(false);
+    expect(routeMatches(route("wants-decision"), failedApprovalEffect)).toBe(
+      false,
+    );
+  });
+
+  it("fires for the failure even after firing for the ask, because the id differs", () => {
+    const configured = route("anything");
+    const first = decideRouteFires(
+      configured,
+      [blockedApproval],
+      new Set<string>(),
+    );
+    expect([...first.nextFired]).toEqual(["approval:appr-1"]);
+
+    // The ask is gone (answered) and the failure is what there is now. Under one
+    // shared id this would read as already-sent and the operator would never hear
+    // that the destruction they agreed to did not happen.
+    const second = decideRouteFires(
+      configured,
+      [failedApprovalEffect],
+      first.nextFired,
+    );
+    expect(second.fire.map((entry) => entry.item.id)).toEqual([
+      "approval:appr-1:effect-failed",
+    ]);
   });
 });
 
