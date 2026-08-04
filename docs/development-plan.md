@@ -2691,8 +2691,65 @@ or opted into._
 
 ### Epic 8.1 — Keyboard and accessibility (`app`)
 
-- [ ] High-frequency verb bindings (queue traversal, answer, run, stop); shortcuts overlay lists every binding — none undocumented (§11)
-- [ ] Focus trap/restore, announced listboxes/comboboxes, streaming announced on start/complete, full keyboard reachability (§11)
+- [x] High-frequency verb bindings (queue traversal, answer, run, stop); shortcuts overlay lists every binding — none undocumented (§11)
+- [x] Focus trap/restore, announced listboxes/comboboxes, streaming announced on start/complete, full keyboard reachability (§11)
+
+_Landed (Track B). **One registry both dispatches keys and renders the overlay**, so
+"a binding cannot exist undocumented" is a property of the code rather than a habit:
+`packages/ui/src/keyboard/bindings.ts` is the only thing that turns a keypress into an
+action, registering demands the fields the overlay prints (`label`, `description`), and
+`ShortcutsOverlay` renders `useRegisteredBindings()` — it holds no list of its own. The
+three components that each had their own `window.addEventListener("keydown")` and
+appeared in no list (the palette's Mod+K, the canvas's undo, the queue's traversal) now
+register instead; the app has exactly **one** listener (`useKeyBindingDispatch`).
+Registration refuses a duplicate id and refuses a chord already taken in the same scope
+and surface, because a silently shadowed binding would be listed while doing nothing —
+the same lie as an undocumented one.
+
+Scope comes from what has focus (`data-key-scope`, resolved by `scope.ts`), not from a
+flag each surface toggles: `global` is dropped whenever a `dialog` is in the chain, so a
+bare `R` cannot run something behind an open modal — the same fact the focus trap
+enforces from the other side. A declaration may name its **surface**
+(`dialog:command-palette`), which is what lets every dialog bind Escape and every list
+bind the arrows while all of them stay registered, and therefore documented, at once.
+Keys this codebase does not implement are `documented` bindings naming who does
+(xyflow's Backspace delete, its arrow-key nudge) — listed honestly rather than claimed
+or omitted.
+
+Verbs are declared **once** (`keyboard/verbs.ts`) and become both a binding and a
+command palette row from that one definition, each row showing its own key, so the
+palette and the keyboard cannot drift into meaning different things (principle 8). Every
+`run` is the action the mouse path already called: `R` is the node's own run button's
+gesture (initiation-key guard included), `S` is `stopScope` at §6.7's narrowest scope,
+`1`–`9`/`A`/`E` are the queue rows' own answer/approve/acknowledge. **The queue's cursor
+moved to the host** (`useAttentionQueueCursor`): §11's queue verbs have to work whether
+or not the panel is open, and a keypress and a click must be one act on one selection —
+which is also why the queue's keys are registered by the host, so the overlay lists them
+while the panel is closed, when a keyboard user most needs to be told they exist.
+
+Accessibility: `useFocusTrap` is the one implementation — focus moves in on open, Tab
+cycles inside (`nextTrappedIndex`), and focus returns to the element that opened it —
+used by the palette, the overlay, the canvas's create menu, and the stop confirmation.
+The palette is a real combobox with `aria-activedescendant`; the queue, the create menu
+and the palette rail are announced listboxes; every other panel list carries a name.
+Streaming announces on **start and completion only** (`nextStreamAnnouncement`, folded
+from the session's own derived `busy` fact and the turn count), and the transcript itself
+is deliberately not a live region. Canvas nodes are keyboard-reachable because xyflow
+renders them as real DOM (AGENTS.md's canvas notes): Tab reaches a node, its `ariaLabel`
+names it, Enter sets the route selection (§5), and `W` twice wires context — the drag
+gesture's equivalent, refused by the same `checkConnection` predicate, with the
+refusal's own reason announced rather than nothing happening.
+
+`apps/web/e2e/a11y.spec.ts` is the gate, against a real spawned server: the overlay
+lists a binding from every scope (including a queue one with the panel closed, and
+xyflow's delete); the overlay traps focus across repeated Tabs and restores it on
+Escape; a command node is reached by focus, selected with Enter, run with `R`, and its
+session stopped with `S` — no click anywhere; a scripted question is answered by `J`
+then `1` with nothing open at all; and the live region reads "response started" then
+"response complete" while never carrying a token of transcript. Deferred, deliberately:
+desktop menu accelerators (`apps/desktop` is Track C's this batch, and the renderer is
+where §11's bindings belong anyway) and any visual focus treatment beyond the browser's
+default outline (design gate, fleet rule 5)._
 
 ### Epic 8.2 — Search and archive (`app`)
 
