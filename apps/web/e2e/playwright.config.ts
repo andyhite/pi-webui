@@ -14,9 +14,16 @@ import { defineConfig } from "@playwright/test";
  * Deliberately not wired into `pnpm verify` or turbo's `test` task: spawning
  * a real server/git repo/browser is slow and this is one hermetic gate, not
  * a broad suite — run it explicitly via `pnpm --filter @plotroom/web e2e`.
+ *
+ * The #84 Electrobun shell spike is ignored here and lives on its own
+ * config (`playwright.electrobun.config.ts`): it drives a shell the stack
+ * has not adopted, needs `bun` and an X display, and on a cold run
+ * downloads ~210MB of CEF into ~1.6GB of scratch space — none of which
+ * this gate should ever depend on.
  */
 export default defineConfig({
   testDir: ".",
+  testIgnore: ["**/electrobun-shell.spec.ts"],
   timeout: 60_000,
   expect: { timeout: 15_000 },
   // One server/repo per test file's `beforeAll`; running files in parallel

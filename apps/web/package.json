@@ -9,7 +9,8 @@
     "typecheck": "tsc -b && tsc -p e2e/tsconfig.json",
     "lint": "eslint src e2e",
     "test": "vitest run --passWithNoTests",
-    "e2e": "playwright test --config e2e/playwright.config.ts"
+    "e2e": "playwright test --config e2e/playwright.config.ts",
+    "e2e:electrobun": "playwright test --config e2e/playwright.electrobun.config.ts"
   },
   "dependencies": {
     "@plotroom/core": "workspace:*",

@@ -41,7 +41,7 @@ const WEB_DIST = fileURLToPath(new URL("../dist", import.meta.url));
  * actually binding; acceptable for test tooling, and still strictly safer
  * than a static counter.
  */
-function ephemeralPort(): Promise<number> {
+export function ephemeralPort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = createServer();
     probe.unref();
