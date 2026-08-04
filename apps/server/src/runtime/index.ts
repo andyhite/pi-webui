@@ -37,10 +37,13 @@ export type { RuntimeScript, ScriptedSubmission } from "./scripted.js";
  *
  * The session host (issue #73) is opt-in because it is not finished. Its
  * permission gate is issue #81, so `OMP_CAPABILITIES.enforcesPermissions` is
- * still false and `RuntimeRegistry.start` refuses to run work on it — loudly,
- * at the gesture, which is the C6 rule doing its job rather than a gap to
- * remember. Selecting it therefore boots a server that spawns nothing until
- * that lands; the log below says so rather than leaving it to be discovered.
+ * still false and `checkPermissionEnforcement` refuses **every** verb that would
+ * produce a live session on it — start, resume and fork alike, loudly, at the
+ * gesture, which is the C6 rule doing its job rather than a gap to remember.
+ * Naming one verb here is how that gap hid the first time: the check was in
+ * `start` alone, and a handoff, a resume and both fork branches went round it.
+ * Selecting this runtime therefore boots a server that spawns nothing until #81
+ * lands; the log below says so rather than leaving it to be discovered.
  */
 export function createRuntimeRegistry(
   config: ServerConfig,
