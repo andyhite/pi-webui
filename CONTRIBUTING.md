@@ -3,7 +3,8 @@
 PlotRoom is a context-authoring canvas for operating a fleet of AI agents. Before contributing, read:
 
 1. [`docs/product-spec.md`](docs/product-spec.md) — what the product is and how it behaves.
-2. [`AGENTS.md`](AGENTS.md) — the canonical conventions (git rules, worktrees, commit format). This document expands on them; `AGENTS.md` wins on any conflict.
+2. [`AGENTS.md`](AGENTS.md) — the canonical conventions (git rules, worktrees, commit format, work tracking). This document expands on them; `AGENTS.md` wins on any conflict.
+3. The **PlotRoom Trello board** (https://trello.com/b/Jm8Kz5II/plotroom) — all work is tracked there; every change starts from a card (see "Work tracking — Trello" in `AGENTS.md`).
 
 The project is a greenfield rebuild: docs only so far. The stack is decided — TypeScript, Electron + Hono server, SQLite via Drizzle, React + xyflow canvas, pnpm + Turborepo, Vitest + Playwright. See "Stack" and "Open decisions" in `AGENTS.md`.
 

@@ -1,7 +1,8 @@
 # PlotRoom — Development Plan
 
-**Status:** Working plan v1 · derived from [`product-spec.md`](product-spec.md) (North Star v1)
-**Purpose:** sequence the ground-up rebuild as phases → epics → tasks. This document describes _order and scope of work_; behavior remains defined solely by the product spec. When this plan and the spec disagree, the spec wins.
+**Status:** HISTORICAL RECORD · the rebuild this plan sequenced (Phases 0–8) is complete. Active work is tracked on the **PlotRoom Trello board** (https://trello.com/b/Jm8Kz5II/plotroom) — see AGENTS.md "Work tracking — Trello". Do not add new work items here; the per-epic landed notes below remain the deep written record of what landed and why, and cards may point into them.
+**Origin:** Working plan v1 · derived from [`product-spec.md`](product-spec.md) (North Star v1)
+**Purpose (as written):** sequence the ground-up rebuild as phases → epics → tasks. This document describes _order and scope of work_; behavior remains defined solely by the product spec. When this plan and the spec disagree, the spec wins.
 
 Conventions used below:
 

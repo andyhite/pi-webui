@@ -6,7 +6,8 @@ Canonical operating rules for any agent (or human) working in this repository. R
 
 **PlotRoom** — a context-authoring canvas for operating a fleet of AI agents. A single operator composes context (tickets, PRs, documents, files, notes, prior agent output) as a spatial node graph, wires that context into commands, and runs many agent sessions against it simultaneously.
 
-- **Sequencing:** [`docs/development-plan.md`](docs/development-plan.md) — phases → epics → tasks, with exit criteria. Check the next unchecked item there before starting work, and tick items in the same PR that lands them. The spec wins when the two disagree.
+- **Work tracking:** the **PlotRoom Trello board** (https://trello.com/b/Jm8Kz5II/plotroom) — all development work is tracked there as cards moving through the workflow. Check the board before starting work; see "Work tracking — Trello" below for the rules. The spec wins when a card and the spec disagree.
+- **Historical sequencing record:** [`docs/development-plan.md`](docs/development-plan.md) — the phases → epics → tasks plan that carried the rebuild through Phase 8, now a **historical record** with per-epic landed notes (the best written account of _why_ things are shaped as they are). New work is not added there; it becomes a Trello card. Deep landed-note context for a card usually lives here.
 - **Source of truth for behavior:** [`docs/product-spec.md`](docs/product-spec.md) ("North Star v1"). It describes _what_ the product does and never _how_. Treat its 12 governing principles and §15 ("What must exist in the first cut") as binding constraints, not suggestions.
 - **Status:** greenfield rebuild. The stack is decided (see "Stack" below); no application code exists yet.
 - **Explicit non-goals** are listed in spec §14. Do not implement workflow control flow, schedulers/triggers that start work, inbound webhooks, inferred relationships, multi-user, or silent truncation.
@@ -453,6 +454,55 @@ Non-negotiables at this seam:
   approvals (§6.6) and claims (§3.4) must be enforced, not advised; if pi's
   tool layer cannot enforce them, adapter order reverts to the Claude Agent
   SDK (see the decision record's risks).
+
+## Work tracking — Trello
+
+All development work — features, bugs, follow-ups, decisions — is tracked on the
+**PlotRoom Trello board**: https://trello.com/b/Jm8Kz5II/plotroom (board id
+`6a6ce4d2581c9fe080535db3`). Agents interact with it through the Trello MCP
+connection (`mcp` tools, server `trello`).
+
+**Lists (the workflow, in order):**
+
+| List                   | Meaning                                                      |
+| ---------------------- | ------------------------------------------------------------ |
+| `Backlog`              | Captured, not committed to — includes open `decision` cards  |
+| `To Do`                | Committed; next up. Ordered top-down by priority             |
+| `In Progress`          | Someone (human or agent) is actively working it              |
+| `Review`               | Implementation complete, awaiting independent review         |
+| `Done`                 | Reviewed and merged to `main`                                |
+| `Directional (icebox)` | Spec §13 intentions — pulled in deliberately, never by drift |
+
+**Rules (binding, for humans and agents alike):**
+
+1. **Every unit of work has a card** before its branch exists. Starting work on
+   something with no card means creating the card first (list it in `To Do` or
+   `Backlog`, whichever is honest).
+2. **Move the card as the work moves** — to `In Progress` when you start, to
+   `Review` when implementation is complete and `pnpm verify` is green, to
+   `Done` only after review passes and the branch ff-merges to `main`. A card
+   is not `Done` while its worktree still exists (same rule as AGENTS.md's
+   worktree cleanup).
+3. **Reference the card** in the branch name where practical
+   (`feat/<short-slug>` stays the shape; put the card's short link or number in
+   the card itself and the PR/commit body, e.g. `Trello: https://trello.com/c/xyz`).
+4. **Discovered work becomes a card, not a detour.** A bug found mid-task, a
+   review's non-blocking findings, a deferral — each gets a card (label `bug`
+   or `follow-up`) rather than silently expanding the current task's scope.
+   This is the board-shaped form of the old "deferred, honestly" convention.
+5. **Decisions are cards too** (label `decision`, in `Backlog` until decided).
+   Deciding one still requires recording the answer in AGENTS.md in the same
+   PR that lands it — the card tracks the state; AGENTS.md remains the record
+   of the answer.
+6. **Labels:** `epic` (large multi-task efforts), `follow-up`, `bug`,
+   `decision`, `directional`. Use card checklists for a card's task breakdown.
+7. **Orchestrators** (fleet runs): create/move cards for each track as part of
+   spawn/merge duties; a track's final report links its cards. Subagents
+   without Trello access report status to the orchestrator, who updates the
+   board.
+8. `docs/development-plan.md` is frozen as the historical record of the
+   rebuild (Phases 0–8). Do not add new work items to it; per-epic landed
+   notes there remain the deep context cards can point at.
 
 ## Git rules
 
