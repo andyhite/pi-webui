@@ -1,8 +1,9 @@
 # Deployment — packaging, updates, remote backends, backup (Epic 8.4)
 
 This is the operator-facing picture of §12 ("Platform and deployment") as it
-actually landed. It complements `AGENTS.md`'s persistence notes rather than
-repeating them — read those first for the state-directory shape.
+actually landed. It complements the persistence notes in
+`skill://plotroom-persistence` rather than repeating them — read those first for
+the state-directory shape.
 
 ## Desktop installers
 
