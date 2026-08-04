@@ -129,7 +129,7 @@ describe("the session host as a spawned process", () => {
     await second.stop("abort");
   }, 20_000);
 
-  it("stops a session host that is already gone, without taking the server", async () => {
+  it("stops a session host that is already gone", async () => {
     const handle = await runtime().start({
       ...LAUNCH,
       prompt: "die",
@@ -138,10 +138,44 @@ describe("the session host as a spawned process", () => {
     await drain(handle);
 
     // A stop gesture can land after the sidecar died and before the driver
-    // detaches its handle. The `stop` command is then written to the stdin of an
-    // exited process, which emits `error` on the stream — unhandled, that is an
-    // uncaught exception and the server dies because a session host did.
+    // detaches its handle. It must finish rather than wait on an acknowledgement
+    // nothing will send.
     await expect(handle.stop("graceful")).resolves.toBeUndefined();
+
+    const next = await runtime().start({ ...LAUNCH, workspacePath: workdir });
+    expect(next.ref).toBe("stand-in-session");
+    await next.stop("abort");
+  }, 20_000);
+
+  it("survives writing to a session host that closed its stdin", async () => {
+    // The narrower window the stdin `error` listener exists for: the sidecar is
+    // alive, so its frame stream is open and the adapter still writes commands,
+    // but nothing is reading the other end of the pipe. An unhandled `error` on
+    // that stream is an uncaught exception, and the server would die because a
+    // session host stopped listening.
+    const handle = await runtime().start({
+      ...LAUNCH,
+      prompt: "close-stdin",
+      workspacePath: workdir,
+    });
+
+    const iterator = handle.observations()[Symbol.asyncIterator]();
+    let closed = false;
+    while (!closed) {
+      const next = await iterator.next();
+      if (next.done === true) break;
+      closed =
+        next.value.kind === "output-delta" &&
+        next.value.text === "stdin-closed";
+    }
+    expect(closed).toBe(true);
+
+    // Never acknowledged, because nobody can read it. The write is the point.
+    handle
+      .inject({ id: "inj-1", text: "nobody is reading" })
+      .catch(() => undefined);
+
+    await handle.stop("abort");
 
     const next = await runtime().start({ ...LAUNCH, workspacePath: workdir });
     expect(next.ref).toBe("stand-in-session");
@@ -182,10 +216,11 @@ async function gone(pid: number): Promise<boolean> {
 /**
  * A session host that speaks PlotRoom's frames and nothing else — no SDK, no
  * model. Its behaviour is chosen by the prompt, which is how one script covers
- * the four cases above.
+ * every case above.
  */
 const STAND_IN = `#!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { closeSync } from "node:fs";
 
 const write = (frame) => process.stdout.write(JSON.stringify(frame) + "\\n");
 const observe = (observation) => write({ type: "observation", observation });
@@ -208,6 +243,15 @@ process.stdin.on("data", (chunk) => {
       write({ type: "ack", id: command.id });
       if (command.text === "die") {
         process.exit(1);
+      }
+      if (command.text === "close-stdin") {
+        // Alive, framing, and no longer reading: the next command PlotRoom writes
+        // breaks the pipe. An interval keeps the process (and its stdout) up.
+        setInterval(() => {}, 1000);
+        process.stdin.destroy();
+        closeSync(0);
+        observe({ kind: "output-delta", text: "stdin-closed", at: Date.now() });
+        continue;
       }
       if (command.text === "spawn-child") {
         const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
