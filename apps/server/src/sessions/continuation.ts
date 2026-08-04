@@ -652,12 +652,13 @@ export class ContinuationService {
     const source = stores.sessions.get(brief.sourceSessionId);
 
     // A deleted source is refused, exactly as `planResume` and `planSessionFork`
-    // refuse one — and this verb needed its own check because it is the one that
-    // records **provenance from** the source. `recordProvenance` is exempt from
-    // the legality checks `addContextEdge` applies, deliberately, so nothing
-    // downstream would have stopped a live provenance edge being drawn out of a
-    // node that is not on the board: `liveEdges()` would include it and the canvas
-    // would draw a wire from a card it does not have.
+    // refuse one, and refused **here** rather than left to the store: this verb is
+    // the one that records provenance from the source, `GraphStore` refuses that
+    // against a node off the board, and a store refusal reached after
+    // `startHandoffSession` has spent the key and started a session is a worse
+    // answer than a refusal before anything happened. The two are not the same
+    // fact either — a record can be deleted while its node is not, and vice versa
+    // — so this asks about the record and the store asks about the board.
     //
     // Refused on a retry too, rather than skipping the write to complete the
     // gesture. A retry whose source was deleted in the meantime has a remedy — the

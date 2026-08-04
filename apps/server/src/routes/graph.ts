@@ -156,7 +156,9 @@ export function graphRoutes(stores: ApiStores): Hono<ApiEnv> {
    * Put it back (principle 10) — refused when its subject is deleted, because a
    * node whose record the reads filter out is a card with nothing behind it, and
    * an undo that produced one would return more than its own removal took. The
-   * subject's own restore is the gesture that brings the node back with it.
+   * refusal names the gesture that does work: an object's or a session's own
+   * restore carries its node back, and a command's does not, so that one is
+   * restored first and this verb called after it.
    */
   app.post("/nodes/:id/restore", (c) => {
     const author = actorOf(c);
