@@ -427,6 +427,8 @@ Non-negotiables at this seam:
   (`apps/session-host`, one process per session) rather than by spawning a CLI
   and speaking its RPC protocol.
 - **Date:** 2026-08-04
+- **Issues:** #66 (decision, and the probe transcripts every measurement below
+  comes from), #73 (implementation).
 - **Deciders:** operator, on evidence probed live against `omp` 17.2.7/17.2.8.
 
 ### Why omp rather than vanilla pi
