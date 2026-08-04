@@ -75,6 +75,43 @@ jobs:
       - name: E2E (W10 milestone gate)
         run: pnpm --filter @plotroom/web e2e
 
+  # The packaged session host is one compiled binary per platform (issue #92):
+  # `bun build --compile` plus the SDK's native addon staged beside it, which
+  # `pnpm compile` produces and then runs. Bun can cross-compile, but the addon
+  # cannot be had for a platform this runner did not install, so this is a matrix
+  # of native runners rather than one job with three targets — the same
+  # constraint the installer build carries (#79).
+  #
+  # Nothing is uploaded: no release consumes an artifact from a PR run, and the
+  # job's claim is that the binary builds and starts on each platform, which the
+  # compile's own smoke test makes. Release wiring is #79/#94's.
+  session-host-binary:
+    strategy:
+      # One platform failing must not hide the other two: which platforms can
+      # produce the binary is the whole question here.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Compile the session host, and run what it built
+        run: pnpm compile
+
   commits:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
