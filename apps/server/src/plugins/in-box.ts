@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 /**
@@ -83,7 +85,7 @@ export function resolveInBoxPlugins(
       };
     }
     try {
-      const resolved = require.resolve(entry.packageName);
+      const resolved = compiledEntry(require.resolve(entry.packageName));
       return {
         ok: true,
         pluginId: entry.pluginId,
@@ -101,4 +103,50 @@ export function resolveInBoxPlugins(
       };
     }
   });
+}
+
+/**
+ * Map a source-condition resolution back to the package's compiled entry.
+ *
+ * The dev server runs from TypeScript source (`--conditions=source`, see the
+ * workspace packages' `exports`), and that condition reaches this resolver too —
+ * but a plugin worker deliberately starts with `execArgv: []` (no inherited
+ * loaders), so the module it imports must be compiled JavaScript. When the
+ * resolution landed on a `.ts` file, walk up to the package's own manifest and
+ * take the `default` condition — the exact entry a packaged build resolves.
+ * A `.js` resolution (every production path) passes through untouched.
+ */
+function compiledEntry(resolved: string): string {
+  if (!resolved.endsWith(".ts")) return resolved;
+  let dir = path.dirname(resolved);
+  for (;;) {
+    const manifestPath = path.join(dir, "package.json");
+    let manifest: unknown;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    } catch {
+      const parent = path.dirname(dir);
+      if (parent === dir) {
+        throw new Error(`no package.json above source entry ${resolved}`);
+      }
+      dir = parent;
+      continue;
+    }
+    const entry = defaultCondition(
+      (manifest as { exports?: Record<string, unknown> }).exports?.["."],
+    );
+    if (typeof entry !== "string") {
+      throw new Error(`${manifestPath} declares no default "." export`);
+    }
+    return path.resolve(dir, entry);
+  }
+}
+
+/** The `default` branch of one `exports` entry, however it is nested. */
+function defaultCondition(entry: unknown): unknown {
+  if (typeof entry === "string") return entry;
+  if (entry !== null && typeof entry === "object") {
+    return defaultCondition((entry as Record<string, unknown>).default);
+  }
+  return undefined;
 }

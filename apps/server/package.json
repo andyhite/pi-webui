@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -b",
+    "dev": "tsx watch --conditions=source src/index.ts",
     "typecheck": "tsc -b",
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests"
@@ -24,6 +25,7 @@
   },
   "devDependencies": {
     "@types/ws": "^8.18.1",
+    "tsx": "^4.23.5",
     "ws": "^8.21.1"
   }
 }
