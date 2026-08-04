@@ -467,9 +467,15 @@ describe("a deleted session's questions and approvals leave the queue", () => {
     });
     stores.sessions.delete(sessionId);
 
+    // Past §7.2's threshold, so the `unanswered` alert the approval times is
+    // genuinely derived and then hidden rather than merely too young to exist.
+    // That alert reaches the filter only because `pendingAsks` builds its target
+    // through `sessionTarget`, which is the hop most likely to be lost.
+    clock.advance(120);
     const after = attention.items().map((item) => item.id);
     expect(after).not.toContain(`approval:${asking.id}`);
     expect(after).not.toContain(`approval:${failing.id}:effect-failed`);
+    expect(after).not.toContain(`health:unanswered:approval:${asking.id}`);
   });
 
   it("brings them back when the session is restored, having withdrawn nothing", () => {
