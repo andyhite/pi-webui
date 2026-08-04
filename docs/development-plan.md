@@ -1795,6 +1795,24 @@ each in its own row without ever opening the Conversation panel. The drift
 row's live-update leg was break-verified against the exact code path the
 paragraph above describes._
 
+_**Fixed after the fact (found by Epic 8.5's steering e2e): an acknowledged drift
+row did not come back after a further edit.** §4.5's acknowledge advances the
+consumer's **baseline**; it is not a permanent dismissal, which is what `mute` is
+for. Two filters stood between that rule and the queue and both dropped the row:
+`deriveDrift` folded an acknowledgement into `TriageStatus` and filtered
+`attention` by `isVisible` alone — so a flag stayed hidden however far past the
+baseline its input had moved — and `visibleAttention`'s general re-ask rule
+(`raisedAt > record.at`) could not settle it either, because a version written in
+the same second as the acknowledgement reads as covered by it. The rule now lives
+in one predicate, `acknowledgementSuperseded` in `core/sessions/triage.ts`: the
+baseline the acknowledgement advanced to versus the version there is now.
+`deriveDrift` applies it (an acknowledged flag past its baseline reads `active`
+again and carries `acknowledgementSuperseded`, so "re-run all drifted" sees it
+too), and the join carries that answer through `DerivedAttentionItem` rather than
+re-deriving it — the version comparison is the exact form of the rule and time
+cannot decide it. Acknowledged-at-latest still hides, mute still hides for ever,
+and a snooze still returns only when its time is up._
+
 ### Epic 6.2 — Budgets and spend (`budgets`) — _done: enforcement and data (Track A) + the two panels (Track B, Stage 1)_
 
 - [x] Persistent spend accounting per session / workstream / fleet; totals outlive sessions (§8)

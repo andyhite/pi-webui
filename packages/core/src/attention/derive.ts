@@ -136,6 +136,14 @@ export function deriveAttention(
  * acknowledgement) asks again: the ticket changed a second time, the session went
  * quiet again after working. Without this, acknowledging would be muting under
  * another name, and the difference between the two verbs is the whole of §4.5.
+ *
+ * A source that can answer that question **exactly** answers it instead: drift is
+ * about versions rather than about moments, so `deriveDrift` compares the
+ * acknowledged baseline with the version there is now and reports
+ * `acknowledgementSuperseded`. Comparing times could not settle it — an edit
+ * landing in the same second as the acknowledgement reads as covered by it — and
+ * the rule itself still lives in one place (`acknowledgementSuperseded` in
+ * `triage.ts`), never re-implemented here.
  */
 export function visibleAttention(
   derived: readonly DerivedAttentionItem[],
@@ -147,8 +155,9 @@ export function visibleAttention(
   return derived
     .filter((entry) => {
       const record = ledger?.get(entry.item.id);
-      if (record?.verb === "acknowledge" && entry.item.raisedAt > record.at) {
-        return true;
+      if (record?.verb === "acknowledge") {
+        if (entry.acknowledgementSuperseded === true) return true;
+        if (entry.item.raisedAt > record.at) return true;
       }
       return isVisible(triageStatus(record, now));
     })
@@ -289,6 +298,10 @@ function driftRow(source: DriftAttentionSource): DerivedAttentionItem {
       snoozeUntil: null,
     },
     states: ["wants-decision", "anything"],
+    // The baseline rule's answer, carried from the drift derivation that has the
+    // versions to apply it (§4.5): an acknowledgement covers the version it was
+    // made about, and a further one drifts again.
+    acknowledgementSuperseded: source.flag.acknowledgementSuperseded,
   };
 }
 

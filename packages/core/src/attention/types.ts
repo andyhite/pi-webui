@@ -143,6 +143,20 @@ export type AttentionState = (typeof ATTENTION_STATES)[number];
 export interface DerivedAttentionItem {
   readonly item: AttentionItem;
   readonly states: readonly AttentionState[];
+  /**
+   * The source has already established that a recorded acknowledgement no longer
+   * covers this row, so it belongs in the queue again (§4.5).
+   *
+   * Only drift sets it, from the **baseline** rule (`acknowledgementSuperseded`):
+   * the version the acknowledgement was made about versus the version there is
+   * now. That is the precise form of §4.5's "the consumer's baseline advances" — a
+   * version written in the same second as the acknowledgement is indistinguishable
+   * by time, and not ambiguous at all by baseline. Every other feed's fact is an
+   * event, so the comparison of times in `visibleAttention` is all there is, and
+   * this stays absent. It is not part of the item, because it is a fact about the
+   * acknowledgement rather than something a surface renders.
+   */
+  readonly acknowledgementSuperseded?: boolean;
 }
 
 /** How a session's work ended, for the completion feed (§3.6). */

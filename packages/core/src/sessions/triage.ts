@@ -97,6 +97,34 @@ export function triageStatus(
   }
 }
 
+/**
+ * Has the fact an acknowledgement was made about moved on, by **version**?
+ *
+ * §4.5's acknowledge is "seen; the consumer's baseline advances" — a baseline,
+ * not a permanent dismissal, which is what `mute` is for. So it covers exactly
+ * the version it was made about: while the object is still on that version the
+ * row stays hidden, and the moment a further version lands the row is drift
+ * again.
+ *
+ * Stated here, once, because both the drift derivation (which has the versions)
+ * and the attention join (which has the ledger) need this answer, and a second
+ * copy of the rule is what principle 8 forbids. It is also the *precise* form of
+ * the rule: two facts recorded in the same second are indistinguishable by time,
+ * and not ambiguous at all by baseline.
+ */
+export function acknowledgementSuperseded(
+  record: TriageRecord | undefined,
+  latestVersionId: VersionId | null,
+): boolean {
+  if (record === undefined || record.verb !== "acknowledge") return false;
+  if (record.baselineVersionId === null || latestVersionId === null) {
+    // Nothing to compare: an acknowledgement with no baseline recorded, or a row
+    // about something that has no version, expires on nothing here.
+    return false;
+  }
+  return record.baselineVersionId !== latestVersionId;
+}
+
 /** Does this item belong in the queue right now (§7.1)? */
 export function isVisible(status: TriageStatus): boolean {
   return status === "active";

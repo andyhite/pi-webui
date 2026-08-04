@@ -251,6 +251,58 @@ describe("triage (§4.5), whose job is hiding", () => {
     );
   });
 
+  it("asks again about drift after a further edit — acknowledge advances a baseline (§4.5)", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness, {
+      lifecycle: "open",
+      notes: [{ title: "Ticket", body: "as written" }],
+    });
+    await run(harness, fixture.commandId, staysOpen);
+    const noteId = fixture.noteIds[0] as string;
+
+    // The world moves: what the run read is no longer the latest version (§3.2).
+    await harness.ok(`/notes/${noteId}`, {
+      method: "PATCH",
+      body: { body: "the review landed overnight" },
+    });
+    const id = str(await itemOfFeed(harness, "drift"), "id");
+
+    await harness.ok(`/attention/${id}/acknowledge`, {
+      method: "POST",
+      body: {},
+    });
+    expect((await items(harness)).some((item) => at(item, "id") === id)).toBe(
+      false,
+    );
+
+    // A *further* edit. Acknowledge advanced the consumer's baseline to the
+    // version it was shown; this is a version past it, so the row is drift again
+    // rather than muted under another name — the difference between the two verbs
+    // is the whole of §4.5.
+    await harness.ok(`/notes/${noteId}`, {
+      method: "PATCH",
+      body: { body: "and overnight it changed again" },
+    });
+
+    const again = await waitFor(async () => {
+      const found = (await items(harness)).find(
+        (item) => at(item, "id") === id,
+      );
+      return found ?? null;
+    }, "the drift row to come back after a further edit");
+    expect(at(again, "feed")).toBe("drift");
+
+    // And acknowledging *that* version hides it again: the baseline advances
+    // each time, and nothing here ran anything (principle 2).
+    await harness.ok(`/attention/${id}/acknowledge`, {
+      method: "POST",
+      body: {},
+    });
+    expect((await items(harness)).some((item) => at(item, "id") === id)).toBe(
+      false,
+    );
+  });
+
   it("refuses a return time on anything but a snooze", async () => {
     const harness = await boot(repository());
     await askingSession(harness);

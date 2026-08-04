@@ -15,7 +15,13 @@ import { EMPTY_TRIAGE, applyTriage, driftItemKey } from "./triage.js";
 const NOW = 5_000;
 
 const objects = objectIds("ticket", "output", "downstream");
-const versions = versionIds("ticketV1", "ticketV2", "outputV1", "downstreamV1");
+const versions = versionIds(
+  "ticketV1",
+  "ticketV2",
+  "ticketV3",
+  "outputV1",
+  "downstreamV1",
+);
 
 const command: NodeId = newNodeId();
 const downstreamCommand: NodeId = newNodeId();
@@ -150,6 +156,42 @@ describe("drift derivation (§3.2, §4.5)", () => {
     // Acknowledging advanced a baseline; it started nothing, so the downstream
     // consumer's transitive flag is gone with its cause rather than run.
     expect(report.flags).toHaveLength(0);
+  });
+
+  it("drifts again when a further change lands past the acknowledged baseline (§4.5)", () => {
+    const triage = applyTriage(
+      EMPTY_TRIAGE,
+      driftItemKey(command, objects.ticket),
+      "acknowledge",
+      { at: NOW, by: humanAuthor, baselineVersionId: versions.ticketV2 },
+    );
+
+    // The world moved again. Acknowledge advanced a *baseline*, not a permanent
+    // dismissal — that is what mute is for — so the version past it drifts.
+    const report = deriveDrift(
+      graph({
+        latestVersions: new Map<ObjectId, VersionId>([
+          [objects.ticket, versions.ticketV3],
+          [objects.output, versions.outputV1],
+        ]),
+      }),
+      { now: NOW + 60, triage },
+    );
+
+    expect(
+      report.flags.find((flag) => flag.consumer === command),
+    ).toMatchObject({
+      latestVersionId: versions.ticketV3,
+      triage: "active",
+      acknowledgementSuperseded: true,
+    });
+    expect(report.attention.some((flag) => flag.consumer === command)).toBe(
+      true,
+    );
+    // And the consumer downstream of it drifts with it, transitively.
+    expect(
+      report.attention.some((flag) => flag.consumer === downstreamCommand),
+    ).toBe(true);
   });
 
   it("keeps a snoozed flag as state but out of the queue", () => {

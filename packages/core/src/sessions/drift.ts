@@ -1,6 +1,11 @@
 import type { NodeId, ObjectId, VersionId, WorkstreamId } from "../ids.js";
 import type { TriageLedger, TriageStatus } from "./triage.js";
-import { driftItemKey, isVisible, triageStatus } from "./triage.js";
+import {
+  acknowledgementSuperseded,
+  driftItemKey,
+  isVisible,
+  triageStatus,
+} from "./triage.js";
 
 /**
  * Drift derivation (§3.2, §4.5).
@@ -56,6 +61,17 @@ export interface DriftFlag {
   /** The change came from outside this consumer's workstream (§3.2). */
   readonly crossWorkstream: boolean;
   readonly triage: TriageStatus;
+  /**
+   * An acknowledgement is recorded for this row and the input has moved past the
+   * baseline it advanced to, so the row is drift again (§4.5) and `triage` reads
+   * `active` despite the ledger saying acknowledge.
+   *
+   * Carried on the flag because the attention join has the ledger but not the
+   * versions: without it the join would fall back to comparing times, and a
+   * version written in the same second as the acknowledgement is indistinguishable
+   * that way — while the baseline is not ambiguous at all.
+   */
+  readonly acknowledgementSuperseded: boolean;
 }
 
 export interface DriftReport {
@@ -124,8 +140,8 @@ export function deriveDrift(
       if (!stale) continue;
 
       const key = driftItemKey(consumption.consumer, consumption.objectId);
-      const status = triageStatus(triage?.get(key), context.now);
-      const acknowledgedBaseline = triage?.get(key)?.baselineVersionId ?? null;
+      const record = triage?.get(key);
+      const acknowledgedBaseline = record?.baselineVersionId ?? null;
       if (
         item.cause === "direct" &&
         acknowledgedBaseline !== null &&
@@ -135,6 +151,14 @@ export function deriveDrift(
         // is no drift to report until the next change (§4.5).
         continue;
       }
+
+      // Past that baseline, the acknowledgement is spent: it covered the version
+      // it was made about, and this is a further change (§4.5). Acknowledge would
+      // otherwise be mute under another name, and the difference between the two
+      // verbs is the whole of §4.5.
+      const superseded =
+        item.cause === "direct" && acknowledgementSuperseded(record, latest);
+      const status = superseded ? "active" : triageStatus(record, context.now);
 
       if (!flags.has(key)) {
         flags.set(key, {
@@ -151,6 +175,7 @@ export function deriveDrift(
             item.originObjectId,
           ),
           triage: status,
+          acknowledgementSuperseded: superseded,
         });
       }
 

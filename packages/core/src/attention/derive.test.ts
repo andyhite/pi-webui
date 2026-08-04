@@ -72,6 +72,7 @@ function sources(overrides: Partial<AttentionSources> = {}): AttentionSources {
           originObjectId: "obj-ticket" as ObjectId,
           crossWorkstream: false,
           triage: "active",
+          acknowledgementSuperseded: false,
         },
         target: { nodeId: "node-command", workstreamId: "ws-1" },
         changedSummary: "the ticket moved to In Review",
@@ -222,6 +223,49 @@ describe("the attention derivation", () => {
       ),
     );
     expect(again.some((item) => item.id === "health:idle:sess-1")).toBe(true);
+  });
+
+  it("asks again about drift the baseline moved past, whatever the times say", () => {
+    const ledger = applyTriage(
+      EMPTY_TRIAGE,
+      "drift:node-command:obj-ticket",
+      "acknowledge",
+      { at: 1000, by: humanAuthor, baselineVersionId: "ver-1" as never },
+    );
+
+    // Still on the acknowledged version: hidden, which is what acknowledge is.
+    const hidden = attentionItems(
+      deriveAttention(sources(), { now: 2000, triage: ledger }),
+    );
+    expect(
+      hidden.some((item) => item.id === "drift:node-command:obj-ticket"),
+    ).toBe(false);
+
+    // A further version landed, and the drift derivation says so on the flag.
+    // The row's own `raisedAt` (700) is *before* the acknowledgement, so the
+    // time comparison alone would keep it hidden — the baseline is the fact.
+    const base = sources();
+    const drifted = attentionItems(
+      deriveAttention(
+        {
+          ...base,
+          drift: [
+            {
+              ...(base.drift[0] as (typeof base.drift)[number]),
+              flag: {
+                ...(base.drift[0] as (typeof base.drift)[number]).flag,
+                triage: "active",
+                acknowledgementSuperseded: true,
+              },
+            },
+          ],
+        },
+        { now: 2000, triage: ledger },
+      ),
+    );
+    expect(
+      drifted.some((item) => item.id === "drift:node-command:obj-ticket"),
+    ).toBe(true);
   });
 
   it("ranks an end that wants a decision above drift, and a proven one below", () => {
