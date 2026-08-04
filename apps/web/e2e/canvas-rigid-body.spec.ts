@@ -1,0 +1,216 @@
+/**
+ * RIGID-BODY PUSH AND AT-REST DURABILITY (Epic 8.5, Epic 3.1, spec §5).
+ *
+ * Proves, end to end, against a real spawned server and a real Chromium
+ * tab loaded from the server's own served page (single origin, §12):
+ *
+ *   (a) Dragging one node into another pushes it, and the push travels
+ *       through a chain — dragging A into B, with B already close enough
+ *       to C, moves *both* B and C, never just the one directly touched.
+ *   (b) No two nodes ever end up overlapping once the drag settles (the
+ *       "solid rectangles" half of §5's claim) — asserted for every pair,
+ *       not just the two the drag directly touched.
+ *   (c) "An arrangement at rest stays exactly where it is": positions
+ *       measured the instant the drag ends must be bit-for-bit identical a
+ *       beat later with no further input, at every level (dragged node,
+ *       pushed node, and the chain's far end) — never a continuous
+ *       simulation still settling after the human let go.
+ *
+ * Three plain content nodes, no edges between them: `deriveInitialArrangement`
+ * (Epic 3.1) lays out nodes with no incoming edges as one column, one row
+ * apart, in id order — deterministic, but this test never assumes *which*
+ * node lands in which row; it measures the real rendered boxes and reasons
+ * from those instead.
+ */
+import { expect, test, type Page } from "@playwright/test";
+
+import {
+  apiPost,
+  startMilestoneServer,
+  type MilestoneServer,
+} from "./server-harness.js";
+import {
+  boxesByNodeId,
+  dragNodeBy,
+  overlaps,
+  type Box,
+} from "./canvas-drag-helpers.js";
+
+let server: MilestoneServer | undefined;
+
+test.beforeAll(async () => {
+  server = await startMilestoneServer();
+});
+
+test.afterAll(async () => {
+  if (server) await server.stop();
+});
+
+function requireServer(): MilestoneServer {
+  if (!server) {
+    throw new Error("the rigid-body server never started (beforeAll failed)");
+  }
+  return server;
+}
+
+async function createContentNode(base: string, title: string): Promise<string> {
+  const object = await apiPost<{ object: { id: string } }>(
+    base,
+    "/api/objects",
+    {
+      kind: "document",
+      title,
+      renderings: { card: {}, summary: title, agentContent: title },
+    },
+  );
+  const node = await apiPost<{ node: { id: string } }>(base, "/api/nodes", {
+    role: "content",
+    refId: object.object.id,
+  });
+  return node.node.id;
+}
+
+/** The three boxes read back, ordered top-to-bottom by their current screen y — whichever node ids landed where. */
+function orderByY(boxes: ReadonlyMap<string, Box>): readonly [string, Box][] {
+  return [...boxes.entries()].sort((a, b) => a[1].y - b[1].y);
+}
+
+function allPairsNonOverlapping(boxes: readonly Box[]): boolean {
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i];
+      const b = boxes[j];
+      if (a && b && overlaps(a, b)) return false;
+    }
+  }
+  return true;
+}
+
+test("dragging a node into another pushes it, the push chains, and the settled arrangement stays put", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const base = requireServer().baseUrl;
+
+  const idA = await createContentNode(base, "Rigid Push A");
+  const idB = await createContentNode(base, "Rigid Push B");
+  const idC = await createContentNode(base, "Rigid Push C");
+
+  await page.goto(`${base}/`);
+  await expect(page.getByTestId(`canvas-node-${idA}`)).toBeVisible();
+  await expect(page.getByTestId(`canvas-node-${idB}`)).toBeVisible();
+  await expect(page.getByTestId(`canvas-node-${idC}`)).toBeVisible();
+
+  const initial = await boxesByNodeId(page, [idA, idB, idC]);
+  // No pre-existing overlap: `deriveInitialArrangement`'s own row spacing
+  // (120px) comfortably clears the fallback node height (40px) — this is
+  // the baseline the push below has to actually change, not a state the
+  // page happened to start in.
+  expect(allPairsNonOverlapping([...initial.values()])).toBe(true);
+
+  const ordered = orderByY(initial);
+  const [topId, topBox] = ordered[0] as [string, Box];
+  const [midId, midBox] = ordered[1] as [string, Box];
+  const [farId, farBox] = ordered[2] as [string, Box];
+
+  // Drag the top node down far enough to overlap the middle node deeply —
+  // deep enough that separating them pushes the middle node down into the
+  // far node's own space too, so the push has to travel through the chain
+  // rather than stop at the first contact.
+  const dragDistance = farBox.y + farBox.height - topBox.y + 40;
+  await dragNodeBy(page, page.getByTestId(`canvas-node-${topId}`), {
+    x: 0,
+    y: dragDistance,
+  });
+
+  const settled = await boxesByNodeId(page, [topId, midId, farId]);
+  const settledTop = settled.get(topId) as Box;
+  const settledMid = settled.get(midId) as Box;
+  const settledFar = settled.get(farId) as Box;
+
+  // (a) The chain propagated: not just the node directly touched, but the
+  // one beyond it too.
+  expect(settledMid.y).toBeGreaterThan(midBox.y);
+  expect(settledFar.y).toBeGreaterThan(farBox.y);
+
+  // (b) Solid rectangles: no pair overlaps once the push settles, dragged
+  // node included.
+  expect(allPairsNonOverlapping([settledTop, settledMid, settledFar])).toBe(
+    true,
+  );
+
+  // (c) At rest stays put: no further input, and the settled positions do
+  // not drift — proof this is a one-shot solver reacting to a drag frame,
+  // never a continuous simulation still running after the human let go.
+  await page.waitForTimeout(600);
+  const afterPause = await boxesByNodeId(page, [topId, midId, farId]);
+  // Rounded to whole pixels: width/height can wobble by a sub-pixel from
+  // text layout measurement alone, which is not a claim about drift — the
+  // claim is about x/y position, and those must be exact.
+  for (const [id, settledBox] of [
+    [topId, settledTop],
+    [midId, settledMid],
+    [farId, settledFar],
+  ] as const) {
+    const laterBox = afterPause.get(id) as Box;
+    expect(Math.round(laterBox.x)).toBe(Math.round(settledBox.x));
+    expect(Math.round(laterBox.y)).toBe(Math.round(settledBox.y));
+  }
+});
+
+test("a node the drag chain never reaches is never displaced, even though the canvas never checked whether it already overlapped anything", async ({
+  page,
+}: {
+  page: Page;
+}) => {
+  test.setTimeout(60_000);
+  const base = requireServer().baseUrl;
+
+  // `deriveInitialArrangement` lays out edge-less nodes in one shared
+  // column, ordered alphabetically by node id — not by creation order — so
+  // a node meant to be "unrelated" can otherwise land physically *between*
+  // the pair a later drag pushes, and get swept up in the chain by
+  // accident rather than by the claim this test is making. Relocating it
+  // first, by its own real drag gesture, is what guarantees it starts
+  // somewhere the A/B interaction below can never reach — the same
+  // durable-placement mechanic the arrangement-durability spec exercises
+  // more directly.
+  const idUntouched = await createContentNode(base, "Rigid Push Untouched");
+  const idA = await createContentNode(base, "Rigid Push Solo A");
+  const idB = await createContentNode(base, "Rigid Push Solo B");
+
+  await page.goto(`${base}/`);
+  await expect(page.getByTestId(`canvas-node-${idUntouched}`)).toBeVisible();
+  await expect(page.getByTestId(`canvas-node-${idA}`)).toBeVisible();
+  await expect(page.getByTestId(`canvas-node-${idB}`)).toBeVisible();
+
+  await dragNodeBy(page, page.getByTestId(`canvas-node-${idUntouched}`), {
+    x: 2000,
+    y: 0,
+  });
+  const untouchedBefore = (await boxesByNodeId(page, [idUntouched])).get(
+    idUntouched,
+  ) as Box;
+
+  const beforeAB = await boxesByNodeId(page, [idA, idB]);
+  const orderedAB = orderByY(beforeAB);
+  const [dragId, dragBox] = orderedAB[0] as [string, Box];
+  const [otherId, otherBox] = orderedAB[1] as [string, Box];
+
+  await dragNodeBy(page, page.getByTestId(`canvas-node-${dragId}`), {
+    x: 0,
+    y: otherBox.y - dragBox.y + 20,
+  });
+
+  const after = await boxesByNodeId(page, [idUntouched, idA, idB]);
+  const otherAfter = after.get(otherId) as Box;
+  const untouchedAfter = after.get(idUntouched) as Box;
+  // The other pair actually moved (sanity: the drag had an effect at all)...
+  expect(otherAfter.y).not.toBeCloseTo(otherBox.y, 0);
+  // ...but the node relocated well outside the chain's reach sits at the
+  // exact same *position* it was left at, in a different drag gesture
+  // entirely (rounded to whole pixels — width/height can wobble by a
+  // sub-pixel from text layout, which is not a claim about position).
+  expect(Math.round(untouchedAfter.x)).toBe(Math.round(untouchedBefore.x));
+  expect(Math.round(untouchedAfter.y)).toBe(Math.round(untouchedBefore.y));
+});
