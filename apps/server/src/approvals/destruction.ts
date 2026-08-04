@@ -33,13 +33,19 @@ import {
  * operator authorized it, and a record saying they did the deleting would lose
  * which agent's work took the arrangement apart.
  *
- * **Every kind here is one transaction and one gate**, both of them in
- * {@link destruction}. A cascade takes two things down — the subject, and the
- * node the board draws for it — and before those were one unit a throw between
- * them left a live node whose subject is filtered out of the snapshot: a card
- * with nothing behind it, which is also exactly what made an approval's recorded
- * effect failure a lie (it said the destruction did not happen about one that
- * half did). One transaction makes that record true: it did not happen.
+ * **Every kind here is one transaction, and every kind is gated before it
+ * writes.** A cascade takes two things down — the subject, and the node the board
+ * draws for it — and before those were one unit a throw between them left a live
+ * node whose subject is filtered out of the snapshot: a card with nothing behind
+ * it, which is also exactly what made an approval's recorded effect failure a lie
+ * (it said the destruction did not happen about one that half did). One
+ * transaction makes that record true: it did not happen.
+ *
+ * The gate is {@link destruction}'s for the six synchronous kinds. `session` asks
+ * it itself, before the runtime stop, and then goes straight to `atomically` —
+ * because that stop is not a row and no rollback un-stops one, so a refused
+ * gesture must be refused before it happens rather than inside the transaction
+ * that follows it.
  */
 export interface DestructionOutcome {
   readonly kind: DestructionTargetKind;
@@ -76,9 +82,11 @@ export type LiveSessionStop = (sessionId: string) => Promise<void>;
 
 export interface DestructionContext extends DestructionGate {
   /**
-   * Required, for every kind rather than only for `session`: a caller that has
-   * no way to stop a live session has no business deleting one, and an optional
-   * field would make that the one destruction path enforced by nothing.
+   * Required, so a caller that cannot name the kind in advance can always stop a
+   * live session on the way to deleting its record. `performDestruction` is the
+   * only thing that takes this — the six synchronous kinds are called directly by
+   * the routes with a bare {@link DestructionGate} — and an optional field would
+   * move the decision to whichever call site was written last.
    */
   readonly stopSession: LiveSessionStop;
 }
@@ -99,9 +107,9 @@ function refuseUnlessAllowed(gate: DestructionGate): void {
 }
 
 /**
- * The gate and the transaction, once, for every kind (see the module docstring).
- * Nothing is announced until the writes committed, which is what `announce`
- * being a sink rather than the bus buys.
+ * The gate and the transaction for a kind that is only rows. Nothing is announced
+ * until the writes committed, which is what `announce` being a sink rather than
+ * the bus buys.
  */
 function destruction<T>(
   stores: ApiStores,
@@ -311,7 +319,9 @@ export async function destroySession(
   const stopped = wasLive && before.session.deletion.deletedAt === null;
   if (stopped) await stopSession(sessionId);
 
-  return destruction(stores, bus, gate, (announce) => {
+  // `atomically` rather than `destruction`: the gate above already ran, and asking
+  // it twice would make it unclear which of the two is the one that matters.
+  return atomically(stores.db, bus, (announce) => {
     // Re-read, because the stop suspended this function and a concurrent delete
     // of the same session can have landed in the meantime. Whether *this* call is
     // the one that removed the record decides what is announced, so it is read
