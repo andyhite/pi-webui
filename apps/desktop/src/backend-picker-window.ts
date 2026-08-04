@@ -33,6 +33,7 @@ import type {
   BackendListResult,
   BackendTestAndRememberInput,
   BackendTestAndRememberResult,
+  PickerBackendSummary,
 } from "./backend-picker-channels.js";
 import {
   activeBackend,
@@ -42,7 +43,11 @@ import {
   setActiveBackend,
   upsertBackend,
 } from "./desktop-config.js";
-import type { ConfigIo, DesktopConfig } from "./desktop-config.js";
+import type {
+  ConfigIo,
+  DesktopConfig,
+  RemoteBackend,
+} from "./desktop-config.js";
 
 const PICKER_HTML = fileURLToPath(
   new URL("./backend-picker.html", import.meta.url),
@@ -76,7 +81,11 @@ function registerHandlers(deps: BackendPickerDeps): void {
 
   ipcMain.handle(BACKEND_LIST_CHANNEL, (): BackendListResult => {
     const config = readConfig();
-    return { backends: config.backends, active: activeBackend(config) };
+    const active = activeBackend(config);
+    return {
+      backends: config.backends.map(toPickerSummary),
+      active: active ? toPickerSummary(active) : null,
+    };
   });
 
   ipcMain.handle(BACKEND_SWITCH_CHANNEL, (_event, id: string | null): void => {
@@ -112,6 +121,15 @@ function registerHandlers(deps: BackendPickerDeps): void {
       return { ok: true };
     },
   );
+}
+
+/**
+ * Never includes `credential` — see `PickerBackendSummary`'s own doc
+ * comment. Exported (rather than kept private) so this exact mapping is
+ * unit-tested on its own, without mocking `electron`'s `ipcMain`/`app`.
+ */
+export function toPickerSummary(backend: RemoteBackend): PickerBackendSummary {
+  return { id: backend.id, label: backend.label, url: backend.url };
 }
 
 export function openBackendPicker(deps: BackendPickerDeps): BrowserWindow {

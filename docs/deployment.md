@@ -177,6 +177,18 @@ from `PLOTROOM_STATE_DIR` (the _server's_ portable store), because which
 backend to connect to is a fact that exists even when the active backend is
 remote and no local server ever starts.
 
+**A remembered backend's credential is stored in `desktop-config.json` as
+plain text**, readable by anything with filesystem access to this
+instance's `userData` directory. This is the same posture Electron's own
+`safeStorage` (OS-keychain-backed encryption at rest) exists to improve on;
+adopting it is deferred, not silently assumed adequate — recorded here
+rather than in AGENTS.md's decisions list because it is a hardening
+follow-up over an already-shipped mechanism, not an open product question.
+The picker's own page never receives the credential back over IPC once
+remembered (`PickerBackendSummary` carries only `id`/`label`/`url`); it is
+read from disk once, by the main process, and injected directly into
+outgoing requests.
+
 ## Tunnel workflow
 
 Documented and verified as far as this sandboxed environment allows:
