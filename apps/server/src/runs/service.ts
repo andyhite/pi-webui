@@ -647,11 +647,11 @@ export class RunService {
         });
       }
 
-      const adapter = this.adapterFor(stored.session.runtime.adapterId);
-      const handle = await adapter.resume(stored.session.runtime.ref, {
-        launch: input.launch,
-        workspacePath,
-      });
+      const { adapter, handle } = await this.deps.runtimes.resume(
+        stored.session.runtime.adapterId,
+        stored.session.runtime.ref,
+        { launch: input.launch, workspacePath },
+      );
 
       // The end is cleared: a resumed session is live again, and a record that kept
       // its end state would report a session that is running as finished (§3.6).
@@ -725,7 +725,7 @@ export class RunService {
       });
     }
 
-    const adapter = this.adapterFor(source.session.runtime.adapterId);
+    const adapterId = source.session.runtime.adapterId;
     const config = {
       prompt: "",
       launch: plan.session.launch,
@@ -737,11 +737,14 @@ export class RunService {
 
     if (plan.runtime.mode === "native") {
       try {
-        handle = await adapter.fork(
-          source.session.runtime.ref,
-          plan.point,
-          config,
-        );
+        handle = (
+          await this.deps.runtimes.fork(
+            adapterId,
+            source.session.runtime.ref,
+            plan.point,
+            config,
+          )
+        ).handle;
         mode = "native";
       } catch (error) {
         if (!(error instanceof PiForkUnavailable)) throw error;
@@ -756,17 +759,22 @@ export class RunService {
             reason: error.message,
           },
         );
-        handle = await adapter.start({
-          ...config,
-          seedTranscript: seedFrom(this.deps.stores, source, plan),
-        });
+        handle = (
+          await this.deps.runtimes.start(adapterId, {
+            config: {
+              ...config,
+              seedTranscript: seedFrom(this.deps.stores, source, plan),
+            },
+          })
+        ).handle;
         mode = "seeded";
       }
     } else {
-      handle = await adapter.start({
-        ...config,
-        seedTranscript: plan.runtime.seed,
-      });
+      handle = (
+        await this.deps.runtimes.start(adapterId, {
+          config: { ...config, seedTranscript: plan.runtime.seed },
+        })
+      ).handle;
       mode = "seeded";
     }
 
@@ -777,7 +785,7 @@ export class RunService {
       mode: plan.session.mode,
       launch: plan.session.launch,
       initiatedBy: plan.session.initiatedBy,
-      runtime: { adapterId: adapter.id, ref: handle.ref },
+      runtime: { adapterId, ref: handle.ref },
       runtimeMode: mode,
     });
     reindexSessionSearch(stores, session.session.id);
@@ -801,7 +809,7 @@ export class RunService {
     this.attach(
       session.session.id,
       handle,
-      adapter.id,
+      adapterId,
       this.modelWindowFor(source),
     );
 
@@ -864,14 +872,16 @@ export class RunService {
         });
       }
 
-      const adapter = this.deps.runtimes.require(
+      const { adapter, handle } = await this.deps.runtimes.start(
         this.deps.config.runtime.adapterId,
+        {
+          config: {
+            prompt: input.brief.text,
+            launch: input.launch,
+            workspacePath,
+          },
+        },
       );
-      const handle = await adapter.start({
-        prompt: input.brief.text,
-        launch: input.launch,
-        workspacePath,
-      });
 
       const session = stores.sessions.start({
         workstreamId: input.workstreamId,

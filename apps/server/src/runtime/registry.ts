@@ -1,7 +1,10 @@
 import type {
+  RuntimeResumeConfig,
+  RuntimeSessionRef,
   RuntimeStartConfig,
   SessionRuntimeAdapter,
   RuntimeSessionHandle,
+  TranscriptPoint,
 } from "@plotroom/core";
 import { checkPermissionEnforcement } from "@plotroom/core";
 import { refused } from "../http/errors.js";
@@ -70,24 +73,18 @@ export class RuntimeRegistry {
   }
 
   /**
-   * Start a native session. The permission-enforcement check runs here rather
-   * than at each call site: a runtime that cannot refuse a tool call on the
-   * host's word may not run work at all, because approvals (§6.6) and claims
-   * (§3.4) would be advice instead of gates (decision 0001, C6).
+   * Start a native session.
+   *
+   * The permission-enforcement check runs here rather than at each call site: a
+   * runtime that cannot refuse a tool call on the host's word may not run work
+   * at all, because approvals (§6.6) and claims (§3.4) would be advice instead
+   * of gates (decision 0001, C6).
    */
   async start(
     adapterId: string | null | undefined,
     launch: RuntimeLaunch,
-  ): Promise<{
-    readonly adapter: SessionRuntimeAdapter;
-    readonly handle: RuntimeSessionHandle;
-  }> {
-    const adapter = this.require(adapterId);
-
-    const enforcement = checkPermissionEnforcement(adapter.capabilities);
-    if (!enforcement.allowed) {
-      throw refused(enforcement.refusal);
-    }
+  ): Promise<NativeSession> {
+    const adapter = this.#enforcing(adapterId);
 
     if (launch.script !== undefined) {
       if (!isScriptedRuntime(adapter)) {
@@ -104,4 +101,55 @@ export class RuntimeRegistry {
 
     return { adapter, handle: await adapter.start(launch.config) };
   }
+
+  /**
+   * Pick a stopped session up again (§5.4).
+   *
+   * Through the registry for one reason: C6 is about work running ungated, and a
+   * resumed session runs work. A call site that reached the adapter directly was
+   * the same hole as an unchecked start — worse, if anything, because the session
+   * it revives already has a transcript telling it what to do.
+   */
+  async resume(
+    adapterId: string | null | undefined,
+    ref: RuntimeSessionRef,
+    config: RuntimeResumeConfig,
+  ): Promise<NativeSession> {
+    const adapter = this.#enforcing(adapterId);
+    return { adapter, handle: await adapter.resume(ref, config) };
+  }
+
+  /** Fork natively (§6.3). Gated for the same reason as `start` and `resume`. */
+  async fork(
+    adapterId: string | null | undefined,
+    ref: RuntimeSessionRef,
+    point: TranscriptPoint,
+    config: RuntimeStartConfig,
+  ): Promise<NativeSession> {
+    const adapter = this.#enforcing(adapterId);
+    return { adapter, handle: await adapter.fork(ref, point, config) };
+  }
+
+  /**
+   * The adapter, having refused if it cannot enforce PlotRoom's decisions.
+   *
+   * `require` deliberately does not do this: reading a stored session's
+   * capabilities must keep working whatever they are, and it is running work
+   * that C6 forbids — so the check belongs to the three verbs that produce a
+   * live handle, and to nothing else.
+   */
+  #enforcing(adapterId: string | null | undefined): SessionRuntimeAdapter {
+    const adapter = this.require(adapterId);
+    const enforcement = checkPermissionEnforcement(adapter.capabilities);
+    if (!enforcement.allowed) {
+      throw refused(enforcement.refusal);
+    }
+    return adapter;
+  }
+}
+
+/** One live native session, and which adapter produced it. */
+export interface NativeSession {
+  readonly adapter: SessionRuntimeAdapter;
+  readonly handle: RuntimeSessionHandle;
 }
