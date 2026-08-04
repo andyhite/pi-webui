@@ -82,6 +82,10 @@ import { remotelyDeletedIds, withConfirmed } from "./reconcile.js";
 import { applyArrangementReset } from "./arrangement-reset.js";
 import { diffDraggedPositions, excludeContainers } from "./drag-diff.js";
 import {
+  clampExtentsInsideParent,
+  clampInsideParent,
+} from "./contained-push.js";
+import {
   computeAbsoluteScreenExtents,
   toExtentAwareNodes,
 } from "./node-extents.js";
@@ -1239,25 +1243,33 @@ function CanvasInner({
   );
 
   // Rigid-body push: on every drag frame, displace exactly the nodes the
-  // chain reaches; the dragged node itself stays under the cursor. Push
-  // operates at the top level (containers and un-contained box nodes) —
-  // pushing a node inside an expanded container against its siblings is a
-  // follow-on refinement (containers are new in this epic; xyflow already
-  // clamps a child's position to its parent's extent).
+  // chain reaches; the dragged node itself stays under the cursor.
   //
-  // `dragStartPositions` snapshots every top-level node's position the
-  // moment a gesture begins (the first frame this render's drag has seen),
-  // so drag-stop can persist only what this gesture actually changed —
-  // never every node currently mounted, most of which this drag never
-  // touched (`drag-diff.ts`).
+  // A gesture happens in **one coordinate space**. A bare node's position is
+  // absolute, a contained node's is relative to its container
+  // (`extent: "parent"`), and the solver may only compare extents expressed in
+  // the same one — so the nodes a drag can reach are the dragged node's own
+  // siblings: every node with the same parent, whether that is a container or
+  // nothing. Dragging a container is therefore a top-level gesture (it pushes
+  // bare nodes and other containers), and dragging a node inside one pushes
+  // only what is in there with it, which is also the only place its push could
+  // legally land.
+  //
+  // `dragStartPositions` snapshots that same group the moment a gesture begins
+  // (the first frame this render's drag has seen), so drag-stop can persist
+  // only what this gesture actually changed — never every node currently
+  // mounted, most of which this drag never touched (`drag-diff.ts`).
   const dragStartPositions = useRef<Map<string, Point> | null>(null);
   const onNodeDrag: OnNodeDrag<CanvasNode> = useCallback(
     (_event, dragged) => {
-      if (dragged.parentId) return;
+      const groupParentId = dragged.parentId ?? null;
+      const inGroup = (node: CanvasNode): boolean =>
+        (node.parentId ?? null) === groupParentId;
+
       if (dragStartPositions.current === null) {
         dragStartPositions.current = new Map(
           getNodes()
-            .filter((node) => !node.parentId)
+            .filter(inGroup)
             .map((node) => [
               node.id,
               { x: node.position.x, y: node.position.y },
@@ -1265,8 +1277,8 @@ function CanvasInner({
         );
       }
       setNodes((current) => {
-        const topLevel = current.filter((node) => !node.parentId);
-        const extents: NodeExtent[] = topLevel.map((node) => ({
+        const group = current.filter(inGroup);
+        const stored: NodeExtent[] = group.map((node) => ({
           id: node.id,
           x: node.id === dragged.id ? dragged.position.x : node.position.x,
           y: node.id === dragged.id ? dragged.position.y : node.position.y,
@@ -1277,10 +1289,40 @@ function CanvasInner({
             node.measured?.height ??
             (node.type === "container" ? CONTAINER_HEIGHT : FALLBACK_HEIGHT),
         }));
+        // Inside a container the space is bounded, and the clamp applies to
+        // both ends of the solve (`contained-push.ts`).
+        //
+        // Its **input**, because a stored child position can sit outside the
+        // frame — a third node in one workstream derives to `y = 300` inside a
+        // 280-tall container — and xyflow draws it clamped without ever
+        // writing that back. Solving against the stored value computes physics
+        // for an arrangement nobody can see.
+        //
+        // Its **output**, because a position the canvas would clamp on its way
+        // to the screen must not be the one drag-stop writes down, or the
+        // arrangement that comes back after a reload is not the one the
+        // operator saw settle.
+        const parent =
+          groupParentId === null
+            ? undefined
+            : current.find((node) => node.id === groupParentId);
+        const frame =
+          parent === undefined
+            ? null
+            : {
+                width: parent.measured?.width ?? CONTAINER_WIDTH,
+                height: parent.measured?.height ?? CONTAINER_HEIGHT,
+              };
+        const extents =
+          frame === null ? stored : clampExtentsInsideParent(stored, frame);
         const displaced = solvePush(extents, dragged.id);
         if (displaced.size === 0) return current;
+        const settled =
+          frame === null
+            ? displaced
+            : clampInsideParent(displaced, extents, frame);
         return current.map((node) => {
-          const moved = displaced.get(node.id);
+          const moved = settled.get(node.id);
           return moved ? { ...node, position: moved } : node;
         });
       });
@@ -1288,35 +1330,43 @@ function CanvasInner({
     [setNodes, getNodes],
   );
 
-  // Durable placement: only what this gesture actually settled — the
-  // dragged node and everything it pushed — is persisted when the drag
-  // ends, diffed against the positions captured at its start. Restricted to
-  // top-level nodes on *both* sides of the diff (matching `dragStartPositions`
-  // itself): a contained node's parent-relative position never changes via
-  // this drag mechanism (only the push solver's own top-level extents do,
-  // §5's "follow-on refinement" noted above), so diffing against unfiltered
-  // `getNodes()` spuriously reported *every* contained node on the whole
-  // canvas as "changed" on every drag, regardless of whether it moved (found
-  // live, via `canvas-arrangement-durability.spec.ts`'s real-UI fixture: a
-  // command node's untouched default offset rode along in the batch).
+  // Durable placement: only what this gesture actually settled — the dragged
+  // node and everything it pushed — is persisted when the drag ends, diffed
+  // against the positions captured at its start.
   //
-  // A container is then excluded again, one layer further: it has no
-  // durable placement of its own yet — the server has no row to write a
-  // workstream's position onto (its `defaultPosition` is derived, never
-  // authored) — so persisting one here sent `PATCH /api/arrangement` an id
-  // it does not recognise, which refuses the *whole* batch (one
-  // transaction, §5) and lost the box nodes' own legitimate moves right
-  // along with it. The push solver still moves a container visually, live,
-  // for this session's own rigid-body physics (both bugs were masked until
-  // a drag actually pushed one); only the write-back excludes it.
+  // Both sides of the diff are exactly the group the gesture snapshotted, and
+  // for the same reason it was snapshotted that way: a contained node's
+  // position is parent-relative and a bare node's is absolute, so mixing them
+  // in one diff reported every contained node on the canvas as "changed" on
+  // every top-level drag, regardless of whether it moved (found live, via
+  // `canvas-arrangement-durability.spec.ts`'s real-UI fixture: a command
+  // node's untouched default offset rode along in the batch). Reading the
+  // group back off `before` keeps the two sides identical by construction
+  // rather than by two filters agreeing.
+  //
+  // Parent-relative is also exactly what the server stores and hands back:
+  // `positions` off the board's own `PlacedNode` is applied to a contained
+  // node's `position` verbatim (`toBoxNode`), so a child's authored placement
+  // round-trips through `PATCH /api/arrangement` with no coordinate
+  // conversion anywhere — and there must not be one, or a reload would move
+  // what the operator arranged.
+  //
+  // A container is then excluded, one layer further: it has no durable
+  // placement of its own yet — the server has no row to write a workstream's
+  // position onto (its `defaultPosition` is derived, never authored) — so
+  // persisting one here sent `PATCH /api/arrangement` an id it does not
+  // recognise, which refuses the *whole* batch (one transaction, §5) and lost
+  // the box nodes' own legitimate moves right along with it. The push solver
+  // still moves a container visually, live, for this session's own rigid-body
+  // physics; only the write-back excludes it.
   const onNodeDragStop: OnNodeDrag<CanvasNode> = useCallback(() => {
     const before = dragStartPositions.current;
     dragStartPositions.current = null;
     if (!before) return;
-    const topLevelAfter = getNodes().filter((node) => !node.parentId);
+    const settled = getNodes().filter((node) => before.has(node.id));
     const persistable = excludeContainers(
-      diffDraggedPositions(before, topLevelAfter),
-      topLevelAfter,
+      diffDraggedPositions(before, settled),
+      settled,
     );
     if (Object.keys(persistable).length > 0) onPlacementsChange(persistable);
   }, [getNodes, onPlacementsChange]);

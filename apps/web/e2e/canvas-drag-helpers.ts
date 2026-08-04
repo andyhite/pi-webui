@@ -170,6 +170,28 @@ export async function flowPosition(
   return { x: Number(match[1]), y: Number(match[2]) };
 }
 
+/**
+ * Zooms in, one small real wheel tick at a time, until the canvas is past the
+ * workstream zoom level — where a container is one card and its contents are
+ * not rendered at all (§5), so anything about a contained node has to get past
+ * it first. Steps rather than jumps because `fitView`'s computed zoom is not
+ * predictable from a test, and one large tick can skip a level.
+ *
+ * Lives here because six spec files carry their own copy of this loop and
+ * `canvas-zoom-containers.spec.ts` a seventh, more general one; this is the
+ * shared home the rest should converge on.
+ */
+export async function zoomPastWorkstreamLevel(page: Page): Promise<void> {
+  const zoomLevel = page.getByTestId("zoom-level");
+  const pane = page.locator(".react-flow__pane");
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if ((await zoomLevel.textContent()) !== "workstream") return;
+    await pane.hover();
+    await page.mouse.wheel(0, -120);
+  }
+  await expect(zoomLevel).not.toHaveText("workstream");
+}
+
 /** Asserts a handle's xyflow-owned class list carries exactly the given tokens' presence (mid-drag legality signal, spec §5). */
 export async function expectHandleClasses(
   handle: Locator,

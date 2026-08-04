@@ -6,34 +6,24 @@
  * somewhere sensible; reset arrangement is the only automatic-layout verb,
  * and it re-derives from structure." (§5)
  *
- * KNOWN GAP, STATED HONESTLY (see the second test's own doc comment, and
- * report this prominently rather than gloss over it): the renderer
- * (`apps/web/src/App.tsx`) persists node positions *only* to the browser's
- * own `localStorage` (`createWebStoragePlacementStore`) — dragging a node
- * and "reset arrangement" both write there and nowhere else. It never reads
- * `PlacedNode.position` off `/api/snapshot`, and never calls the server's
- * own `PATCH /api/nodes/:id/position` / `PATCH /api/arrangement`. This is
- * Epic 3.1's own recorded deferral ("the renderer still writes to
- * localStorage until it adopts those endpoints" — see issue #13 (Canvas
- * foundation), or docs/development-plan.md in git history), not a new
- * finding — but it does mean this file
- * deliberately does **not** contain a "drag a node in the browser, restart
- * the *server*, reload, assert the position survived" test: as things
- * stand today that would either (a) pass for the wrong reason purely off
- * browser `localStorage`, proving nothing about the server, or (b) fail if
- * run in a fresh browser context with cleared storage — a true finding, but
- * one this batch cannot fix without editing `apps/web/src/App.tsx`
- * (production code, outside this batch's file ownership). The first test
- * below proves the real, already-landed guarantee directly instead — the
- * server's own durability of an authored position across a process
- * restart, at the layer that actually implements it — structured so a
- * follow-up wiring the renderer to these same endpoints (in progress on
- * another branch, per the batch's own coordination) can add a browser-level
- * leg on top without this test needing to change. The second test proves
- * "reset arrangement" through the real UI, which needs no server restart at
- * all since it re-derives from live graph structure on every invocation.
+ * Three legs, and the middle one is no longer a gap. When this file was
+ * written the renderer persisted positions only to the browser's own
+ * `localStorage`, so a "drag it, reload, assert it survived" test could only
+ * pass off browser storage and prove nothing about the server. That deferral
+ * is closed: `apps/web/src/App.tsx` enqueues every settled gesture to
+ * `PATCH /api/arrangement` in `LIVE` mode (`placement/write-queue.ts`). The
+ * local store is the offline/fixture path now, plus one LIVE-mode read at boot
+ * that migrates whatever an older build left behind.
+ *
+ *   (a) The server's own durability of an authored position across a process
+ *       restart, at the layer that implements it.
+ *   (b) "Reset arrangement" through the real UI — §5's only automatic-layout
+ *       verb, which needs no restart since it re-derives from live structure.
+ *   (c) A **contained** node's drag: persisted parent-relative, read back off
+ *       the server rather than off browser storage, and pushing the sibling it
+ *       lands on without letting it leave its container's frame.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import {
   apiGet,
@@ -46,7 +36,11 @@ import {
   startRestartableServer,
   type RestartableServer,
 } from "./canvas-restart-harness.js";
-import { dragNodeBy, flowPosition } from "./canvas-drag-helpers.js";
+import {
+  dragNodeBy,
+  flowPosition,
+  zoomPastWorkstreamLevel,
+} from "./canvas-drag-helpers.js";
 
 interface SnapshotNodesRead {
   readonly nodes: readonly {
@@ -314,5 +308,223 @@ test.describe("(b) reset arrangement, through the real UI", () => {
         x: Math.round(derivedPosition.x),
         y: Math.round(derivedPosition.y),
       });
+  });
+});
+
+test.describe("(c) a contained node's own arrangement", () => {
+  let server: MilestoneServer | undefined;
+
+  test.beforeAll(async () => {
+    server = await startMilestoneServer();
+  });
+
+  test.afterAll(async () => {
+    if (server) await server.stop();
+  });
+
+  function requireContainedServer(): MilestoneServer {
+    if (!server) {
+      throw new Error(
+        "the contained-arrangement server never started (beforeAll failed)",
+      );
+    }
+    return server;
+  }
+
+  /** Flow-space size of a node, unscaled by the viewport's own transform. */
+  async function flowSize(
+    wrapper: Locator,
+  ): Promise<{ readonly width: number; readonly height: number }> {
+    return wrapper.evaluate((element) => ({
+      width: (element as HTMLElement).offsetWidth,
+      height: (element as HTMLElement).offsetHeight,
+    }));
+  }
+
+  async function createCommandInWorkstream(
+    base: string,
+    workstreamId: string,
+    name: string,
+  ): Promise<string> {
+    const definition = await apiPost<{ definition: { id: string } }>(
+      base,
+      "/api/command-definitions",
+      {
+        name,
+        instruction: "stand in for whatever this test's script does",
+        model: "e2e-fixture-model",
+        effort: "low",
+        lifecycle: "open",
+      },
+    );
+    const command = await apiPost<{ node: { id: string } }>(
+      base,
+      "/api/commands",
+      { definitionId: definition.definition.id, workstreamId },
+    );
+    return command.node.id;
+  }
+
+  test("a contained node's drag is persisted as an offset inside its container, and pushes the sibling it lands on", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    const base = requireContainedServer().baseUrl;
+
+    // Two workstreams, each with two children. The derived top-level layout
+    // puts unwired nodes in their own rows, so exactly one of the two
+    // containers can be at the origin — and the test runs against the other.
+    // That matters for the assertion this test exists to make: for a container
+    // at (0,0) a parent-relative offset and an absolute position are the same
+    // numbers, so storing absolutes would pass unnoticed.
+    const workstreams: { readonly id: string; readonly children: string[] }[] =
+      [];
+    for (const label of ["first", "second"]) {
+      const workstream = await apiPost<{ workstream: { id: string } }>(
+        base,
+        "/api/workstreams",
+        {},
+      );
+      const id = workstream.workstream.id;
+      // The derived layout stacks children in rows, so the first is above the
+      // second. The lower one is the one dragged, deliberately: the derived
+      // rows put the second child against the frame's bottom edge, where a
+      // downward push would have nowhere to go — dragging upward pushes the
+      // upper child down, into room that exists.
+      const upper = await createCommandInWorkstream(
+        base,
+        id,
+        `${label} contained push subject`,
+      );
+      const lower = await createCommandInWorkstream(
+        base,
+        id,
+        `${label} contained drag subject`,
+      );
+      workstreams.push({ id, children: [upper, lower] });
+    }
+
+    await page.goto(`${base}/`);
+    await expect(page.getByTestId("attention-header-count")).toBeVisible();
+    await zoomPastWorkstreamLevel(page);
+
+    const offOrigin: { id: string; children: string[] }[] = [];
+    for (const candidate of workstreams) {
+      const position = await flowPosition(
+        page.locator(`[data-testid="rf__node-${candidate.id}"]`),
+      );
+      if (position.x !== 0 || position.y !== 0) offOrigin.push(candidate);
+    }
+    const subject = offOrigin[0];
+    if (!subject) {
+      throw new Error(
+        "both containers derived to the origin, so a parent-relative offset would be indistinguishable from an absolute position",
+      );
+    }
+    const workstreamId = subject.id;
+    const pushedId = subject.children[0] as string;
+    const draggedId = subject.children[1] as string;
+
+    const containerWrapper = page.locator(
+      `[data-testid="rf__node-${workstreamId}"]`,
+    );
+    const draggedWrapper = page.locator(
+      `[data-testid="rf__node-${draggedId}"]`,
+    );
+    const pushedWrapper = page.locator(`[data-testid="rf__node-${pushedId}"]`);
+    const draggedCard = page.getByTestId(`canvas-node-${draggedId}`);
+    const pushedCard = page.getByTestId(`canvas-node-${pushedId}`);
+    await expect(draggedCard).toBeVisible();
+    await expect(pushedCard).toBeVisible();
+
+    const relativeOf = async (
+      wrapper: Locator,
+    ): Promise<{ readonly x: number; readonly y: number }> => {
+      const absolute = await flowPosition(wrapper);
+      const frame = await flowPosition(containerWrapper);
+      return { x: absolute.x - frame.x, y: absolute.y - frame.y };
+    };
+
+    const pushedBefore = await relativeOf(pushedWrapper);
+
+    // Land the dragged child on its sibling: inside a container the push is
+    // the same rigid-body rule as the top level (§5), and this is the half of
+    // it that used to stop at the container's edge.
+    const from = await draggedCard.boundingBox();
+    const onto = await pushedCard.boundingBox();
+    if (!from || !onto) throw new Error("a contained card had no bounding box");
+    await dragNodeBy(page, draggedCard, {
+      x: onto.x - from.x,
+      y: onto.y - from.y,
+    });
+
+    const pushedAfter = await relativeOf(pushedWrapper);
+    expect(pushedAfter).not.toEqual(pushedBefore);
+
+    // Persisted on the **server**, and as an offset inside the container
+    // rather than an absolute position — which is exactly what the canvas
+    // hands a node with `extent: "parent"`. Storing absolutes would displace
+    // every child by its container's own position on the next reload.
+    const draggedRelative = await relativeOf(draggedWrapper);
+    const storedPositions = async (): Promise<
+      ReadonlyMap<string, { readonly x: number; readonly y: number }>
+    > => {
+      const read = await apiGet<SnapshotNodesRead>(base, "/api/snapshot");
+      const stored = new Map<string, { x: number; y: number }>();
+      for (const node of read.nodes) {
+        if (node.position) stored.set(node.id, node.position);
+      }
+      return stored;
+    };
+    await expect
+      .poll(
+        async () => {
+          const stored = (await storedPositions()).get(draggedId);
+          return stored
+            ? { x: Math.round(stored.x), y: Math.round(stored.y) }
+            : null;
+        },
+        { timeout: 15_000 },
+      )
+      .toEqual({
+        x: Math.round(draggedRelative.x),
+        y: Math.round(draggedRelative.y),
+      });
+
+    // The pushed sibling's *stored* offset is inside the frame, which is what
+    // the clamp is actually about: xyflow re-clamps what it draws on every
+    // store update, so a screen box sits inside the frame with or without
+    // `clampInsideParent`. It is the persisted value — and the value the next
+    // drag frame solves against — that the clamp changes.
+    const frameSize = await flowSize(containerWrapper);
+    const pushedSize = await flowSize(pushedWrapper);
+    const storedPushed = (await storedPositions()).get(pushedId);
+    if (!storedPushed) {
+      throw new Error("the pushed sibling's position was never persisted");
+    }
+    expect(storedPushed.x).toBeGreaterThanOrEqual(0);
+    expect(storedPushed.y).toBeGreaterThanOrEqual(0);
+    expect(storedPushed.x).toBeLessThanOrEqual(
+      frameSize.width - pushedSize.width,
+    );
+    expect(storedPushed.y).toBeLessThanOrEqual(
+      frameSize.height - pushedSize.height,
+    );
+
+    // And both survive a reload with no browser storage in play: the offsets
+    // come back off the snapshot the server just answered with. Compared as
+    // offsets, because the container's own position is derived rather than
+    // authored — it returns to where structure puts it, and the children go
+    // with it.
+    await page.reload();
+    await expect(page.getByTestId("attention-header-count")).toBeVisible();
+    await zoomPastWorkstreamLevel(page);
+    await expect(draggedCard).toBeVisible();
+    const reloadedDragged = await relativeOf(draggedWrapper);
+    const reloadedPushed = await relativeOf(pushedWrapper);
+    expect(reloadedDragged.x).toBeCloseTo(draggedRelative.x, 0);
+    expect(reloadedDragged.y).toBeCloseTo(draggedRelative.y, 0);
+    expect(reloadedPushed.x).toBeCloseTo(pushedAfter.x, 0);
+    expect(reloadedPushed.y).toBeCloseTo(pushedAfter.y, 0);
   });
 });
