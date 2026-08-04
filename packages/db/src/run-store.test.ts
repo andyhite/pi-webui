@@ -979,3 +979,173 @@ describe("standing instructions in assembly (§3.8)", () => {
     );
   });
 });
+
+describe("the instruction reaches the session (§3.5, §15-1)", () => {
+  /** The workstream's opted-in house rules, so ordering can be asserted against them. */
+  function standing(body: string) {
+    const object = objects.write({
+      kind: "note",
+      title: "House rules",
+      renderings: makeRenderings({ agentContent: body }),
+    });
+    const store = new StandingInstructionStore(state, clock.now);
+    const declared = store.declare({
+      objectId: object.objectId,
+      by: humanAuthor,
+    });
+    if (!declared.ok) throw new Error(declared.refusal.message);
+    store.optIn({
+      workstreamId,
+      instructionId: declared.value.id,
+      by: humanAuthor,
+    });
+  }
+
+  it("is in the bytes the runtime is handed, not only in the record", () => {
+    const command = wired(["the ticket"]);
+
+    const { run } = runs.start({ commandId: command.command.id });
+    const content = runs.assembledContent(run.id);
+
+    // The assertion that did not exist: `configuration.instruction` proves it
+    // was recorded, and a run whose prompt is a pile of context with no task in
+    // it passes that check every time.
+    expect(content).toContain("Implement it and open a pull request.");
+    expect(
+      content.indexOf("Implement it and open a pull request."),
+    ).toBeLessThan(content.indexOf("the ticket"));
+  });
+
+  it("frames the workstream's standing instructions rather than following them", () => {
+    standing("This repository uses pnpm, never npm.");
+    const command = wired(["the ticket"]);
+
+    const content = runs.assembledContent(
+      runs.start({ commandId: command.command.id }).run.id,
+    );
+
+    // Present before ordered: a missing string indexes at -1, which precedes
+    // everything and would let this pass while nothing was delivered at all.
+    expect(content).toContain("Implement it and open a pull request.");
+    expect(content.indexOf("Implement it")).toBeLessThan(
+      content.indexOf("pnpm"),
+    );
+    expect(content.indexOf("pnpm")).toBeLessThan(content.indexOf("the ticket"));
+  });
+
+  it("delivers the confirmed parameter values, so a parameterised command is one at run time", () => {
+    const definition = define({
+      instruction: "Review the diff and report against the standard.",
+      parameters: [
+        { name: "repo", label: "Repository", type: "text", required: true },
+        { name: "strict", label: "strict", type: "boolean", required: true },
+      ],
+    });
+    const command = wired(["the diff"], definition.id);
+    // Bound in the reverse of the declaration order, so an implementation that
+    // walked the resolved values instead of the declarations would put `strict`
+    // first and the ordering assertion below would catch it.
+    commands.proposeDefault(
+      command.command.id,
+      "strict",
+      true,
+      "the definition's default",
+    );
+    commands.confirmDefault(command.command.id, "strict");
+    commands.proposeDefault(
+      command.command.id,
+      "repo",
+      "plotroom",
+      "the workstream subject",
+    );
+    commands.confirmDefault(command.command.id, "repo");
+
+    const { run } = runs.start({ commandId: command.command.id });
+    const content = runs.assembledContent(run.id);
+
+    expect(content).toContain("- **repo** (Repository): plotroom");
+    expect(content).toContain("- **strict**: true");
+    // Declaration order, not binding order: `strict` was confirmed first above,
+    // and two runs of one definition must still assemble alike (§3.7).
+    expect(content.indexOf("**repo**")).toBeLessThan(
+      content.indexOf("**strict**"),
+    );
+    expect(runs.configuration(run.id).parameters).toEqual({
+      repo: "plotroom",
+      strict: true,
+    });
+  });
+
+  it("delivers no value while a parameter is still a proposal", () => {
+    const definition = define({
+      instruction: "Review the diff.",
+      parameters: [
+        { name: "repo", label: "Repository", type: "text", required: true },
+      ],
+    });
+    const command = wired(["the diff"], definition.id);
+    commands.proposeDefault(
+      command.command.id,
+      "repo",
+      "plotroom",
+      "the workstream subject",
+    );
+
+    const plan = runs.plan(command.command.id);
+
+    // §3.5: a derived default is a proposal. The preview shows the instruction
+    // it would run, and the value nobody confirmed appears nowhere in it.
+    expect(plan.body).toContain("Review the diff.");
+    expect(plan.body).not.toContain("plotroom");
+    expect(plan.blockers.map((each) => each.reason)).toContain(
+      "parameters_unconfirmed",
+    );
+  });
+
+  it("delivers the instruction as it read at run time, not as it reads now", () => {
+    const definition = define();
+    const command = wired(["the ticket"], definition.id);
+    const { run } = runs.start({ commandId: command.command.id });
+
+    commands.edit(definition.id, { instruction: "Completely different now." });
+
+    expect(runs.assembledContent(run.id)).toContain(
+      "Implement it and open a pull request.",
+    );
+    expect(runs.assembledContent(run.id)).not.toContain(
+      "Completely different now.",
+    );
+  });
+
+  it("counts toward the content budget, because it is content that is sent (§3.5)", () => {
+    const command = wired(
+      ["the ticket"],
+      define({
+        instruction: "x".repeat(40_000),
+        budget: {
+          modelWindowTokens: 200_000,
+          warnAtFraction: 0.85,
+          hardCapTokens: 100,
+        },
+      }).id,
+    );
+
+    const plan = runs.plan(command.command.id);
+
+    expect(plan.budget.state).toBe("refused");
+    expect(plan.blockers.map((each) => each.reason)).toContain(
+      "content_budget",
+    );
+  });
+
+  it("is not a run input: it has no object and no version to be one", () => {
+    const command = wired(["the ticket"]);
+
+    const { run } = runs.start({ commandId: command.command.id });
+
+    // §15-1's two halves stay distinct: the instruction is in the assembled
+    // bytes, and `run_inputs` still records only content that had a version.
+    expect(run.inputs).toHaveLength(1);
+    expect(run.inputs[0]?.nodeId).not.toBeNull();
+  });
+});

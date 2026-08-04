@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   aggregateRunOutcomes,
+  assembleRunBody,
   checkContentBudget,
   checkSubmission,
   effectiveAskPoints,
@@ -13,17 +14,20 @@ import {
   DEFAULT_RUN_RETENTION_POLICY,
   ZERO_COST,
   type AssembledInput,
+  type AssembledParameter,
   type BudgetCheck,
   type Clock,
   type CostEstimate,
   type CommandDefinitionId,
   type CommandId,
+  type CommandParameter,
   type ComparableRun,
   type CompletionProof,
   type ConditionEvaluation,
   type NodeId,
   type ObjectId,
   type OutputAddress,
+  type ParameterValue,
   type PriorRunCost,
   type Run,
   type RunConfiguration,
@@ -264,9 +268,17 @@ export class RunStore {
     const assembled = this.assemble(node.id, node.workstreamId);
     blockers.push(...assembled.blockers);
 
-    const body = assembled.parts
-      .map((part) => `## ${part.title}\n\n${part.content}`)
-      .join("\n\n");
+    // The instruction and its confirmed parameters are part of the assembled
+    // bytes, not only of `config_json`: §15-1 records what ran, and a recorded
+    // assembly that omits the run's own marching orders is not that record.
+    // Where they sit in it is `assembleRunBody`'s rule and not this method's.
+    const body = assembleRunBody({
+      instruction: definition.instruction,
+      parameters: parameters.ready
+        ? assembledParameters(definition.parameters, parameters.values)
+        : [],
+      inputs: assembled.parts,
+    });
 
     const estimatedTokens = estimateTokens(body);
     const budget = checkContentBudget(estimatedTokens, definition.budget);
@@ -1048,9 +1060,12 @@ export class RunStore {
    * Assemble the ordered inputs (§3.5). A placeholder nothing has produced yet
    * blocks the run and says which one, rather than being quietly skipped.
    *
-   * The workstream's **standing instructions come first** (§3.8), because they are
-   * the frame the rest is read in — "this repository uses pnpm, never npm" is not
-   * one input among the ticket and the diff. Which ones, and in what order, is
+   * The workstream's **standing instructions come first among the inputs** (§3.8),
+   * because they are the frame the rest of the inputs are read in — "this
+   * repository uses pnpm, never npm" is not one input among the ticket and the
+   * diff. They do not lead the assembled body: `assembleRunBody` puts the
+   * definition's own instruction ahead of everything here, and that is the one
+   * place either ordering is decided. Which standing ones, and in what order, is
    * `resolveStandingInstructions`'s answer and never this method's: two runs of one
    * command with the same opt-ins have to assemble identically, or the comparison
    * §3.7 promises would report a change nobody made.
@@ -1297,6 +1312,34 @@ export class RunStore {
       endedAt: row.endedAt,
     };
   }
+}
+
+/**
+ * The confirmed values in the definition's own declaration order, so two runs of
+ * one definition with the same values assemble byte for byte identically — the
+ * comparison §3.7 promises reports a change nobody made otherwise.
+ *
+ * An optional parameter nobody bound contributes nothing rather than an empty
+ * line: `resolveParameters` already decided it is absent, and a second opinion
+ * about that here would be the reimplementation principle 8 forbids.
+ */
+function assembledParameters(
+  declared: readonly CommandParameter[],
+  values: Readonly<Record<string, ParameterValue>>,
+): readonly AssembledParameter[] {
+  const assembled: AssembledParameter[] = [];
+
+  for (const parameter of declared) {
+    const value = values[parameter.name];
+    if (value === undefined) continue;
+    assembled.push({
+      name: parameter.name,
+      label: parameter.label,
+      value,
+    });
+  }
+
+  return assembled;
 }
 
 /** Re-exported beside the store that mirrors it, as ObjectStore does. */

@@ -230,6 +230,13 @@ interface DefineOptions {
     readonly hardCapTokens: number | null;
   };
   readonly lifecycle?: "producing" | "open";
+  readonly instruction?: string;
+  readonly parameters?: readonly {
+    readonly name: string;
+    readonly label: string;
+    readonly type: "text" | "number" | "boolean";
+    readonly required: boolean;
+  }[];
   readonly notes?: readonly { readonly title: string; readonly body: string }[];
 }
 
@@ -248,7 +255,7 @@ async function command(
     method: "POST",
     body: {
       name: "Implement the ticket",
-      instruction: "Implement it.",
+      instruction: options.instruction ?? "Implement it.",
       model: "fixture-model",
       effort: "medium",
       lifecycle,
@@ -261,6 +268,7 @@ async function command(
             },
           }
         : {}),
+      ...(options.parameters ? { parameters: options.parameters } : {}),
       ...(options.budget ? { budget: options.budget } : {}),
     },
   });
@@ -739,6 +747,39 @@ describe("assembly and run history (§3.5, §15-1, §15-4)", () => {
     }
     expect(at(read, "configuration.instruction")).toBe("Implement it.");
     expect(at(read, "configuration.model.model")).toBe("fixture-model");
+  });
+
+  it("hands the runtime the instruction and its parameters, not context alone (§3.5)", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness, {
+      lifecycle: "open",
+      instruction: "Reproduce the bug, fix it, and open a pull request.",
+      parameters: [
+        { name: "repo", label: "Repository", type: "text", required: true },
+      ],
+      notes: [{ title: "OXY-1", body: "The login button does nothing." }],
+    });
+    await harness.ok(`/commands/${fixture.commandId}/parameters/repo/confirm`, {
+      method: "POST",
+      body: { value: "plotroom" },
+    });
+
+    const started = await run(harness, fixture.commandId, oneTurn);
+    const content = str(
+      await harness.ok(`/runs/${str(started, "run.id")}/assembled`),
+      "content",
+    );
+
+    // The bytes handed to the adapter are this blob and nothing beside it
+    // (`RunService.start` passes it as `config.prompt`), so a run's opening
+    // prompt containing no task is a run that never received its orders.
+    expect(content).toContain(
+      "Reproduce the bug, fix it, and open a pull request.",
+    );
+    expect(content).toContain("- **repo** (Repository): plotroom");
+    expect(content.indexOf("Reproduce the bug")).toBeLessThan(
+      content.indexOf("The login button does nothing."),
+    );
   });
 
   it("warns as assembly approaches the model's window, and still runs", async () => {

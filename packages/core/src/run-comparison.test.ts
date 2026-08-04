@@ -171,6 +171,31 @@ describe("compareRuns (§4.4)", () => {
     );
   });
 
+  it("does not report an instruction change as '0 of 1 inputs differ' (§4.4)", () => {
+    const result = compareRuns(
+      comparable(),
+      comparable({
+        id: "run_2" as RunId,
+        ordinal: 2,
+        // Edit the instruction, run it again, compare: the inputs are untouched
+        // and the assembled bytes are not, because the instruction is in them.
+        assembledHash: "assembled-2",
+        configuration: configuration({ instruction: "Do it differently." }),
+      }),
+    );
+
+    expect(result.comparable).toBe(true);
+    if (!result.comparable) return;
+    expect(result.comparison.sameAssembledContent).toBe(false);
+    expect(result.comparison.summary).toContain(
+      "the same inputs, but the assembled content differs",
+    );
+    expect(result.comparison.summary).not.toContain("0 of 1 inputs differ");
+    expect(result.comparison.summary).toContain(
+      "configuration differs in instruction",
+    );
+  });
+
   it("reports which model and configuration differed, and what it cost", () => {
     const result = compareRuns(
       comparable(),

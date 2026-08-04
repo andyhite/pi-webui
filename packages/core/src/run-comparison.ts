@@ -325,9 +325,17 @@ function summarize(input: {
   const changedInputs = input.inputs.filter((one) => one.change !== "same");
   const parts = [
     `run ${input.left.ordinal} (${input.left.status}) vs run ${input.right.ordinal} (${input.right.status})`,
+    // Three cases, not two. The assembled bytes carry the definition's
+    // instruction and its parameter values as well as the inputs
+    // (`assembleRunBody`), so two runs can differ in what was sent while every
+    // input is identical — which is §4.4's headline gesture: adjust the
+    // instruction, run it again, compare. Reported as "0 of 1 inputs differ",
+    // that reads as a comparison that found nothing.
     input.sameAssembledContent
       ? "the same assembled content, byte for byte"
-      : `${changedInputs.length} of ${input.inputs.length} inputs differ`,
+      : changedInputs.length === 0
+        ? "the same inputs, but the assembled content differs"
+        : `${changedInputs.length} of ${input.inputs.length} inputs differ`,
   ];
   if (input.configuration.length > 0) {
     parts.push(

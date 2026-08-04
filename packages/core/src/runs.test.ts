@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assembleRunBody,
   estimateRunCost,
   formatMicros,
   isRunCompactable,
@@ -142,5 +143,109 @@ describe("cost estimates state their basis and render as ranges (§4.1)", () => 
   it("formats money from integer micros, once, for every surface", () => {
     expect(formatMicros(1_500_000)).toBe("$1.50");
     expect(formatMicros(2_500)).toBe("$0.0025");
+  });
+});
+
+describe("assembling what the runtime is handed (§3.5, §15-1)", () => {
+  const inputs = [
+    { title: "House rules", content: "This repository uses pnpm, never npm." },
+    { title: "OXY-1", content: "The login button does nothing." },
+  ];
+
+  it("puts the instruction in the bytes, ahead of every input", () => {
+    const body = assembleRunBody({
+      instruction: "Fix the ticket and open a pull request.",
+      inputs,
+    });
+
+    expect(body).toContain("Fix the ticket and open a pull request.");
+    expect(body.indexOf("Fix the ticket")).toBeLessThan(body.indexOf("pnpm"));
+    expect(body.indexOf("pnpm")).toBeLessThan(body.indexOf("login button"));
+  });
+
+  it("keeps the instruction one heading level above the inputs", () => {
+    const body = assembleRunBody({ instruction: "Do it.", inputs });
+
+    expect(body.startsWith("# Instruction\n\nDo it.")).toBe(true);
+    expect(body).toContain("## OXY-1\n\nThe login button does nothing.");
+  });
+
+  it("delivers confirmed parameter values with the instruction", () => {
+    const body = assembleRunBody({
+      instruction: "Review the diff in $repo.",
+      parameters: [
+        { name: "repo", label: "Repository", value: "plotroom" },
+        { name: "strict", label: "strict", value: true },
+        { name: "depth", label: "Commits", value: 20 },
+      ],
+      inputs,
+    });
+
+    expect(body).toContain("- **repo** (Repository): plotroom");
+    // A label that only repeats the name says nothing worth a parenthesis.
+    expect(body).toContain("- **strict**: true");
+    expect(body).toContain("- **depth** (Commits): 20");
+    expect(body.indexOf("plotroom")).toBeLessThan(body.indexOf("pnpm"));
+  });
+
+  it("renders parameters in the order given rather than sorting them", () => {
+    const body = assembleRunBody({
+      instruction: "Go.",
+      parameters: [
+        { name: "repo", label: "Repository", value: "plotroom" },
+        { name: "depth", label: "Commits", value: 20 },
+      ],
+      inputs,
+    });
+
+    // Alphabetical would put `depth` first. The caller's order is the answer,
+    // because that is what makes two runs of one definition assemble alike.
+    expect(body.indexOf("**repo**")).toBeGreaterThan(-1);
+    expect(body.indexOf("**repo**")).toBeLessThan(body.indexOf("**depth**"));
+  });
+
+  it("keeps a multi-line value one parameter instead of several", () => {
+    const body = assembleRunBody({
+      instruction: "Go.",
+      parameters: [
+        {
+          name: "standard",
+          label: "Review standard",
+          value: "- no bare catch\n## not a heading",
+        },
+      ],
+      inputs: [],
+    });
+
+    // Interpolated after the colon, that value would read as two more list
+    // items and a heading beside the inputs' own `##` sections.
+    expect(body).toBe(
+      "# Instruction\n\nGo.\n\nParameters:\n\n- **standard** (Review standard):\n  - no bare catch\n  ## not a heading",
+    );
+  });
+
+  it("writes no empty heading for a definition with nothing to say", () => {
+    const body = assembleRunBody({ instruction: "   ", inputs });
+
+    expect(body).not.toContain("# Instruction");
+    expect(body.startsWith("## House rules")).toBe(true);
+  });
+
+  it("still frames parameters when the instruction itself is empty", () => {
+    const body = assembleRunBody({
+      instruction: "",
+      parameters: [{ name: "repo", label: "Repository", value: "plotroom" }],
+      inputs: [],
+    });
+
+    expect(body).toBe(
+      "# Instruction\n\nParameters:\n\n- **repo** (Repository): plotroom",
+    );
+  });
+
+  it("assembles an instruction with no inputs at all", () => {
+    expect(assembleRunBody({ instruction: "Just go.", inputs: [] })).toBe(
+      "# Instruction\n\nJust go.",
+    );
   });
 });

@@ -126,6 +126,110 @@ export interface Run {
   readonly endedAt: number | null;
 }
 
+/* ---------------------------------------------------------------- assembly */
+
+/** One assembled section, with the title and content the agent is given (§3.5). */
+export interface AssembledSection {
+  readonly title: string;
+  readonly content: string;
+}
+
+/** One confirmed parameter value, as the run delivers it (§3.5). */
+export interface AssembledParameter {
+  readonly name: string;
+  /** The definition's own wording for it, shown when it says more than the name. */
+  readonly label: string;
+  readonly value: ParameterValue;
+}
+
+/**
+ * The bytes a run hands the runtime, assembled in one place (§15-1).
+ *
+ * The definition's **instruction comes first** — ahead of the workstream's
+ * standing instructions and ahead of every wired input — because it is not one
+ * input among the ticket and the diff: it is the frame the whole assembly
+ * serves. Everything after it is material the task is carried out against,
+ * which is the same argument §3.8 makes for standing instructions preceding the
+ * wired inputs, one level further in.
+ *
+ * Confirmed parameter values travel with it because they are part of the same
+ * sentence: a definition that says "review the diff against the standard" and
+ * delivers no `standard` has delivered a different instruction. A proposal never
+ * reaches here — `resolveParameters` is what refuses that (§3.5).
+ *
+ * This is the one description of what a run's assembled content is. The preview
+ * shows it, `RunStore.start` records it, and the runtime is handed it, so none of
+ * the three can disagree about what ran (§4.1).
+ */
+export function assembleRunBody(input: {
+  readonly instruction: string;
+  readonly parameters?: readonly AssembledParameter[];
+  readonly inputs: readonly AssembledSection[];
+}): string {
+  const sections: string[] = [];
+
+  const frame = instructionSection(input.instruction, input.parameters ?? []);
+  if (frame !== null) sections.push(frame);
+
+  for (const part of input.inputs) {
+    sections.push(`## ${part.title}\n\n${part.content}`);
+  }
+
+  return sections.join("\n\n");
+}
+
+/**
+ * `# Instruction` at one level above the inputs' `##`, so the frame is
+ * structurally what it is rather than a section the agent may read as the first
+ * of several.
+ *
+ * An empty instruction is representable — the column is only NOT NULL — and an
+ * empty heading records it worse than no heading does: nothing is being dropped,
+ * there was nothing there (principle 12 is about silent truncation, not about
+ * inventing a section for absent content).
+ */
+function instructionSection(
+  instruction: string,
+  parameters: readonly AssembledParameter[],
+): string | null {
+  const trimmed = instruction.trim();
+  if (trimmed === "" && parameters.length === 0) return null;
+
+  const blocks = ["# Instruction"];
+  if (trimmed !== "") blocks.push(trimmed);
+
+  if (parameters.length > 0) {
+    blocks.push(`Parameters:\n\n${parameters.map(parameterLine).join("\n")}`);
+  }
+
+  return blocks.join("\n\n");
+}
+
+/**
+ * One parameter as one list item — including when its value is not one line.
+ *
+ * Nothing constrains a `text` value to a single line, and interpolating a
+ * multi-line one straight after the colon would turn one parameter into several
+ * list items, or into a heading sibling to the wired inputs' `##` sections. The
+ * continuation is indented instead, which keeps the list structurally what it
+ * says it is without editing the value the operator confirmed.
+ */
+function parameterLine(parameter: AssembledParameter): string {
+  const named =
+    parameter.label === "" || parameter.label === parameter.name
+      ? `**${parameter.name}**`
+      : `**${parameter.name}** (${parameter.label})`;
+  const value = String(parameter.value);
+
+  if (!value.includes("\n")) return `- ${named}: ${value}`;
+
+  const indented = value
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+  return `- ${named}:\n${indented}`;
+}
+
 /* --------------------------------------------------------- cost estimation */
 
 /**
