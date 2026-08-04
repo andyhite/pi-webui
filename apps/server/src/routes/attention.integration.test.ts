@@ -139,6 +139,27 @@ describe("the queue (§7.1)", () => {
     expect(after.some((item) => at(item, "feed") === "question")).toBe(false);
   });
 
+  it("stops carrying a deleted session's question, and carries it again once restored (#77)", async () => {
+    const harness = await boot(repository());
+    const { sessionId, questionId } = await askingSession(harness);
+    await itemOfFeed(harness, "question");
+
+    // The delete takes the session's node off the board with the record, so a row
+    // still naming it would point the operator at a card that is not there.
+    await harness.ok(`/sessions/${sessionId}`, { method: "DELETE" });
+
+    const hidden = await items(harness);
+    expect(hidden.map((item) => at(item, "id"))).not.toContain(
+      `question:${questionId}`,
+    );
+
+    // Hidden, not withdrawn: the question is still an answerable fact, and the
+    // session's own restore is all it takes to have it asked again (principle 10).
+    await harness.ok(`/sessions/${sessionId}/restore`, { method: "POST" });
+    const back = await itemOfFeed(harness, "question");
+    expect(at(back, "id")).toBe(`question:${questionId}`);
+  });
+
   it("keeps every id stable across a re-read, so nothing looks new twice", async () => {
     const harness = await boot(repository());
     await askingSession(harness);

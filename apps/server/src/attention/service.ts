@@ -3,6 +3,8 @@ import {
   DEFAULT_HEALTH_THRESHOLDS,
   deriveAttention,
   deriveHealthAlerts,
+  type Approval,
+  type ApprovalAttention,
   type AttentionItem,
   type AttentionSources,
   type AttentionTarget,
@@ -21,6 +23,7 @@ import {
   type PendingAsk,
   type SessionBroadcastCategory,
   type SessionId,
+  type SessionQuestion,
   type TriageLedger,
   type TriageVerb,
   type VersionId,
@@ -126,6 +129,16 @@ const TRIGGERING_ENTITIES: ReadonlySet<EventEntity> = new Set<EventEntity>([
    */
   "integration",
 ]);
+
+/**
+ * An approval row the queue may speak about, paired with the sentence §7.1 shows.
+ * Named because two readers below return it and one of them must never reach
+ * `pendingAsks`.
+ */
+interface VisibleApproval {
+  readonly approval: Approval;
+  readonly attention: ApprovalAttention;
+}
 
 export class AttentionService {
   readonly #config: AttentionConfig;
@@ -299,7 +312,7 @@ export class AttentionService {
   }
 
   private questionSources(): AttentionSources["questions"] {
-    return this.deps.stores.questions.unanswered().map((question) => ({
+    return this.askingQuestions().map((question) => ({
       question,
       target: this.sessionTarget(question.sessionId),
     }));
@@ -307,18 +320,75 @@ export class AttentionService {
 
   /**
    * Both approval facts (§7.1): what is still asking, and what the operator
-   * answered whose effect then failed. Two calls rather than one, because
-   * `pendingAsks` below reads the first list as "nobody has answered this yet" and
-   * an answered row in it becomes a health alert saying something false.
+   * answered whose effect then failed. Two readers rather than one, because
+   * `pendingAsks` may only see the first — it reads its list as "nobody has
+   * answered this yet", and an answered row in there becomes a health alert
+   * saying something false.
    */
   private approvalSources(): AttentionSources["approvals"] {
-    return [
-      ...this.deps.approvals.attention(),
-      ...this.deps.approvals.effectFailureAttention(),
-    ].map((row) => ({
-      attention: row.attention,
-      target: this.sessionTarget(row.approval.sessionId),
-    }));
+    return [...this.askingApprovals(), ...this.failedEffectApprovals()].map(
+      (row) => ({
+        attention: row.attention,
+        target: this.sessionTarget(row.approval.sessionId),
+      }),
+    );
+  }
+
+  /**
+   * The sessions that are off the board: deleted, so the node every item about one
+   * targets went with it (§3.6, principle 10).
+   *
+   * **Hidden at the source, and hidden rather than withdrawn.** A deleted session
+   * used to keep its §7.1 rows, pointing the operator at a node that no longer
+   * exists — and the fix belongs here rather than in whatever renders the queue,
+   * because hiding is the source's job and no surface holds a ledger of its own.
+   * Nothing is withdrawn: a question and an approval are still answerable facts, a
+   * deleted session is restorable, and a restore brings its rows back into the
+   * queue with nothing having to undo a withdrawal. `session` is already a
+   * triggering entity, so this takes effect when the deletion is announced rather
+   * than at the slow tick.
+   *
+   * An **ended** session keeps its rows on purpose: it is still on the board, and
+   * an unanswered question about work that stopped is exactly the kind of thing
+   * §7.1 exists to surface.
+   */
+  private offTheBoard(): ReadonlySet<string> {
+    const hidden = new Set<string>();
+    for (const stored of this.deps.stores.sessions.deleted()) {
+      hidden.add(stored.session.id);
+    }
+    return hidden;
+  }
+
+  /**
+   * The unanswered questions the queue may speak about (§6.4, §7.1) — read here
+   * rather than at each use, so the §7.1 row and the §7.2 `unanswered` alert cannot
+   * disagree about which ones exist.
+   */
+  private askingQuestions(): readonly SessionQuestion[] {
+    const hidden = this.offTheBoard();
+    return this.deps.stores.questions
+      .unanswered()
+      .filter((question) => !hidden.has(question.sessionId));
+  }
+
+  /** The approvals still asking that the queue may speak about (§7.1). */
+  private askingApprovals(): readonly VisibleApproval[] {
+    const hidden = this.offTheBoard();
+    return this.deps.approvals
+      .attention()
+      .filter((row) => !hidden.has(row.approval.sessionId));
+  }
+
+  /**
+   * The approvals the operator answered whose effect then failed (§7.1) — a row
+   * that reports rather than asks, which is why it is never in `pendingAsks`.
+   */
+  private failedEffectApprovals(): readonly VisibleApproval[] {
+    const hidden = this.offTheBoard();
+    return this.deps.approvals
+      .effectFailureAttention()
+      .filter((row) => !hidden.has(row.approval.sessionId));
   }
 
   private driftSources(
@@ -521,10 +591,19 @@ export class AttentionService {
     return waits.sort((a, b) => a.since - b.since)[0] ?? null;
   }
 
+  /**
+   * What nobody has answered yet, for §7.2's `unanswered` alert. The same two
+   * readers §7.1's rows come from, so an alert cannot claim nobody answered
+   * something the queue is no longer showing.
+   *
+   * `askingApprovals` includes the effect-failure rows, which ask for nothing —
+   * harmless here, because an alert about one is timed from its raise and the row
+   * itself is a row §7.1 tells the operator rather than asks them.
+   */
   private pendingAsks(): readonly PendingAsk[] {
     const asks: PendingAsk[] = [];
 
-    for (const question of this.deps.stores.questions.unanswered()) {
+    for (const question of this.askingQuestions()) {
       asks.push({
         kind: "question",
         id: question.id,

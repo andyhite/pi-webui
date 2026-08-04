@@ -386,3 +386,128 @@ describe("integration broken (§9.3, Epic 7.2)", () => {
     );
   });
 });
+
+/**
+ * A deleted session's §7.1 rows (issue #77).
+ *
+ * AGENTS.md: "hiding is the source's job — a muted item never leaves the server
+ * again … and no surface holds a ledger of its own." A deleted session's node went
+ * off the board with it, so a row still pointing at that node asks the operator to
+ * answer something on a card that is not there.
+ */
+describe("a deleted session's questions and approvals leave the queue", () => {
+  function ask(sessionId: string, id: string): void {
+    stores.questions.raise({
+      id,
+      sessionId: sessionId as SessionId,
+      requestId: null,
+      text: "keep going?",
+      options: [{ id: "yes", label: "yes", detail: null }],
+      freeForm: "none",
+      attention: null,
+      askedAt: clock.now(),
+      answer: null,
+    });
+  }
+
+  it("hides the question, and the health alert that timed it", () => {
+    const sessionId = startSession();
+    ask(sessionId, "q-deleted");
+    clock.advance(120);
+
+    expect(attention.items().map((item) => item.id)).toContain(
+      "question:q-deleted",
+    );
+
+    stores.sessions.end(sessionId, {
+      kind: "stopped",
+      by: "user",
+      at: clock.now(),
+    });
+    stores.sessions.delete(sessionId);
+
+    const ids = attention.items().map((item) => item.id);
+    expect(ids).not.toContain("question:q-deleted");
+    // The §7.2 alert reads the same list, so it cannot outlive the row it timed.
+    expect(ids).not.toContain("health:unanswered:question:q-deleted");
+  });
+
+  it("hides an approval that is still asking, and one whose effect failed", async () => {
+    const sessionId = startSession();
+    const asking = approvals.raise({
+      sessionId,
+      ask: destructionAsk({
+        toolName: "object_delete",
+        target: { kind: "object", id: "obj-1" },
+      }),
+    });
+    const failing = approvals.raise({
+      sessionId,
+      ask: destructionAsk({
+        toolName: "session_delete",
+        target: { kind: "session", id: sessionId },
+      }),
+    });
+    // This fixture's stop refuses, so approving records a failed effect — §7.1's
+    // other approval row, and it points at the same node.
+    await approvals.answer({
+      approvalId: failing.id,
+      decision: "approve-once",
+      actor: humanAuthor,
+    });
+
+    const before = attention.items().map((item) => item.id);
+    expect(before).toContain(`approval:${asking.id}`);
+    expect(before).toContain(`approval:${failing.id}:effect-failed`);
+
+    stores.sessions.end(sessionId, {
+      kind: "stopped",
+      by: "user",
+      at: clock.now(),
+    });
+    stores.sessions.delete(sessionId);
+
+    const after = attention.items().map((item) => item.id);
+    expect(after).not.toContain(`approval:${asking.id}`);
+    expect(after).not.toContain(`approval:${failing.id}:effect-failed`);
+  });
+
+  it("brings them back when the session is restored, having withdrawn nothing", () => {
+    const sessionId = startSession();
+    ask(sessionId, "q-restored");
+    const raised = approvals.raise({
+      sessionId,
+      ask: destructionAsk({
+        toolName: "object_delete",
+        target: { kind: "object", id: "obj-1" },
+      }),
+    });
+
+    stores.sessions.end(sessionId, {
+      kind: "stopped",
+      by: "user",
+      at: clock.now(),
+    });
+    stores.sessions.delete(sessionId);
+    expect(attention.items()).toHaveLength(0);
+
+    // Hidden, never withdrawn: the question and the approval are still answerable
+    // facts, and a deleted session is restorable (§3.6, principle 10) — so a
+    // restore is all it takes, with nothing having to undo anything.
+    stores.sessions.restore(sessionId);
+    const ids = attention.items().map((item) => item.id);
+    expect(ids).toContain("question:q-restored");
+    expect(ids).toContain(`approval:${raised.id}`);
+  });
+
+  it("keeps an ended session's rows, which is a different fact", () => {
+    const sessionId = startSession();
+    ask(sessionId, "q-ended");
+    stores.sessions.end(sessionId, { kind: "completed", at: clock.now() });
+
+    // Still on the board, so still asking: §7.1 exists to surface exactly this.
+    expect(attention.items().map((item) => item.id)).toContain(
+      "question:q-ended",
+    );
+  });
+});
