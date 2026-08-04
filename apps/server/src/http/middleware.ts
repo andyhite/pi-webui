@@ -27,9 +27,21 @@ export function originCheckMiddleware(
   };
 }
 
-/** Operator credential enforcement (spec §12), header or query param. */
+export interface CredentialPolicy {
+  readonly credential: string | null;
+}
+
+/**
+ * Operator credential enforcement (spec §12), header or query param.
+ *
+ * Takes the policy object rather than the credential string itself, and
+ * reads `.credential` fresh on every request: a settings write (§11,
+ * Epic 8.3) that changes it is live from the very next request, with no
+ * restart, because there is no primitive value captured in this closure to
+ * go stale.
+ */
 export function credentialMiddleware(
-  configuredCredential: string | null,
+  policy: CredentialPolicy,
 ): MiddlewareHandler {
   return async (c: Context, next: Next) => {
     const result = checkCredential(
@@ -37,7 +49,7 @@ export function credentialMiddleware(
         authorizationHeader: c.req.header("authorization"),
         credentialQueryParam: c.req.query("credential"),
       },
-      configuredCredential,
+      policy.credential,
     );
     if (!result.allowed) {
       throw unauthorized(result.reason);
@@ -48,10 +60,12 @@ export function credentialMiddleware(
 
 /** Structured request logging (spec §8): one line per request, level-aware. */
 export function requestLogMiddleware(logger: Logger): MiddlewareHandler {
+  // Tagged so the Logs panel can filter to just HTTP traffic (Epic 8.3).
+  const http = logger.child("http");
   return async (c: Context, next: Next) => {
     const start = Date.now();
     await next();
-    logger.info("request", {
+    http.info("request", {
       method: c.req.method,
       path: new URL(c.req.url).pathname,
       status: c.res.status,

@@ -10,7 +10,8 @@
 export const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
-const LEVEL_RANK: Record<LogLevel, number> = {
+/** Exported so the ring buffer (Epic 8.3) can filter "at least this level" the same way. */
+export const LEVEL_RANK: Record<LogLevel, number> = {
   debug: 0,
   info: 1,
   warn: 2,
@@ -100,4 +101,27 @@ export class Logger {
   error(msg: string, fields?: LogFields): void {
     this.#log("error", msg, fields);
   }
+
+  /**
+   * A logger that tags every line with `component` (Epic 8.3's log query
+   * filter). Not a second `Logger` instance — there is exactly one level to
+   * adjust at runtime, and a child with its own `#level` would be a second
+   * one nothing keeps in sync — just this same logger's own methods with one
+   * field pre-filled, exactly like every call site already passes fields.
+   */
+  child(component: string): ComponentLogger {
+    return {
+      debug: (msg, fields) => this.debug(msg, { component, ...fields }),
+      info: (msg, fields) => this.info(msg, { component, ...fields }),
+      warn: (msg, fields) => this.warn(msg, { component, ...fields }),
+      error: (msg, fields) => this.error(msg, { component, ...fields }),
+    };
+  }
+}
+
+export interface ComponentLogger {
+  debug(msg: string, fields?: LogFields): void;
+  info(msg: string, fields?: LogFields): void;
+  warn(msg: string, fields?: LogFields): void;
+  error(msg: string, fields?: LogFields): void;
 }

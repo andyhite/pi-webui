@@ -118,7 +118,26 @@ export class RunQueueService {
   /** A drain requested while one was in flight; see {@link drain}. */
   #drainAgain = false;
 
-  constructor(private readonly deps: RunQueueDeps) {}
+  /**
+   * A mutable copy of `deps.concurrencyLimit`, so a settings write can change
+   * it without a restart (§11, Epic 8.3) — `deps` itself stays exactly what
+   * every other field on it always was: read once, at construction.
+   */
+  #concurrencyLimit: number;
+
+  constructor(private readonly deps: RunQueueDeps) {
+    this.#concurrencyLimit = deps.concurrencyLimit;
+  }
+
+  /** Epic 8.3's live setting: applies to the next admission decision, not retroactively. */
+  setConcurrencyLimit(limit: number): void {
+    this.#concurrencyLimit = limit;
+  }
+
+  /** The limit currently in force — the fleet read's own source (§8, §11). */
+  get concurrencyLimit(): number {
+    return this.#concurrencyLimit;
+  }
 
   /* --------------------------------------------------------------- previews */
 
@@ -171,7 +190,7 @@ export class RunQueueService {
     const running = this.runningCount();
     const startsNow = Math.max(
       0,
-      Math.min(commands.length, this.deps.concurrencyLimit - running),
+      Math.min(commands.length, this.#concurrencyLimit - running),
     );
 
     return {
@@ -181,7 +200,7 @@ export class RunQueueService {
       estimate: aggregateEstimate(commands.map((entry) => entry.preview)),
       blocked,
       concurrency: {
-        limit: this.deps.concurrencyLimit,
+        limit: this.#concurrencyLimit,
         running,
         startsNow,
         queues: commands.length - startsNow,
@@ -348,7 +367,7 @@ export class RunQueueService {
 
     if (
       stores.runs.initiation(input.initiationKey) !== undefined ||
-      this.runningCount() < this.deps.concurrencyLimit
+      this.runningCount() < this.#concurrencyLimit
     ) {
       return {
         admitted: true,
@@ -390,7 +409,7 @@ export class RunQueueService {
       ...(input.spendCapMicros === undefined
         ? {}
         : { spendCapMicros: input.spendCapMicros }),
-      detail: `waiting for a session slot: ${this.deps.concurrencyLimit} of ${this.deps.concurrencyLimit} are in use`,
+      detail: `waiting for a session slot: ${this.#concurrencyLimit} of ${this.#concurrencyLimit} are in use`,
     });
 
     this.publishBatch(batch, "created", input.actor);
@@ -903,7 +922,7 @@ export class RunQueueService {
 
         for (;;) {
           const running = this.runningCount();
-          if (running >= this.deps.concurrencyLimit) break;
+          if (running >= this.#concurrencyLimit) break;
 
           const next = this.deps.stores.queue
             .waiting()

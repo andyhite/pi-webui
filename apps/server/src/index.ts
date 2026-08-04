@@ -8,13 +8,19 @@
  */
 import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
-import { openDatabase } from "@plotroom/db";
+import { openDatabase, SettingsStore } from "@plotroom/db";
 import { Hono } from "hono";
 import { configureApp } from "./app.js";
 import { checkBindPolicy } from "./security/bind-policy.js";
 import { loadServerConfig } from "./config.js";
 import { createEventBus } from "./events/bus.js";
 import { Logger } from "./logging/logger.js";
+import {
+  DEFAULT_LOG_BUFFER_CAPACITY,
+  LogRingBuffer,
+} from "./logging/ring-buffer.js";
+import { createBufferedSink } from "./logging/sink.js";
+import { applyStoredSettings } from "./settings/boot.js";
 
 export const SERVER_NAME = "plotroom-server";
 
@@ -28,14 +34,53 @@ export function startServer(config = loadServerConfig()) {
     throw new Error(bindPolicy.reason);
   }
 
-  const logger = new Logger(config.logLevel);
   const db = openDatabase({ stateDir: config.stateDir });
   const bus = createEventBus();
+
+  // Epic 2.1's deferred seam, filled: `config` is the caller's own defaults
+  // (env, or a test's explicit overrides); persisted settings (Epic 8.3) are
+  // layered onto them here, once, before anything reads a value from it. A
+  // setting this store has no override for changes nothing — the env-derived
+  // default still applies, exactly as §11 requires.
+  const settingsStore = new SettingsStore(db);
+  const effectiveConfig = applyStoredSettings(config, settingsStore.list());
+
+  // A bounded, queryable structured-log sink (§8, Epic 8.3's fill of Epic 2.1's
+  // deferred "persisted structured-log sink" — in-process rather than
+  // persisted, because the log is this run's operational record, not authored
+  // state §15 governs). Every line still reaches stdout exactly as before; this
+  // sink also keeps it queryable over `GET /api/logs`, and reports — once,
+  // never per line — the moment the bound is first reached, so a live surface
+  // learns it may be missing entries without a flood of one event per drop.
+  const logs = new LogRingBuffer(DEFAULT_LOG_BUFFER_CAPACITY);
+  const logger = new Logger(
+    effectiveConfig.logLevel,
+    createBufferedSink({
+      logs,
+      onFirstDrop: (notice) => {
+        // The app's own observation, like every other derived event on this
+        // stream: nobody gestured for the buffer to fill, so there is no
+        // third author kind to invent for it (the same reasoning
+        // `PluginService` states for a lifecycle event nobody asked for).
+        bus.publish({
+          entity: "log",
+          verb: "created",
+          drop: notice,
+          author: { kind: "human" },
+        });
+      },
+    }),
+  );
 
   const app = new Hono();
   const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
   const runtime = configureApp(app, {
-    config,
+    config: effectiveConfig,
+    // `config` (unmodified by any stored override) is what a removed override
+    // reverts to — the seam `SettingsService` calls "defaults".
+    settingsDefaults: config,
+    settingsStore,
+    logs,
     db,
     bus,
     logger,

@@ -54,4 +54,27 @@ describe("Logger (spec §8)", () => {
   it("redact() leaves non-sensitive values untouched", () => {
     expect(redact({ a: 1, b: "x" })).toEqual({ a: 1, b: "x" });
   });
+
+  it("child() tags every line with a component, sharing the same level (Epic 8.3)", () => {
+    const { lines, sink } = collect();
+    const logger = new Logger("warn", sink, () => "2024-01-01T00:00:00.000Z");
+    const component = logger.child("maintenance");
+
+    component.info("suppressed below warn");
+    expect(lines).toHaveLength(0);
+
+    component.warn("a sweep ran", { removed: 3 });
+    expect(JSON.parse(lines[0]!)).toEqual({
+      time: "2024-01-01T00:00:00.000Z",
+      level: "warn",
+      msg: "a sweep ran",
+      component: "maintenance",
+      removed: 3,
+    });
+
+    // The level is the parent's, not a second one to drift from it.
+    logger.setLevel("info");
+    component.info("now visible too");
+    expect(lines).toHaveLength(2);
+  });
 });

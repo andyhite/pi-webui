@@ -177,6 +177,26 @@ function fixture(options: FixtureOptions | number = {}): Fixture {
   };
 }
 
+describe("the concurrency limit (§11, Epic 8.3)", () => {
+  it("applies a live change to the next preview, without a restart", () => {
+    const { queue, producerCommandId } = fixture({ concurrencyLimit: 2 });
+
+    const before = queue.preview({
+      scope: "subgraph",
+      scopeId: producerCommandId,
+    });
+    expect(before.concurrency.limit).toBe(2);
+
+    queue.setConcurrencyLimit(7);
+
+    const after = queue.preview({
+      scope: "subgraph",
+      scopeId: producerCommandId,
+    });
+    expect(after.concurrency.limit).toBe(7);
+  });
+});
+
 describe("confirming a re-ask (§4.1)", () => {
   it("parks it when the batch is paused, keeping the answer without acting on it", async () => {
     const board = fixture();

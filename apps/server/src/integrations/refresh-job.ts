@@ -32,6 +32,13 @@ export interface RefreshJob {
   stop(): void;
   /** Run one tick now, outside the schedule. */
   runNow(): Promise<void>;
+  /**
+   * Change the cadence without restarting the process (§11's "applied without
+   * restart", Epic 8.3). Clears whatever timer is running and re-arms with the
+   * new interval; zero disables the schedule exactly like the constructor
+   * option does, and on-demand and observed refresh stay available either way.
+   */
+  reschedule(intervalSeconds: number): void;
   readonly intervalSeconds: number;
 }
 
@@ -45,8 +52,10 @@ export interface RefreshJobOptions {
 }
 
 export function startRefreshJob(options: RefreshJobOptions): RefreshJob {
-  const { integrations, logger, intervalSeconds, now } = options;
-  const scheduler = options.scheduler ?? nodeIntervalScheduler;
+  const { integrations, now, scheduler } = options;
+  // Tagged so the Logs panel can filter to just this schedule (§8, Epic 8.3).
+  const logger = options.logger.child("integrations");
+  const pickScheduler = scheduler ?? nodeIntervalScheduler;
 
   const runNow = async (): Promise<void> => {
     const due = integrations.dueForScheduledRefresh(now());
@@ -68,29 +77,51 @@ export function startRefreshJob(options: RefreshJobOptions): RefreshJob {
     }
   };
 
-  if (intervalSeconds <= 0) {
-    logger.info("integration refresh schedule disabled", { intervalSeconds });
-    return { stop: () => {}, runNow, intervalSeconds: 0 };
-  }
+  let timer: { clear(): void } | null = null;
+  let currentIntervalSeconds = 0;
 
-  const timer = scheduler(() => {
-    runNow().catch((error: unknown) => {
-      logger.error("integration refresh tick failed", {
-        message: error instanceof Error ? error.message : String(error),
+  const arm = (intervalSeconds: number): void => {
+    timer?.clear();
+    timer = null;
+    currentIntervalSeconds = intervalSeconds;
+
+    if (intervalSeconds <= 0) {
+      logger.info("integration refresh schedule disabled", { intervalSeconds });
+      return;
+    }
+
+    timer = pickScheduler(() => {
+      runNow().catch((error: unknown) => {
+        logger.error("integration refresh tick failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
       });
-    });
-  }, intervalSeconds * 1000);
+    }, intervalSeconds * 1000);
 
-  logger.info("integration refresh scheduled", { intervalSeconds });
+    logger.info("integration refresh scheduled", { intervalSeconds });
+  };
+
+  arm(options.intervalSeconds);
 
   let stopped = false;
   return {
     stop: () => {
       if (stopped) return;
       stopped = true;
-      timer.clear();
+      timer?.clear();
+      timer = null;
     },
     runNow,
-    intervalSeconds,
+    reschedule: (intervalSeconds: number) => {
+      if (stopped) return;
+      logger.info("integration refresh rescheduled", {
+        from: currentIntervalSeconds,
+        to: intervalSeconds,
+      });
+      arm(intervalSeconds);
+    },
+    get intervalSeconds() {
+      return currentIntervalSeconds;
+    },
   };
 }

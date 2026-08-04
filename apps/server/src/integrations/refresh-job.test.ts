@@ -153,4 +153,43 @@ describe("the integration refresh job (§9.1, principle 2)", () => {
     job.stop();
     expect(timers.cleared).toBe(1);
   });
+
+  it("reschedules without a restart (Epic 8.3)", async () => {
+    const { stub, refreshed } = fakeIntegrations([fixture("integration-1")]);
+    const timers = fakeScheduler();
+    const job = startRefreshJob({
+      integrations: stub,
+      logger: new Logger("error"),
+      intervalSeconds: 30,
+      now: () => 0,
+      scheduler: timers.scheduler,
+    });
+
+    job.reschedule(5);
+
+    expect(timers.cleared).toBe(1);
+    expect(timers.calls).toHaveLength(2);
+    expect(timers.calls[1]?.everyMillis).toBe(5_000);
+    expect(job.intervalSeconds).toBe(5);
+
+    await timers.tick();
+    expect(refreshed).toEqual(["integration-1"]);
+  });
+
+  it("a stopped job ignores a reschedule rather than reviving itself", () => {
+    const { stub } = fakeIntegrations([]);
+    const timers = fakeScheduler();
+    const job = startRefreshJob({
+      integrations: stub,
+      logger: new Logger("error"),
+      intervalSeconds: 30,
+      now: () => 0,
+      scheduler: timers.scheduler,
+    });
+
+    job.stop();
+    job.reschedule(10);
+
+    expect(timers.calls).toHaveLength(1);
+  });
 });

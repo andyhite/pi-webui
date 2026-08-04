@@ -18,6 +18,13 @@ export interface CompactionSchedule {
   stop(): void;
   /** Run one sweep now, outside the schedule (the on-demand endpoint). */
   runNow(): CompactionResult;
+  /**
+   * Change the cadence without restarting the process (§11's "applied without
+   * restart", Epic 8.3). Clears whatever timer is running and re-arms with the
+   * new interval; zero disables the schedule exactly like the constructor
+   * option does, and the on-demand sweep stays available either way.
+   */
+  reschedule(intervalSeconds: number): void;
   readonly intervalSeconds: number;
 }
 
@@ -59,8 +66,10 @@ export interface CompactionJobOptions {
 export function startCompactionJob(
   options: CompactionJobOptions,
 ): CompactionSchedule {
-  const { maintenance, logger, intervalSeconds } = options;
-  const scheduler = options.scheduler ?? nodeIntervalScheduler;
+  const { maintenance, scheduler } = options;
+  const pickScheduler = scheduler ?? nodeIntervalScheduler;
+  // Tagged so the Logs panel can filter to just this schedule (§8, Epic 8.3).
+  const logger = options.logger.child("maintenance");
 
   const runNow = (): CompactionResult => {
     const result = maintenance.compact();
@@ -77,33 +86,55 @@ export function startCompactionJob(
     return result;
   };
 
-  if (intervalSeconds <= 0) {
-    logger.info("compaction schedule disabled", { intervalSeconds });
-    return { stop: () => {}, runNow, intervalSeconds: 0 };
-  }
+  let timer: Timer | null = null;
+  let currentIntervalSeconds = 0;
 
-  const timer = scheduler(() => {
-    try {
-      runNow();
-    } catch (error) {
-      // A failed sweep must not take the server with it: nothing downstream
-      // depends on it having run, and the next interval tries again.
-      logger.error("compaction sweep failed", {
-        message: error instanceof Error ? error.message : String(error),
-      });
+  const arm = (intervalSeconds: number): void => {
+    timer?.clear();
+    timer = null;
+    currentIntervalSeconds = intervalSeconds;
+
+    if (intervalSeconds <= 0) {
+      logger.info("compaction schedule disabled", { intervalSeconds });
+      return;
     }
-  }, intervalSeconds * 1000);
 
-  logger.info("compaction scheduled", { intervalSeconds });
+    timer = pickScheduler(() => {
+      try {
+        runNow();
+      } catch (error) {
+        // A failed sweep must not take the server with it: nothing downstream
+        // depends on it having run, and the next interval tries again.
+        logger.error("compaction sweep failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }, intervalSeconds * 1000);
+
+    logger.info("compaction scheduled", { intervalSeconds });
+  };
+
+  arm(options.intervalSeconds);
 
   let stopped = false;
   return {
     stop: () => {
       if (stopped) return;
       stopped = true;
-      timer.clear();
+      timer?.clear();
+      timer = null;
     },
     runNow,
-    intervalSeconds,
+    reschedule: (intervalSeconds: number) => {
+      if (stopped) return;
+      logger.info("compaction rescheduled", {
+        from: currentIntervalSeconds,
+        to: intervalSeconds,
+      });
+      arm(intervalSeconds);
+    },
+    get intervalSeconds() {
+      return currentIntervalSeconds;
+    },
   };
 }

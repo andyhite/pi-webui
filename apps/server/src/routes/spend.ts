@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { dayStartSeconds, formatMicros } from "@plotroom/core";
 import type { BudgetService } from "../budgets/service.js";
+import type { RunQueueService } from "../runs/queue.js";
 import { param, type ApiEnv, type ApiStores } from "./api.js";
 
 /**
@@ -20,7 +21,7 @@ import { param, type ApiEnv, type ApiStores } from "./api.js";
 export function spendRoutes(
   stores: ApiStores,
   budgets: BudgetService,
-  limit: number,
+  queue: RunQueueService,
 ): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
 
@@ -132,7 +133,11 @@ export function spendRoutes(
             },
       concurrency: {
         running,
-        limit,
+        // Read fresh, per request, from the queue's own live setting rather
+        // than a value captured when this route was built — a settings write
+        // (§11, Epic 8.3) changes what the very next read of this endpoint
+        // reports, with no restart.
+        limit: queue.concurrencyLimit,
         // The queue's own count, not a guess from the difference: work waiting is
         // admitted work, and it is visible (§4.1).
         queued: stores.queue.waiting().length,

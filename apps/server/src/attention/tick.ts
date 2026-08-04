@@ -30,6 +30,15 @@ export interface AttentionTick {
   stop(): void;
   /** Re-derive now, outside the schedule. */
   runNow(): void;
+  /**
+   * Change the cadence without restarting the process (§11's "applied without
+   * restart", Epic 8.3). Clears whatever timer is running and re-arms with the
+   * new interval; zero disables the schedule exactly like the constructor
+   * option does, and every event-driven re-derivation stays unaffected either
+   * way — only the two clock-only facts (a threshold coming due, a snooze
+   * elapsing) lose or gain punctuality.
+   */
+  reschedule(intervalSeconds: number): void;
   readonly intervalSeconds: number;
 }
 
@@ -43,40 +52,64 @@ export interface AttentionTickOptions {
 export function startAttentionTick(
   options: AttentionTickOptions,
 ): AttentionTick {
-  const { attention, logger, intervalSeconds } = options;
-  const scheduler = options.scheduler ?? nodeIntervalScheduler;
+  const { attention, scheduler } = options;
+  // Tagged so the Logs panel can filter to just this schedule (§8, Epic 8.3).
+  const logger = options.logger.child("attention");
+  const pickScheduler = scheduler ?? nodeIntervalScheduler;
 
   const runNow = (): void => {
     attention.refresh();
   };
 
-  if (intervalSeconds <= 0) {
-    logger.info("attention tick disabled", { intervalSeconds });
-    return { stop: () => {}, runNow, intervalSeconds: 0 };
-  }
+  let timer: { clear(): void } | null = null;
+  let currentIntervalSeconds = 0;
 
-  const timer = scheduler(() => {
-    try {
-      runNow();
-    } catch (error) {
-      // A failed re-derivation must not take the server with it; the next tick
-      // and the next event both try again.
-      logger.error("attention tick failed", {
-        message: error instanceof Error ? error.message : String(error),
-      });
+  const arm = (intervalSeconds: number): void => {
+    timer?.clear();
+    timer = null;
+    currentIntervalSeconds = intervalSeconds;
+
+    if (intervalSeconds <= 0) {
+      logger.info("attention tick disabled", { intervalSeconds });
+      return;
     }
-  }, intervalSeconds * 1000);
 
-  logger.info("attention tick scheduled", { intervalSeconds });
+    timer = pickScheduler(() => {
+      try {
+        runNow();
+      } catch (error) {
+        // A failed re-derivation must not take the server with it; the next
+        // tick and the next event both try again.
+        logger.error("attention tick failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }, intervalSeconds * 1000);
+
+    logger.info("attention tick scheduled", { intervalSeconds });
+  };
+
+  arm(options.intervalSeconds);
 
   let stopped = false;
   return {
     stop: () => {
       if (stopped) return;
       stopped = true;
-      timer.clear();
+      timer?.clear();
+      timer = null;
     },
     runNow,
-    intervalSeconds,
+    reschedule: (intervalSeconds: number) => {
+      if (stopped) return;
+      logger.info("attention tick rescheduled", {
+        from: currentIntervalSeconds,
+        to: intervalSeconds,
+      });
+      arm(intervalSeconds);
+    },
+    get intervalSeconds() {
+      return currentIntervalSeconds;
+    },
   };
 }

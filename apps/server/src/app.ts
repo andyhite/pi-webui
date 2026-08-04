@@ -5,6 +5,7 @@ import {
   PluginDisablementStore,
   PluginGrantStore,
   type PlotroomDatabase,
+  type SettingsStore,
 } from "@plotroom/db";
 import type { ServerConfig } from "./config.js";
 import { createConditionChecks } from "./conditions/registry.js";
@@ -17,7 +18,12 @@ import {
   originCheckMiddleware,
   requestLogMiddleware,
 } from "./http/middleware.js";
-import type { Logger } from "./logging/logger.js";
+import { LiveSecurityPolicy } from "./security/live-policy.js";
+import type { Logger, LogLevel } from "./logging/logger.js";
+import type { LogRingBuffer } from "./logging/ring-buffer.js";
+import { logsRoutes } from "./routes/logs.js";
+import { SettingsService } from "./settings/service.js";
+import { settingsRoutes } from "./routes/settings.js";
 import type { CompactionSchedule } from "./maintenance/compaction.js";
 import { ApprovalService } from "./approvals/service.js";
 import { destructionGuard } from "./approvals/guard.js";
@@ -42,6 +48,7 @@ import { objectRoutes } from "./routes/objects.js";
 import { restorableRoutes } from "./routes/restorable.js";
 import { runQueueRoutes } from "./routes/run-queue.js";
 import { runRoutes } from "./routes/runs.js";
+import { searchRoutes } from "./routes/search.js";
 import { sessionRoutes } from "./routes/sessions.js";
 import { snapshotRoutes } from "./routes/snapshot.js";
 import { steeringRoutes } from "./routes/steering.js";
@@ -78,6 +85,11 @@ export interface AppDependencies {
   readonly bus: EventBus;
   readonly logger: Logger;
   readonly upgradeWebSocket: UpgradeWebSocket;
+  /** The env-derived defaults a removed settings override reverts to (Epic 8.3). */
+  readonly settingsDefaults: ServerConfig;
+  readonly settingsStore: SettingsStore;
+  /** The bounded, queryable structured-log sink (§8, Epic 8.3). */
+  readonly logs: LogRingBuffer;
 }
 
 /**
@@ -127,16 +139,23 @@ export interface AppRuntime {
  */
 export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   const { config, db, bus, logger, upgradeWebSocket } = deps;
-  const originPolicy = { trustedOrigins: config.trustedOrigins };
+  // A settings write (§11, Epic 8.3) mutates this one object's fields in
+  // place, so every request after it sees the new trusted origins or
+  // credential with no restart — both gates read it fresh, per request,
+  // below.
+  const securityPolicy = new LiveSecurityPolicy({
+    trustedOrigins: config.trustedOrigins,
+    credential: config.credential,
+  });
 
   app.use("*", requestLogMiddleware(logger));
 
   // API and WS share the same origin/credential gate — one vocabulary, one
   // access policy (spec §12, cross-cutting rule 2).
-  app.use("/api/*", originCheckMiddleware(originPolicy));
-  app.use("/api/*", credentialMiddleware(config.credential));
-  app.use("/ws", originCheckMiddleware(originPolicy));
-  app.use("/ws", credentialMiddleware(config.credential));
+  app.use("/api/*", originCheckMiddleware(securityPolicy));
+  app.use("/api/*", credentialMiddleware(securityPolicy));
+  app.use("/ws", originCheckMiddleware(securityPolicy));
+  app.use("/ws", credentialMiddleware(securityPolicy));
 
   // Attribution (§15 invariant 2) is a property of the caller, so it is
   // established once for every API request rather than restated per route —
@@ -354,6 +373,34 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     intervalSeconds: config.attentionTickSeconds,
   });
 
+  // Settings (§11, §8, Epic 8.3): the seam Epic 2.1 deliberately left open,
+  // filled. Constructed last of all the schedules and the queue, because a
+  // live applier closes over each of them — the catalog/mechanism assertion
+  // in `SettingsService`'s constructor is what catches a setting this app
+  // forgot to wire a live applier for, rather than a surface silently lying
+  // about whether a write took effect.
+  const settings = new SettingsService({
+    store: deps.settingsStore,
+    bus,
+    defaults: deps.settingsDefaults,
+    liveAppliers: {
+      logLevel: (value) => logger.setLevel(value as LogLevel),
+      trustedOrigins: (value) => {
+        securityPolicy.trustedOrigins = value as readonly string[];
+      },
+      credential: (value) => {
+        securityPolicy.credential = value as string | null;
+      },
+      concurrencyLimit: (value) => queue.setConcurrencyLimit(value as number),
+      compactionIntervalSeconds: (value) =>
+        compaction.reschedule(value as number),
+      attentionTickSeconds: (value) =>
+        attentionTick.reschedule(value as number),
+      integrationTickSeconds: (value) =>
+        integrationRefresh.reschedule(value as number),
+    },
+  });
+
   // §6.6, before any route can act: a session's destructive gesture raises an
   // approval instead of executing. Registered as middleware over the whole API
   // rather than per route, because which routes it covers is catalog metadata
@@ -371,7 +418,7 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.route("/api", runQueueRoutes(queue));
   app.route("/api", sessionRoutes(stores, runs, claims));
   app.route("/api", claimRoutes(claims));
-  app.route("/api", spendRoutes(stores, budgets, config.concurrencyLimit));
+  app.route("/api", spendRoutes(stores, budgets, queue));
   app.route("/api", budgetRoutes(stores, budgets));
   app.route("/api", approvalRoutes(approvals));
   app.route("/api", attentionRoutes(stores, attention));
@@ -391,6 +438,9 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     maintenanceRoutes(stores, config, compaction, workspaceKinds, logger),
   );
   app.route("/api", restorableRoutes(stores));
+  app.route("/api", searchRoutes(stores));
+  app.route("/api", settingsRoutes(settings));
+  app.route("/api", logsRoutes(deps.logs));
   app.route("/api", snapshotRoutes(stores));
   app.route("/api", integrationRoutes(integrations));
   app.route("/api", pluginRoutes(plugins));
