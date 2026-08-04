@@ -5,10 +5,12 @@
   "type": "module",
   "exports": {
     ".": {
+      "source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./renderer-manifest": {
+      "source": "./src/renderer-manifest.ts",
       "types": "./dist/renderer-manifest.d.ts",
       "default": "./dist/renderer-manifest.js"
     }

@@ -1,5 +1,5 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defaultClientConditions, defineConfig } from "vite";
 
 import { resolveDevPorts } from "./src/dev/ports.js";
 
@@ -18,8 +18,18 @@ const hmrClientPort = process.env.PLOTROOM_HMR_CLIENT_PORT
   ? Number(process.env.PLOTROOM_HMR_CLIENT_PORT)
   : undefined;
 
+// Workspace packages are resolved by their `source` export condition, so the
+// dev server, Vitest, and the production bundle all load `@plotroom/*` straight
+// from TypeScript source — no `tsc -b --watch` keeping `dist/` fresh, and edits
+// anywhere in the renderer chain (ui → core/plugin-sdk/plugins) hot-reload.
+// Node never asks for this condition, so the server keeps using `dist/`.
+// (Vite 6+ replaces — not extends — the default conditions when this is set,
+// hence spreading `defaultClientConditions` back in.)
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    conditions: ["source", ...defaultClientConditions],
+  },
   server: {
     port: ports.devServer,
     proxy: {
