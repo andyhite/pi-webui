@@ -8,6 +8,7 @@ import { parseThinkingLevel } from "@oh-my-pi/pi-coding-agent/thinking";
 import { parseSessionHostArgs } from "./args.js";
 import { runSessionHost } from "./host.js";
 import { PINNED_TOOL_NAMES } from "./tools.js";
+import { dispatchWorkerSelector } from "./worker-dispatch.js";
 
 /**
  * PlotRoom's session host: one agent session per process (issue #73).
@@ -152,6 +153,13 @@ async function main(): Promise<number> {
     await session.dispose();
   }
 }
+
+// Before anything else, and before the parser: a compiled session host is also
+// the runtime's worker host, because the SDK re-execs this executable for the
+// subprocesses its tools need (see `worker-dispatch.ts`). A worker writes no
+// frames, so it leaves here rather than falling through to the session path.
+const workerExit = await dispatchWorkerSelector(process.argv.slice(2));
+if (workerExit !== null) process.exit(workerExit);
 
 const code = await main();
 
