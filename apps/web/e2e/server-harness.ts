@@ -240,6 +240,19 @@ export interface StartServerOptions {
    * its own server-side coverage already.
    */
   readonly concurrencyLimit?: number;
+  /**
+   * Reuse an existing state directory rather than minting a fresh one
+   * (`mkdtempSync`) — the arrangement-durability gate's restart leg needs a
+   * *second* server instance reading the exact same `plotroom.db`/`blobs/`
+   * a first instance already wrote (§12's portability claim, proven by
+   * actually restarting rather than only reading the same open process).
+   * Provided by the caller, so it is the caller's own to clean up — never
+   * pushed onto this call's scratch list, and never removed by this
+   * instance's own `stop()`.
+   */
+  readonly stateDir?: string;
+  /** Same reuse rule as {@link StartServerOptions.stateDir}, for the repo. */
+  readonly repositoryPath?: string;
 }
 
 export async function startMilestoneServer(
@@ -256,9 +269,10 @@ export async function startMilestoneServer(
   // would, rather than relying solely on the caller's `afterAll` to guard a
   // `server` that never got assigned.
   try {
-    const repositoryPath = gitRepository(scratch);
-    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-e2e-state-"));
-    scratch.push(stateDir);
+    const repositoryPath = options.repositoryPath ?? gitRepository(scratch);
+    const stateDir =
+      options.stateDir ?? mkdtempSync(join(tmpdir(), "plotroom-e2e-state-"));
+    if (options.stateDir === undefined) scratch.push(stateDir);
 
     const workspaceDir = join(stateDir, "workspaces");
     mkdirSync(workspaceDir, { recursive: true });
