@@ -45,6 +45,50 @@ describe("originMatches", () => {
     ).toBe(false);
   });
 
+  it("does not match a plain http request against a remembered https backend, even though URL#host elides both default ports identically", () => {
+    // The regression this guards: `new URL("http://host").host` and
+    // `new URL("https://host").host` are both just "host" (default ports
+    // 80/443 are never shown) — a host-only comparison would have matched
+    // this pair and sent the Bearer credential over a downgraded, cleartext
+    // connection.
+    expect(
+      originMatches(
+        "http://plotroom.example.com/api/health",
+        "https://plotroom.example.com",
+      ),
+    ).toBe(false);
+    expect(
+      originMatches(
+        "ws://plotroom.example.com/ws",
+        "wss://plotroom.example.com",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches an explicit default port against an implicit one", () => {
+    expect(
+      originMatches(
+        "https://plotroom.example.com:443/api/health",
+        "https://plotroom.example.com",
+      ),
+    ).toBe(true);
+    expect(
+      originMatches(
+        "http://plotroom.example.com:80/api/health",
+        "http://plotroom.example.com",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match across security classes even when the explicit port coincides", () => {
+    expect(
+      originMatches(
+        "http://plotroom.example.com:443/api/health",
+        "https://plotroom.example.com",
+      ),
+    ).toBe(false);
+  });
+
   it("does not match a different host", () => {
     expect(
       originMatches(

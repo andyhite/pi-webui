@@ -13,26 +13,57 @@
  * upgrade handshake, since Chromium's network stack represents a WebSocket
  * handshake as an ordinary HTTP request at this layer.
  *
- * Matched by **host** (hostname + port), deliberately *not* full origin
- * (protocol + host + port): a plain `fetch()` to `/api/*` and the `/ws`
- * upgrade both target the same backend, but the browser's own URL for
- * each carries a different scheme (`https:`/`wss:` or `http:`/`ws:`) for
- * the identical connection — comparing full origins made the `/ws`
- * request's `ws://host:port` silently fail to match a remembered
- * backend's `http://host:port` and never receive the header at all
- * (caught by driving this against two real servers under Electron: every
- * `/api/*` call carried the credential, every `/ws` upgrade got refused
- * with 401 until this was made host-only). Query strings and paths never
- * matter either way, since `URL#host` already excludes them.
+ * Matched by **hostname + port, plus security class** — deliberately not
+ * full origin (protocol + host + port), and deliberately not host alone:
+ *
+ * - Not full origin: a plain `fetch()` to `/api/*` and the `/ws` upgrade
+ *   both target the same backend, but the browser's own URL for each
+ *   carries a different scheme (`https:`/`wss:` or `http:`/`ws:`) for the
+ *   identical connection — comparing full origins made the `/ws` request's
+ *   `ws://host:port` silently fail to match a remembered backend's
+ *   `http://host:port` and never receive the header at all (caught by
+ *   driving this against two real servers under Electron: every `/api/*`
+ *   call carried the credential, every `/ws` upgrade got refused with 401
+ *   until this matched across that pair).
+ * - Not host alone: `URL#host` elides the *default* port for its own
+ *   scheme (`https://host` and `http://host` both report `host`, no
+ *   `:443`/`:80`), so a backend remembered as `https://host` matched a
+ *   plain `http://host` request once ports were left implicit — the exact
+ *   downgrade that would carry the Bearer credential over cleartext.
+ *   Ports are resolved to their scheme's default before comparing, and a
+ *   request must be in the **same security class** as the remembered
+ *   backend (`http`/`ws` together, `https`/`wss` together) — the pairing
+ *   the previous point depends on, kept, but never crossing secure and
+ *   insecure.
  */
 
-/** Compares `hostname:port` only — see the doc comment above for why not full origin. */
+function isSecureProtocol(protocol: string): boolean {
+  return protocol === "https:" || protocol === "wss:";
+}
+
+function defaultPortFor(protocol: string): string {
+  return isSecureProtocol(protocol) ? "443" : "80";
+}
+
+/** `hostname:port`, with an implicit port resolved to its scheme's default. */
+function normalizedHostPort(url: URL): string {
+  return `${url.hostname}:${url.port || defaultPortFor(url.protocol)}`;
+}
+
+/** See the doc comment above for exactly what this does and does not match. */
 export function originMatches(
   requestUrl: string,
   targetOrigin: string,
 ): boolean {
   try {
-    return new URL(requestUrl).host === new URL(targetOrigin).host;
+    const request = new URL(requestUrl);
+    const target = new URL(targetOrigin);
+    if (
+      isSecureProtocol(request.protocol) !== isSecureProtocol(target.protocol)
+    ) {
+      return false;
+    }
+    return normalizedHostPort(request) === normalizedHostPort(target);
   } catch {
     return false;
   }
