@@ -27,6 +27,10 @@
  *       Conversation panel's live region says "response started" while turn 1
  *       is still streaming and "response complete" afterward, and never
  *       contains a fragment of the transcript itself.
+ *   (f) **A documented key is a real key.** Both chords the overlay lists for
+ *       the canvas delete — `Backspace` *and* `Delete`, which xyflow's default
+ *       `deleteKeyCode` does not include — actually delete the focused node,
+ *       and the gesture is one undo away from being back.
  *
  * Run locally: `pnpm build && pnpm --filter @plotroom/web e2e` (root
  * `pnpm build` — or at least `@plotroom/core`, `@plotroom/ui`,
@@ -189,6 +193,10 @@ test.describe("the keyboard and accessibility gate", () => {
     );
     await expect(spaceRow).toContainText("Space");
     await expect(spaceRow).toContainText("handled by xyflow");
+    // And documented as xyflow actually behaves: unselecting the focused node
+    // needs the multi-selection key held, so the row says so rather than
+    // promising a bare toggle it does not perform.
+    await expect(spaceRow).toContainText("Shift");
 
     // Every chord that fires a binding is shown, not just the first: a hidden
     // second key is the same failure as an unlisted binding (§11).
@@ -220,6 +228,40 @@ test.describe("the keyboard and accessibility gate", () => {
     await page.keyboard.press("Escape");
     await expect(overlay).toHaveCount(0);
     await expect(queuePanelButton).toBeFocused();
+  });
+
+  test("the documented delete keys really delete, and one gesture is one undo", async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    const base = requireServer().baseUrl;
+    const { nodeId } = await createCommandNode(base, "keyboard delete");
+
+    await page.goto(`${base}/`);
+    await expect(page.getByTestId("attention-header-count")).toBeVisible();
+    await ensureNotCollapsed(page);
+
+    const node = page.locator(`.react-flow__node[data-id="${nodeId}"]`);
+    await expect(node).toHaveCount(1);
+
+    // `Delete` is documented in the overlay beside `Backspace`, and xyflow's
+    // own default is `Backspace` alone — so this is that row being true
+    // rather than decorative (§11).
+    await focusCanvasNode(page, nodeId);
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Delete");
+    await expect(node).toHaveCount(0);
+
+    // One gesture, one undo op (principle 10): the same id comes back, which
+    // is only possible because the delete lifted its own tombstone.
+    await page.keyboard.press("Control+z");
+    await expect(node).toHaveCount(1);
+
+    // The other documented chord, on the same node.
+    await focusCanvasNode(page, nodeId);
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Backspace");
+    await expect(node).toHaveCount(0);
   });
 
   test("run the selected node and stop the selected session, from the keyboard only", async ({

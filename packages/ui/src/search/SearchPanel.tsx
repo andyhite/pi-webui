@@ -21,6 +21,11 @@
  * primitive; whether that resolves to anything visible is the canvas's own
  * concern; nothing here holds an off-canvas special case.
  *
+ * A read that *fails* is reported rather than swallowed, for the same reason
+ * an archived hit is: the rows go (they answered an earlier query and would
+ * otherwise read as answers to this one) and the failure is said, in the panel
+ * and in its live region.
+ *
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
  */
 
@@ -40,7 +45,12 @@ export interface SearchPanelProps {
   readonly onSelectNode: (nodeId: string) => void;
 }
 
-function summarize(hits: readonly SearchHit[], query: string): string {
+function summarize(
+  hits: readonly SearchHit[],
+  query: string,
+  error: string | null,
+): string {
+  if (error) return `search failed: ${error}`;
   if (query.trim().length === 0) return "";
   if (hits.length === 0) return `no results for "${query}"`;
   return `${hits.length} result${hits.length === 1 ? "" : "s"} for "${query}"`;
@@ -49,24 +59,44 @@ function summarize(hits: readonly SearchHit[], query: string): string {
 export function SearchPanel({ dataSource, onSelectNode }: SearchPanelProps) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<readonly SearchHit[]>([]);
+  const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const requestIdRef = useRef(0);
 
   useEffect(() => {
     const trimmed = query.trim();
     if (trimmed.length === 0) {
+      // Emptying the box abandons whatever is in flight, exactly as typing a
+      // new query does: without bumping the id, a rejection landing after the
+      // operator cleared the input would report a failure for a query that is
+      // no longer being asked.
+      requestIdRef.current += 1;
       setHits([]);
+      setError(null);
       setActiveIndex(0);
       return;
     }
     const requestId = ++requestIdRef.current;
     const timer = setTimeout(() => {
-      void dataSource.search({ q: trimmed }).then((result) => {
-        // A slower, stale request must never clobber a faster, newer one.
-        if (requestIdRef.current !== requestId) return;
-        setHits(result.hits);
-        setActiveIndex(0);
-      });
+      void dataSource
+        .search({ q: trimmed })
+        .then((result) => {
+          // A slower, stale request must never clobber a faster, newer one.
+          if (requestIdRef.current !== requestId) return;
+          setError(null);
+          setHits(result.hits);
+          setActiveIndex(0);
+        })
+        // A failed read left the previous query's hits on screen, silently,
+        // where they read as results for what is in the input now. The rows
+        // go and the failure is said instead — §6.8's "reported, never
+        // hidden" is about a hit, and it is just as true of a read.
+        .catch((err: unknown) => {
+          if (requestIdRef.current !== requestId) return;
+          setHits([]);
+          setActiveIndex(0);
+          setError(err instanceof Error ? err.message : String(err));
+        });
     }, QUERY_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [query, dataSource]);
@@ -151,6 +181,9 @@ export function SearchPanel({ dataSource, onSelectNode }: SearchPanelProps) {
         onChange={(event) => setQuery(event.target.value)}
         placeholder="search sessions, including archived ones (§6.8)"
       />
+      {error ? (
+        <div data-testid="search-panel-error">could not search: {error}</div>
+      ) : null}
       <ul
         id="search-results-listbox"
         role="listbox"
@@ -185,7 +218,7 @@ export function SearchPanel({ dataSource, onSelectNode }: SearchPanelProps) {
         })}
       </ul>
       <LiveRegion
-        message={summarize(hits, query)}
+        message={summarize(hits, query, error)}
         label="search results summary"
         testId="search-panel-live-region"
       />

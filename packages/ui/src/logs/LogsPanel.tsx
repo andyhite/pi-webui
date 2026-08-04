@@ -15,6 +15,12 @@
  * `droppedTotal` is surfaced honestly whenever it is greater than zero
  * ("N entries dropped"), never silently (§8's own rule for a bounded sink).
  *
+ * A read that *fails* is reported for the same reason: a fresh read replaces
+ * the view, so its failure clears the rows and says so (stale rows would read
+ * as the new filter's answer, and "no entries match this filter" is a claim a
+ * failed read cannot make); an incremental follow poll only adds, so its
+ * failure keeps the rows and says newer entries may be missing.
+ *
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
  */
 
@@ -56,6 +62,7 @@ export function LogsPanel({ dataSource }: LogsPanelProps) {
   const [meta, setMeta] = useState<LogsMeta>(EMPTY_META);
   const [follow, setFollow] = useState(false);
   const [announcement, setAnnouncement] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const filterRef = useRef({ level, component });
   filterRef.current = { level, component };
@@ -72,16 +79,30 @@ export function LogsPanel({ dataSource }: LogsPanelProps) {
     };
   }
 
+  /**
+   * A fresh read: it *replaces* what is on screen, so a failure means the
+   * panel has nothing it can vouch for. The rows go and the failure is said
+   * — left standing, the previous filter's rows read as this filter's, which
+   * is the same lie as a silently truncated list (§8).
+   */
   function reload(): void {
-    void dataSource.query(baseQuery()).then((result) => {
-      setEntries(result.entries);
-      setMeta({
-        droppedTotal: result.droppedTotal,
-        capacity: result.capacity,
-        oldestSeq: result.oldestSeq,
-        newestSeq: result.newestSeq,
+    void dataSource
+      .query(baseQuery())
+      .then((result) => {
+        setError(null);
+        setEntries(result.entries);
+        setMeta({
+          droppedTotal: result.droppedTotal,
+          capacity: result.capacity,
+          oldestSeq: result.oldestSeq,
+          newestSeq: result.newestSeq,
+        });
+      })
+      .catch((err: unknown) => {
+        setEntries([]);
+        setMeta(EMPTY_META);
+        setError(err instanceof Error ? err.message : String(err));
       });
-    });
   }
 
   // Level/component change: a fresh, non-incremental read from the top.
@@ -104,17 +125,30 @@ export function LogsPanel({ dataSource }: LogsPanelProps) {
     if (!follow) return;
     const timer = setInterval(() => {
       const sinceSeq = metaRef.current.newestSeq ?? undefined;
-      void dataSource.query(baseQuery(sinceSeq)).then((result) => {
-        if (result.entries.length > 0) {
-          setEntries((current) => [...current, ...result.entries]);
-        }
-        setMeta({
-          droppedTotal: result.droppedTotal,
-          capacity: result.capacity,
-          oldestSeq: result.oldestSeq ?? metaRef.current.oldestSeq,
-          newestSeq: result.newestSeq ?? metaRef.current.newestSeq,
+      void dataSource
+        .query(baseQuery(sinceSeq))
+        .then((result) => {
+          setError(null);
+          if (result.entries.length > 0) {
+            setEntries((current) => [...current, ...result.entries]);
+          }
+          setMeta({
+            droppedTotal: result.droppedTotal,
+            capacity: result.capacity,
+            oldestSeq: result.oldestSeq ?? metaRef.current.oldestSeq,
+            newestSeq: result.newestSeq ?? metaRef.current.newestSeq,
+          });
+        })
+        // An incremental poll only ever *adds*, so a failure invalidates
+        // nothing already read: the rows stay, `sinceSeq` does not advance,
+        // and what is said is that newer lines may be missing. The toggle is
+        // not turned off either — that is the operator's gesture, not a
+        // transient failure's.
+        .catch((err: unknown) => {
+          setError(
+            `${err instanceof Error ? err.message : String(err)} — newer entries may be missing`,
+          );
         });
-      });
     }, FOLLOW_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [follow, dataSource]);
@@ -158,6 +192,10 @@ export function LogsPanel({ dataSource }: LogsPanelProps) {
         {follow ? "pause" : "follow"}
       </button>
 
+      {error ? (
+        <div data-testid="logs-error">could not read the log: {error}</div>
+      ) : null}
+
       {meta.droppedTotal > 0 ? (
         <div data-testid="logs-dropped-banner">
           {meta.droppedTotal} entries dropped — the log is bounded and has lost
@@ -174,12 +212,19 @@ export function LogsPanel({ dataSource }: LogsPanelProps) {
           </li>
         ))}
       </ul>
-      {entries.length === 0 ? (
+      {/* Only when a read actually answered: "nothing matches this filter" is
+          a claim about the log, and a failed read is in no position to make
+          it. */}
+      {entries.length === 0 && error === null ? (
         <div>no log entries match this filter</div>
       ) : null}
 
       <LiveRegion
-        message={announcement}
+        // Said where a screen reader hears it, not only where it is drawn
+        // (§11): rows vanishing, or quietly stopping, is a state change, and
+        // one an operator cannot perceive is not reported at all. When both
+        // are true the failure is the newer fact.
+        message={error ? `could not read the log: ${error}` : announcement}
         label="logs status"
         testId="logs-panel-live-region"
       />

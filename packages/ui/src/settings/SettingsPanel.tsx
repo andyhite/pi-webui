@@ -11,7 +11,10 @@
  * says so, never "applied" for a write this process cannot actually pick up
  * until its next start. A sensitive setting's current value renders the
  * server's own redaction (`"[redacted]"` or "not set"); writing a new one is
- * a plain, unprefilled input — the real value is never echoed back into it.
+ * a plain, unprefilled input — the real value is never echoed back into it,
+ * before or after a write. Both draft rules — that one, and the refusal of an
+ * empty number field rather than the zero `Number("")` is — live in
+ * `draft.ts`, next to the server's own `checkSettingValue` in shape.
  *
  * A grouped, searchable list (plain buttons, keyboard-reachable by Tab like
  * `GraphWarningsPanel`) rather than a combobox: unlike Search there is no
@@ -21,9 +24,10 @@
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { LiveRegion } from "../keyboard/LiveRegion.js";
+import { checkDraft, draftFromValue, parseDraft } from "./draft.js";
 import type { SettingRow, SettingsDataSource } from "./types.js";
 
 export interface SettingsPanelProps {
@@ -46,31 +50,6 @@ function groupRows(
   return order.map((group) => ({ group, rows: byGroup.get(group) ?? [] }));
 }
 
-function draftFromValue(row: SettingRow): string {
-  if (row.sensitive) return "";
-  if (row.type === "string[]") {
-    return Array.isArray(row.value) ? row.value.join(", ") : "";
-  }
-  if (row.value === null || row.value === undefined) return "";
-  return String(row.value);
-}
-
-function parseDraft(row: SettingRow, draft: string): unknown {
-  switch (row.type) {
-    case "boolean":
-      return draft === "true";
-    case "number":
-      return Number(draft);
-    case "string[]":
-      return draft
-        .split(",")
-        .map((part) => part.trim())
-        .filter((part) => part.length > 0);
-    default:
-      return draft;
-  }
-}
-
 function messageFor(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -81,18 +60,43 @@ export function SettingsPanel({ dataSource }: SettingsPanelProps) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [announcement, setAnnouncement] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Two kinds of failure, one surface. A *read* failure is a property of what
+  // is on screen, so a read that answers clears it; a refused *gesture* is
+  // feedback for something the operator just did, and a background refresh
+  // arriving a moment later must not erase it.
+  const [readError, setReadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const error = readError ?? actionError;
 
-  function refresh(q: string): void {
-    void dataSource.list(q || undefined).then(setRows);
+  // The WS subscription below outlives the render it was made in, so the
+  // filter its refresh re-reads has to be a ref: captured, a refresh arriving
+  // after the operator had typed re-listed the whole catalog unfiltered, and
+  // resubscribing per keystroke to keep the value fresh would tear the socket
+  // listener down and rebuild it on every character.
+  const queryRef = useRef(query);
+  queryRef.current = query;
+
+  function refresh(): void {
+    void dataSource
+      .list(queryRef.current || undefined)
+      .then((next) => {
+        setRows(next);
+        setReadError(null);
+      })
+      // A failed read that left the previous rows standing said nothing at
+      // all — the operator reads a stale list as the current one.
+      .catch((err: unknown) => {
+        setRows([]);
+        setReadError(`could not read the settings: ${messageFor(err)}`);
+      });
   }
 
   useEffect(() => {
-    refresh(query);
+    refresh();
   }, [query, dataSource]);
 
   useEffect(() => {
-    return dataSource.subscribe(() => refresh(query));
+    return dataSource.subscribe(() => refresh());
   }, [dataSource]);
 
   const selected = rows.find((row) => row.key === selectedKey) ?? null;
@@ -100,36 +104,48 @@ export function SettingsPanel({ dataSource }: SettingsPanelProps) {
   function select(row: SettingRow): void {
     setSelectedKey(row.key);
     setDraft(draftFromValue(row));
-    setError(null);
+    setActionError(null);
   }
 
   function save(): void {
     if (!selected) return;
-    setError(null);
+    const refusal = checkDraft(selected, draft);
+    if (refusal) {
+      // Named as the route names it (`"<key>" must be …`), so a refusal from
+      // the panel and one from the server do not read as two different rules
+      // in the same element.
+      setActionError(`"${selected.key}" must be ${refusal}`);
+      return;
+    }
+    setActionError(null);
     void dataSource
       .set(selected.key, parseDraft(selected, draft))
       .then((updated) => {
+        // Reseeded from what the write returned, which for a sensitive
+        // setting is empty: the value the operator typed does not stay in
+        // the field once it has been written.
+        setDraft(draftFromValue(updated));
         setAnnouncement(
           updated.appliesWithoutRestart
             ? `saved ${updated.key}, applied without a restart`
             : `saved ${updated.key} — restart required: ${updated.restartReason ?? "takes effect on the next start"}`,
         );
-        refresh(query);
+        refresh();
       })
-      .catch((err: unknown) => setError(messageFor(err)));
+      .catch((err: unknown) => setActionError(messageFor(err)));
   }
 
   function removeOverride(): void {
     if (!selected) return;
-    setError(null);
+    setActionError(null);
     void dataSource
       .remove(selected.key)
       .then((updated) => {
         setDraft(draftFromValue(updated));
         setAnnouncement(`reverted ${updated.key} to its default`);
-        refresh(query);
+        refresh();
       })
-      .catch((err: unknown) => setError(messageFor(err)));
+      .catch((err: unknown) => setActionError(messageFor(err)));
   }
 
   return (
@@ -244,11 +260,17 @@ export function SettingsPanel({ dataSource }: SettingsPanelProps) {
           >
             remove override
           </button>
-          {error ? <div data-testid="settings-error">{error}</div> : null}
         </div>
       ) : (
         <div>select a setting to view or change it</div>
       )}
+
+      {/* Panel-level, not inside the detail: a failed list read clears the
+          rows, which unselects, which would have unmounted the very element
+          the failure was written into — a report nobody can see is the silence
+          it was meant to replace. One surface for every refusal here, whether
+          it came from a read, a save, or a remove. */}
+      {error ? <div data-testid="settings-error">{error}</div> : null}
 
       <LiveRegion
         message={announcement}

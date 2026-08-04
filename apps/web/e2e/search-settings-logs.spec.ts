@@ -19,6 +19,18 @@
  *       queryable and filterable by component; a filter that matches
  *       nothing renders the panel's own honest empty state rather than
  *       stale rows from the previous filter.
+ *   (d) **A panel says when a read failed.** An aborted `GET /api/search`,
+ *       `GET /api/logs` or `GET /api/settings` is reported in the panel (and,
+ *       for search and logs, in its live region) instead of leaving the
+ *       previous query's rows standing as if they answered this one — a failed
+ *       log read never renders as "no entries match this filter", which is a
+ *       claim about the log, and the settings failure is reported *outside* the
+ *       detail pane, which clearing the rows unmounts.
+ *   (e) **A live change from elsewhere keeps the operator's filter**; an empty
+ *       number field is refused rather than written as the zero `Number("")`
+ *       is — on a setting whose zero the server accepts — and a save reseeds
+ *       the field from what the write returned rather than leaving what was
+ *       typed in it.
  *
  * Run locally: `pnpm build && pnpm --filter @plotroom/web e2e` (root
  * `pnpm build` — or at least `@plotroom/core`, `@plotroom/ui`,
@@ -66,6 +78,24 @@ async function createDefinition(base: string, name: string): Promise<string> {
     },
   );
   return definition.definition.id;
+}
+
+/** A write from *another* client — what the panel's WS refresh reacts to. */
+async function putSetting(
+  base: string,
+  key: string,
+  value: unknown,
+): Promise<void> {
+  const response = await fetch(`${base}/api/settings/${key}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", origin: base },
+    body: JSON.stringify({ value }),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `PUT /api/settings/${key} failed: ${response.status} ${await response.text()}`,
+    );
+  }
 }
 
 test.describe("search, settings, and logs", () => {
@@ -180,6 +210,148 @@ test.describe("search, settings, and logs", () => {
       .toBe(false);
   });
 
+  test("a live change from elsewhere refreshes the list without losing the filter, and an empty number field is refused rather than written as a zero", async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    const base = requireServer().baseUrl;
+
+    await page.goto(`${base}/`);
+    await expect(page.getByTestId("attention-header-count")).toBeVisible();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+
+    const rows = page.locator('[data-testid^="settings-row-"]');
+    await page.getByTestId("settings-search-input").fill("tick");
+    await expect(rows).toHaveCount(2);
+
+    // Another client writes a setting, so the panel refreshes off the
+    // `setting` WS event. The changed row saying "(overridden)" is the proof
+    // that refresh actually happened — and the list is still the two rows the
+    // filter matched, rather than the whole catalog re-listed under a filter
+    // the subscription had captured before anything was typed.
+    const tickRow = page.locator("li", {
+      has: page.getByTestId("settings-row-attentionTickSeconds"),
+    });
+    await putSetting(base, "attentionTickSeconds", 45);
+    await expect(tickRow).toContainText("(overridden)");
+    await expect(rows).toHaveCount(2);
+
+    // An empty field is not a zero — and this setting is one where a zero is
+    // a real, accepted value ("zero disables the schedule"), so nothing
+    // downstream would have refused it on the panel's behalf.
+    await page.getByTestId("settings-row-attentionTickSeconds").click();
+    await page.getByTestId("settings-value-input").fill("");
+    await page.getByTestId("settings-save").click();
+    await expect(page.getByTestId("settings-error")).toContainText(
+      '"attentionTickSeconds" must be a finite number',
+    );
+    const unchanged = await apiGet<{ setting: { value: unknown } }>(
+      base,
+      "/api/settings/attentionTickSeconds",
+    );
+    expect(unchanged.setting.value).toBe(45);
+
+    // Left as it was found: clearing a value is this verb, not an empty save.
+    await page.getByTestId("settings-remove-override").click();
+    await expect(tickRow).not.toContainText("(overridden)");
+
+    // A save reseeds the field from what the write returned, rather than
+    // leaving whatever was typed in it: the server normalises this list, so
+    // the field showing the normalised form is that reseed happening. It is
+    // the same line that empties the field after writing a *sensitive* value
+    // — the case no fixture can exercise here, because configuring the one
+    // sensitive setting (`credential`) locks this very page out (§12).
+    await page.getByTestId("settings-search-input").fill("Trusted origins");
+    await page.getByTestId("settings-row-trustedOrigins").click();
+    const originsInput = page.getByTestId("settings-value-input");
+    await originsInput.fill(" https://a.example ,, https://b.example ");
+    await page.getByTestId("settings-save").click();
+    await expect(originsInput).toHaveValue(
+      "https://a.example, https://b.example",
+    );
+    await page.getByTestId("settings-remove-override").click();
+    await expect(originsInput).toHaveValue("");
+  });
+
+  test("a failed settings read is reported where it can actually be seen", async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    const base = requireServer().baseUrl;
+
+    await page.goto(`${base}/`);
+    await expect(page.getByTestId("attention-header-count")).toBeVisible();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(
+      page.locator('[data-testid^="settings-row-"]').first(),
+    ).toBeVisible();
+
+    // The failure clears the rows, which unselects — so the report has to live
+    // outside the detail pane, or it unmounts in the same commit that writes
+    // it and the operator is left with an empty catalog and no explanation.
+    await page.route("**/api/settings*", (route) => route.abort());
+    await page.getByTestId("settings-search-input").fill("tick");
+    await expect(page.getByTestId("settings-error")).toBeVisible();
+    await expect(page.locator('[data-testid^="settings-row-"]')).toHaveCount(0);
+
+    await page.unroute("**/api/settings*");
+    await page.getByTestId("settings-search-input").fill("Attention tick");
+    await expect(page.getByTestId("settings-error")).toHaveCount(0);
+    await expect(
+      page.getByTestId("settings-row-attentionTickSeconds"),
+    ).toBeVisible();
+  });
+
+  test("a failed search read is reported, never left as the previous query's hits", async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    const base = requireServer().baseUrl;
+
+    await page.route("**/api/search*", (route) => route.abort());
+    await page.goto(`${base}/`);
+    await expect(page.getByTestId("attention-header-count")).toBeVisible();
+    await page.getByRole("button", { name: "Search", exact: true }).click();
+    await page.getByTestId("search-panel-input").fill("anything at all");
+
+    await expect(page.getByTestId("search-panel-error")).toBeVisible();
+    await expect(
+      page.getByTestId("search-panel-results").getByTestId("search-result"),
+    ).toHaveCount(0);
+    // Said where a screen reader hears it too, and never as "no results".
+    await expect(page.getByTestId("search-panel-live-region")).toContainText(
+      "search failed",
+    );
+
+    // Not sticky: the next read that answers clears it.
+    await page.unroute("**/api/search*");
+    await page.getByTestId("search-panel-input").fill("something else again");
+    await expect(page.getByTestId("search-panel-error")).toHaveCount(0);
+  });
+
+  test("a failed log read is reported, and never renders as an empty filter match", async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    const base = requireServer().baseUrl;
+
+    await page.route("**/api/logs*", (route) => route.abort());
+    await page.goto(`${base}/`);
+    await expect(page.getByTestId("attention-header-count")).toBeVisible();
+    await page.getByRole("button", { name: "Logs", exact: true }).click();
+
+    await expect(page.getByTestId("logs-error")).toBeVisible();
+    // "nothing matches this filter" is a claim about the log, and a read that
+    // never answered is in no position to make it.
+    await expect(
+      page.getByText("no log entries match this filter"),
+    ).toHaveCount(0);
+
+    await page.unroute("**/api/logs*");
+    await page.getByTestId("logs-refresh").click();
+    await expect(page.getByTestId("logs-error")).toHaveCount(0);
+  });
+
   test("logs are queryable and a component filter that matches nothing shows the panel's own honest empty state", async ({
     page,
   }) => {
@@ -187,14 +359,10 @@ test.describe("search, settings, and logs", () => {
     const base = requireServer().baseUrl;
 
     // The gate's own server runs at "error" (quiet test output); lower it
-    // through the Settings surface's own write path first — the same live
-    // setting the Settings test above exercises — so an ordinary request
-    // actually lands an "info" line in the ring buffer to query.
-    await fetch(`${base}/api/settings/logLevel`, {
-      method: "PUT",
-      headers: { "content-type": "application/json", origin: base },
-      body: JSON.stringify({ value: "info" }),
-    });
+    // through the same write path another client would use — the setting is
+    // live-applying — so an ordinary request actually lands an "info" line in
+    // the ring buffer to query.
+    await putSetting(base, "logLevel", "info");
     // At least one real request line exists before the panel ever opens.
     await apiGet(base, "/api/health");
 

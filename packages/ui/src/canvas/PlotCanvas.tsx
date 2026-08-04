@@ -348,6 +348,13 @@ const MINIMAP_WIDTH = 200;
 const MINIMAP_HEIGHT = 150;
 const MINIMAP_MARGIN = 15;
 
+/**
+ * The keys that delete a canvas selection. Written down once: it is xyflow's
+ * `deleteKeyCode` **and** the overlay row's chords, which is what keeps the
+ * documented keys and the live ones from drifting apart again (§11).
+ */
+const DELETE_KEY_CODES = ["Backspace", "Delete"];
+
 function BoxNodeView({ data, id, selected }: NodeProps<BoxNode>) {
   // Unstyled by design (fleet rule 5): a visible rectangle with a label is
   // the bare minimum for the mechanics to be exercised. Content varies by
@@ -1636,11 +1643,17 @@ function CanvasInner({
         },
       },
       {
+        // Both keys are real because `deleteKeyCode` below is these same
+        // codes: xyflow's default is `Backspace` alone, so listing `Delete`
+        // here documented a key that did nothing at all — a §11 failure in the
+        // direction the overlay is least able to survive, since one row nobody
+        // can trust makes every other row a guess.
         kind: "documented",
         id: "canvas-delete-selection",
-        chords: [{ key: "Backspace" }, { key: "Delete" }],
+        chords: DELETE_KEY_CODES.map((key) => ({ key })),
         label: "delete the selected nodes and edges",
-        description: "undoable with the undo binding above (principle 10)",
+        description:
+          "undoable with the undo binding above (principle 10). xyflow listens for it on the document, so it acts on the canvas selection from anywhere but a text field",
         scope: "canvas",
         implementedBy: "xyflow",
       },
@@ -1652,12 +1665,18 @@ function CanvasInner({
         // xyflow's `panActivationKeyCode`, and binding a route selection to a
         // key that already means "pan while held" would be inventing a gesture
         // rather than describing one. Enter stays the key that moves the route.
+        //
+        // What it does is Shift-qualified, and the wording follows xyflow's
+        // own behavior rather than the shape of the word "toggle":
+        // `handleNodeClick` unselects only when the multi-selection key is
+        // held (`Shift` here), so a bare Space *replaces* the selection with
+        // the focused node and a second bare Space does nothing.
         kind: "documented",
         id: "canvas-toggle-focused-node-selection",
         chords: [{ key: " " }],
-        label: "toggle the focused node's selection (not the route)",
+        label: "select the focused node without moving the route",
         description:
-          "adds or removes the focused node from the multi-selection the action bar acts on; held over the pane it activates panning instead. Enter is what moves the route (§5)",
+          "replaces the selection with the focused node; with Shift held it adds or removes it from the multi-selection the action bar acts on. Held over the pane it activates panning instead, and Enter is what moves the route (§5)",
         scope: "canvas",
         implementedBy: "xyflow",
       },
@@ -1732,6 +1751,12 @@ function CanvasInner({
         onPaneClick={() => onSelectNode(null)}
         onSelectionChange={onSelectionChange}
         onDelete={onDelete}
+        // xyflow's default is `Backspace` alone. Both keys are documented in
+        // the overlay above, and a documented key that does nothing is worse
+        // than an undocumented one — so the prop is what makes the row true,
+        // rather than the row being narrowed to the smaller default. Deleting
+        // from a text field is unaffected (`actInsideInputWithModifier`).
+        deleteKeyCode={DELETE_KEY_CODES}
         onNodeMouseEnter={(_event, node) => setHoveredNodeId(node.id)}
         onNodeMouseLeave={() =>
           setHoveredNodeId((current) => (current ? null : current))
