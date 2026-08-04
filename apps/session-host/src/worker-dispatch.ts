@@ -17,6 +17,13 @@
  * embedded path leaves them on the SDK's same-realm fallback. Compiled and
  * uncompiled behave the same this way; the dispatch below only restores what
  * compilation took away.
+ *
+ * One re-exec is knowingly **not** covered: the browser relay daemon is launched
+ * as a bare CLI command rather than a prefixed selector, so it reaches the
+ * session parser and is refused. Unreachable today — no browser tool is in
+ * `PINNED_TOOL_NAMES` and the relay is only started for a loopback CDP endpoint
+ * — and named here so pinning one is a decision about this file rather than a
+ * surprise in a compiled artifact.
  */
 
 /**
@@ -54,8 +61,15 @@ export async function dispatchWorkerSelector(
   // process that already is a worker — where the module has then dispatched this
   // argv itself, and calling it again would put two workers on one IPC channel.
   const { runCli } = await import("@oh-my-pi/pi-coding-agent/cli");
-  if (process.env.PI_COMPILED !== "true") {
-    await runCli([...argv]);
+  if (process.env.PI_COMPILED === "true") {
+    // That import has already dispatched this argv, from its own top level and
+    // *without* awaiting it (`runCli(argv).catch(…)`). So there is nothing to
+    // wait on and nothing to report: returning an exit code here would leave
+    // through `process.exit` while the worker it started was still coming up.
+    // Hand it the process instead — what keeps this alive is the worker's own
+    // IPC handle, so the process still ends when the worker does.
+    await new Promise<never>(() => {});
   }
+  await runCli([...argv]);
   return process.exitCode === undefined ? 0 : Number(process.exitCode);
 }

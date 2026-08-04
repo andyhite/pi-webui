@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import {
   addonFilesIn,
-  refusedTheWorkerSelector,
+  dispatchedTheWorker,
   SessionHostCompileError,
   startedAndRefused,
 } from "./compile.js";
@@ -90,28 +90,39 @@ describe("startedAndRefused", () => {
   });
 });
 
-describe("refusedTheWorkerSelector", () => {
-  it("catches the session parser answering a worker launch", () => {
+describe("dispatchedTheWorker", () => {
+  it("passes a launch still waiting for the IPC peer it was never given", () => {
+    // Killed at the bound, which is what a dispatched worker looks like: it has
+    // nothing to say and nothing to exit for.
+    expect(dispatchedTheWorker({ code: null, stdout: "", stderr: "" })).toBe(
+      true,
+    );
+  });
+
+  it("fails the session parser answering a worker launch", () => {
     expect(
-      refusedTheWorkerSelector({
+      dispatchedTheWorker({
         code: 2,
         stdout:
           '{"type":"fatal","message":"unknown session-host argument: __omp_worker_js_eval_process"}',
         stderr: "",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("does not read a worker's own failure as the parser refusing", () => {
-    // A worker that starts and then fails for its own reasons is not this
-    // defect: the dispatch worked, and only the parser's sentence proves it did
-    // not.
+  it("fails every other early exit, whatever it says", () => {
+    // A selector the SDK's dispatcher no longer knows (exit 1 on stderr), and a
+    // handover that left through `process.exit` with nothing written (exit 0):
+    // both are workers that never ran, and neither writes the parser's sentence.
     expect(
-      refusedTheWorkerSelector({
+      dispatchedTheWorker({
         code: 1,
         stdout: "",
-        stderr: "no ipc channel",
+        stderr: "Error: unknown worker selector: __omp_worker_js_eval_process",
       }),
     ).toBe(false);
+    expect(dispatchedTheWorker({ code: 0, stdout: "", stderr: "" })).toBe(
+      false,
+    );
   });
 });
