@@ -471,11 +471,45 @@ if the ambient token is the wrong account).
 | ------------- | --------------------------------------------------------------------------------------------- |
 | `Backlog`     | Captured, not committed to — open `decision` issues and §13 `directional` intentions included |
 | `To Do`       | Committed; next up. Ordered top-down by priority                                              |
-| `In Progress` | Someone (human or agent) is actively working it                                               |
+| `In Progress` | **Claimed** — someone (human or agent) is actively working it right now                       |
 | `Review`      | Implementation complete, awaiting independent review                                          |
 | `Done`        | Reviewed and merged to `main`                                                                 |
 
 Closed issues are the permanent Done record; the board tracks **open** work.
+
+### Many agents work here at once
+
+Assume it. Several agents (and the operator) run against this repository
+simultaneously, on different tickets, in different worktrees, and none of them
+can see each other's context. **The board is the only place that ownership is
+written down**, which is why keeping the ticket current is a rule rather than a
+courtesy: an item nobody moved to `In Progress` is an item two agents will pick
+up.
+
+- **`In Progress` means claimed — by somebody who is not you.** Never start
+  work on an item already in that column, and never "help" with one. Its
+  branch, its worktree, and its issue comments belong to whoever claimed it. If
+  you believe it is stalled or abandoned, say so on the issue and let the
+  operator decide; taking it over silently means two agents editing one branch.
+- **Choosing your own next task: take the top of `To Do`.** Skip `In Progress`
+  entirely, and skip `decision` and `directional` items unconditionally (see
+  stage 2). Claim it — move it to `In Progress` and comment with your branch —
+  **before** the first edit, so the claim is visible to the next agent that
+  looks.
+- **One issue, one branch, one worktree, one writer.** Two agents must never
+  hold the same branch or the same worktree.
+- **Other worktrees in the parent directory are other agents' workspaces.** Do
+  not read them for context, edit them, run installs or builds in them, or
+  remove them — including ones whose branch looks merged or abandoned. You clean
+  up what you created and nothing else (see "Worktrees").
+- **`main` moves under you.** Another agent may land while you are working, so
+  rebase onto `main` and re-run `pnpm verify` **immediately** before landing,
+  not once at the start (stage 7, including the lockfile protocol — the most
+  common collision).
+- **The board is how you report to other agents.** Anything you learned that
+  changes somebody else's work — a shared seam you had to touch, a bug you
+  found, a convention you had to invent — goes on an issue, because there is no
+  other channel between concurrent sessions.
 
 **Labels:** `epic` (large multi-task efforts), `follow-up`, `bug`, `decision`,
 `directional`. Use task-list checkboxes in the issue body for a breakdown;
@@ -506,11 +540,15 @@ top-down, and work is taken from the top. Two categories never self-promote:
 never by drift"; an agent choosing its next task skips them unconditionally).
 
 **3. Start (`To Do` → `In Progress`).**
-Before the first edit: move the issue to `In Progress`, create the worktree
-and topic branch (branch name references the issue where practical, e.g.
+Before the first edit: check the board for what is **already** `In Progress`
+(that work is another agent's — see "Many agents work here at once"), then
+claim your own item by moving it to `In Progress`, create the worktree and
+topic branch (branch name references the issue where practical, e.g.
 `feat/42-session-delete`), and drop a one-line comment on the issue saying
-work has started and on what branch. One issue per active branch; an issue
-with no active worktree does not sit in `In Progress`.
+work has started and on what branch. Claiming first is what makes the claim
+visible to every other agent; an unclaimed item is one two agents start. One
+issue per active branch; an issue with no active worktree does not sit in
+`In Progress`.
 
 **4. Implement.**
 Small single-purpose Conventional Commits, each referencing the issue (`#N`
@@ -538,8 +576,9 @@ Findings are recorded **on the issue**: blocking findings send it back to
 non-blocking findings become stage-1 issues. No blocking findings → proceed.
 
 **7. Land.**
-Rebase onto `main` (lockfile protocol if `pnpm-lock.yaml` is involved:
-take main's, rerun `pnpm install`, commit the result), re-run verify, then
+Rebase onto `main` **now**, not once at the start — another agent may have
+landed while this ticket was in flight (lockfile protocol if `pnpm-lock.yaml`
+is involved: take main's, rerun `pnpm install`, commit the result), re-run verify, then
 fast-forward merge — `main` is ff-only, no merge commits. The landing
 commit/PR carries `Fixes #N` so the issue closes on push; **verify the issue
 actually closed** (auto-close can lag or miss — close manually with a landing
@@ -645,13 +684,15 @@ andyhite/
 Rules:
 
 - **Agents MUST do all work in a worktree and NEVER change the branch of the primary checkout.** No `git checkout`/`git switch` in the primary checkout, ever — another agent or the operator may be relying on it, and switching it breaks every concurrent session at once. Create a worktree for your branch and work there; if you find the primary checkout on anything other than `main`, report it rather than "fixing" it.
+- **A worktree you did not create belongs to another agent.** Expect several to exist at once (their tickets are the board's `In Progress` items). Do not edit, build, install into, commit in, or remove one — not even one whose branch looks merged or abandoned; you cannot tell a finished branch from one mid-rebase. Report it on the issue instead.
 - Never create a worktree inside the repo directory.
-- One worktree per branch; remove it when the branch lands: `git worktree remove ../plotroom-<branch>` then `git worktree prune`.
-- **Agents clean up after themselves.** Once your work has merged to `main`, removing your worktree (and deleting the merged topic branch) is part of the task — not optional, not someone else's job. A task is not complete while its worktree still exists. The only exception is a worktree another agent or the operator explicitly asked you to leave in place.
+- One worktree per branch, and one agent per worktree; remove it when the branch lands: `git worktree remove ../plotroom-<branch>` then `git worktree prune`.
+- **Agents clean up after themselves — and only after themselves.** Once your work has merged to `main`, removing your worktree (and deleting the merged topic branch) is part of the task — not optional, not someone else's job. A task is not complete while its worktree still exists. Leaving somebody else's in place is likewise not optional: the only worktree you remove is the one you created.
 - The primary checkout stays on `main` and is never removed.
 
 ## Agent working agreement
 
+- **Assume other agents are working right now.** Their tickets are the board's `In Progress` items and their branches are the other worktrees; both are off limits (see "Many agents work here at once").
 - Work in a worktree on a topic branch, never directly on `main` and never by switching the primary checkout's branch (see "Worktrees").
 - Keep commits small and single-purpose; one logical change per commit.
 - Do not commit generated artifacts, secrets, or local machine paths.
