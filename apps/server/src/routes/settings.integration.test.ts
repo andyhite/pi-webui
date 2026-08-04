@@ -181,6 +181,39 @@ describe("settings (§11, Epic 8.3)", () => {
     expect(disabled.status).toBe(200);
   });
 
+  it("refuses a port outside its range, the one setting a bad stored value cannot be undone from", async () => {
+    const harness = await boot();
+
+    // A stored port beats the environment variable, `serve()` refuses it, and
+    // deleting the row needs a running server — so accepting one here is an
+    // unbootable product with no way back in.
+    for (const value of [-5, 70_000, 80.5, "8080"]) {
+      const refused = await harness.call("/settings/port", {
+        method: "PUT",
+        body: { value },
+      });
+      expect(refused.status, String(value)).toBe(400);
+    }
+
+    // Zero is legal: it means "let the OS pick".
+    const ephemeral = await harness.call("/settings/port", {
+      method: "PUT",
+      body: { value: 0 },
+    });
+    expect(ephemeral.status).toBe(200);
+  });
+
+  it("refuses a stored value of the wrong type, not only one outside its bound", async () => {
+    const harness = await boot();
+
+    const refused = await harness.call("/settings/concurrencyLimit", {
+      method: "PUT",
+      body: { value: "4" },
+    });
+    expect(refused.status).toBe(400);
+    expect(at(await harness.ok("/fleet"), "concurrency.limit")).toBe(4);
+  });
+
   it("ignores a stored value outside its bound rather than booting wedged under it", async () => {
     const first = await boot();
     const stateDir = first.stateDir;
@@ -199,13 +232,57 @@ describe("settings (§11, Epic 8.3)", () => {
     expect(at(await second.ok("/fleet"), "concurrency.limit")).toBe(4);
 
     // And it says so rather than dropping it quietly.
-    const logs = list(await second.ok("/logs?level=warn"), "entries");
+    // Reported at `error`, so the operator's own log level cannot filter out the
+    // one line that explains why their setting is not in effect.
+    const logs = list(await second.ok("/logs?level=error"), "entries");
     const ignored = logs.find(
       (entry) => at(entry, "msg") === "ignored a stored setting",
     );
     expect(ignored).toBeDefined();
     expect(at(ignored, "key")).toBe("concurrencyLimit");
     expect(String(at(ignored, "reason"))).toContain("at least 1");
+
+    // And the read agrees with what the process is doing: the ignored row is not
+    // reported as the current value, and the reason is on the setting itself.
+    const read = await second.ok("/settings/concurrencyLimit");
+    expect(at(read, "setting.value")).toBe(4);
+    expect(at(read, "setting.overridden")).toBe(false);
+    expect(String(at(read, "setting.ignoredReason"))).toContain("at least 1");
+
+    // Writing a legal value clears it: the process is running under the write.
+    await second.ok("/settings/concurrencyLimit", {
+      method: "PUT",
+      body: { value: 2 },
+    });
+    const rewritten = await second.ok("/settings/concurrencyLimit");
+    expect(at(rewritten, "setting.value")).toBe(2);
+    expect(at(rewritten, "setting.overridden")).toBe(true);
+    expect(at(rewritten, "setting.ignoredReason")).toBeUndefined();
+    expect(at(await second.ok("/fleet"), "concurrency.limit")).toBe(2);
+  });
+
+  it("ignores a stored value of the wrong type, which no bound would have caught", async () => {
+    const first = await boot();
+    const stateDir = first.stateDir;
+    await first.handle.close();
+
+    const { openDatabase, SettingsStore } = await import("@plotroom/db");
+    const state = openDatabase({ stateDir });
+    new SettingsStore(state).set("concurrencyLimit", JSON.stringify("abc"));
+    state.close();
+
+    // Without the type check this reached the queue as its limit, and
+    // `running < "abc"` is false for ever — #69's wedge by another door.
+    const second = await boot({ logLevel: "warn" }, { stateDir });
+    expect(at(await second.ok("/fleet"), "concurrency.limit")).toBe(4);
+    expect(
+      String(
+        at(
+          await second.ok("/settings/concurrencyLimit"),
+          "setting.ignoredReason",
+        ),
+      ),
+    ).toContain("finite number");
   });
 
   it("a persisted override survives a restart of the same state directory", async () => {

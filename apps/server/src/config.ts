@@ -229,12 +229,15 @@ export const DEFAULT_CONCURRENCY_LIMIT = 4;
  */
 export interface NumericBound {
   readonly min: number;
+  /** Inclusive, where an upper bound is a real limit rather than taste. */
+  readonly max?: number;
   readonly integer: boolean;
   readonly requirement: string;
 }
 
 export const CONCURRENCY_LIMIT_BOUND: NumericBound = {
   min: 1,
+  // Deliberately no maximum: "a limit of none is spelled by setting it high".
   integer: true,
   requirement: "a whole number of sessions, at least 1",
 };
@@ -244,11 +247,36 @@ export const CONCURRENCY_LIMIT_BOUND: NumericBound = {
  * why this bound admits it (see `DEFAULT_COMPACTION_INTERVAL_SECONDS`) — a
  * negative one is a typo, and a job that never ran because of one would be the
  * quiet failure §12 is about.
+ *
+ * The maximum is not taste either. Every interval becomes `setInterval(cb,
+ * seconds * 1000)`, and Node clamps a delay past 2^31-1 ms to **1 ms** — so a
+ * number an operator meant as "practically never" would run the job every
+ * millisecond, which is the same quiet failure with the sign flipped. 2_147_483
+ * seconds (~24.8 days) is the largest interval that survives the multiplication.
  */
 export const INTERVAL_SECONDS_BOUND: NumericBound = {
   min: 0,
+  max: 2_147_483,
   integer: false,
-  requirement: "a non-negative number of seconds",
+  requirement: "a non-negative number of seconds, at most 2147483",
+};
+
+/**
+ * A TCP port. Zero stays legal because it is meaningful — the OS picks a free
+ * one — and 65535 is where ports end.
+ *
+ * This bound exists because a stored port is the one setting that can make the
+ * product **unbootable**: a persisted `-5` beats the environment variable, and
+ * `serve()` refuses it, and the settings API that could delete the row needs a
+ * running server. So the same rule the desktop's own `resolvePort` has always
+ * applied is stated here, where both the server's parse and the settings write
+ * can read it.
+ */
+export const PORT_BOUND: NumericBound = {
+  min: 0,
+  max: 65_535,
+  integer: true,
+  requirement: "a whole port number from 0 to 65535",
 };
 
 /**
@@ -256,14 +284,13 @@ export const INTERVAL_SECONDS_BOUND: NumericBound = {
  * allowed. Callers supply the subject, because only they know whether they are
  * refusing an environment variable or a settings key.
  */
-export function outsideBound(
-  bound: NumericBound,
-  value: number,
-): string | null {
+export function checkBound(bound: NumericBound, value: number): string | null {
   if (bound.integer ? !Number.isInteger(value) : !Number.isFinite(value)) {
     return bound.requirement;
   }
-  return value < bound.min ? bound.requirement : null;
+  if (value < bound.min) return bound.requirement;
+  if (bound.max !== undefined && value > bound.max) return bound.requirement;
+  return null;
 }
 
 /**
@@ -303,7 +330,7 @@ function parseSeconds(
   // never runs because of a typo is exactly the kind of quiet failure §12 is
   // about. The variable is named in the message, because two settings share this
   // parser and a message naming the wrong one sends the operator hunting.
-  const wrong = outsideBound(INTERVAL_SECONDS_BOUND, parsed);
+  const wrong = checkBound(INTERVAL_SECONDS_BOUND, parsed);
   if (wrong !== null) {
     throw new Error(`${name} must be ${wrong} (got ${value})`);
   }
@@ -313,11 +340,24 @@ function parseSeconds(
 function parseConcurrency(value: string | undefined, fallback: number): number {
   if (value === undefined || value.trim() === "") return fallback;
   const parsed = Number(value);
-  const wrong = outsideBound(CONCURRENCY_LIMIT_BOUND, parsed);
+  const wrong = checkBound(CONCURRENCY_LIMIT_BOUND, parsed);
   if (wrong !== null) {
     throw new Error(
       `PLOTROOM_CONCURRENCY_LIMIT must be ${wrong} (got ${value})`,
     );
+  }
+  return parsed;
+}
+
+function parsePort(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") return DEFAULT_PORT;
+  const parsed = Number(value);
+  // Previously `Number(...)` with nothing after it, so `PLOTROOM_PORT=abc`
+  // became `NaN` and the failure surfaced from inside `serve()`. The desktop's
+  // own `resolvePort` has always refused this; the server says the same thing.
+  const wrong = checkBound(PORT_BOUND, parsed);
+  if (wrong !== null) {
+    throw new Error(`PLOTROOM_PORT must be ${wrong} (got ${value})`);
   }
   return parsed;
 }
@@ -367,7 +407,7 @@ export function loadServerConfig(
 
   return {
     host: overrides.host ?? env.PLOTROOM_HOST ?? DEFAULT_HOST,
-    port: overrides.port ?? Number(env.PLOTROOM_PORT ?? DEFAULT_PORT),
+    port: overrides.port ?? parsePort(env.PLOTROOM_PORT),
     stateDir: overrides.stateDir ?? env.PLOTROOM_STATE_DIR ?? defaultStateDir(),
     credential:
       overrides.credential !== undefined

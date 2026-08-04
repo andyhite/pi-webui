@@ -89,6 +89,12 @@ export interface AppDependencies {
   /** The env-derived defaults a removed settings override reverts to (Epic 8.3). */
   readonly settingsDefaults: ServerConfig;
   readonly settingsStore: SettingsStore;
+  /**
+   * Stored overrides boot refused to apply, keyed by setting key
+   * (`applyStoredSettings`). Threaded through so a read reports the value this
+   * process is running under rather than the row it ignored.
+   */
+  readonly ignoredSettings?: Readonly<Record<string, string>>;
   /** The bounded, queryable structured-log sink (§8, Epic 8.3). */
   readonly logs: LogRingBuffer;
 }
@@ -403,6 +409,9 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     store: deps.settingsStore,
     bus,
     defaults: deps.settingsDefaults,
+    ...(deps.ignoredSettings === undefined
+      ? {}
+      : { ignored: deps.ignoredSettings }),
     liveAppliers: {
       logLevel: (value) => logger.setLevel(value as LogLevel),
       trustedOrigins: (value) => {

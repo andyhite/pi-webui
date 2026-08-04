@@ -117,9 +117,13 @@ export function startServer(config = loadServerConfig()) {
   // Reported here rather than where they were skipped, because that happens
   // before there is a logger: an override this process is not running under is
   // named, never dropped quietly (a store written by an older build, or by
-  // hand, is the case this exists for).
+  // hand, is the case this exists for). At `error`, not `warn`, precisely
+  // because the log level is itself configurable: a line the operator's own
+  // `logLevel` could filter out is not a report, and "quietly" is the one thing
+  // this must not be. The read says the same thing without a log at all — see
+  // `ignoredSettings` below.
   for (const skipped of ignoredSettings) {
-    logger.warn("ignored a stored setting", { ...skipped });
+    logger.error("ignored a stored setting", { ...skipped });
   }
 
   const app = new Hono();
@@ -130,6 +134,9 @@ export function startServer(config = loadServerConfig()) {
     // reverts to — the seam `SettingsService` calls "defaults".
     settingsDefaults: config,
     settingsStore,
+    ignoredSettings: Object.fromEntries(
+      ignoredSettings.map((skipped) => [skipped.key, skipped.reason]),
+    ),
     logs,
     db,
     bus,

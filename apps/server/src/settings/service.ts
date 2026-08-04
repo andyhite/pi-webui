@@ -1,9 +1,10 @@
 import type { Author, SettingChange } from "@plotroom/core";
 import type { SettingsStore } from "@plotroom/db";
-import { outsideBound, type ServerConfig } from "../config.js";
+import type { ServerConfig } from "../config.js";
 import type { EventBus } from "../events/bus.js";
 import { badRequest, notFound } from "../http/errors.js";
 import {
+  checkSettingValue,
   findSetting,
   readPath,
   SETTINGS_CATALOG,
@@ -44,6 +45,14 @@ export interface SettingsServiceDeps {
    * code path rather than two.
    */
   readonly liveAppliers: Readonly<Record<string, (value: unknown) => void>>;
+  /**
+   * Stored overrides boot **refused to apply**, keyed by setting key, with the
+   * reason (`applyStoredSettings`'s own answer). Passed in rather than
+   * re-derived, because only boot knows what it actually ran under: a read that
+   * reported a stored value this process ignored would be the surface lying
+   * about itself, which is the whole reason the skip is reported at all.
+   */
+  readonly ignored?: Readonly<Record<string, string>>;
 }
 
 export interface SettingReport {
@@ -67,10 +76,21 @@ export interface SettingReport {
   readonly value: unknown;
   readonly defaultValue: unknown;
   readonly overridden: boolean;
+  /**
+   * Why the stored override for this key is **not** in effect, when boot
+   * refused it. `value` then reports what the process is actually running
+   * under, not the row — and this sentence is what makes that honest rather
+   * than merely quiet.
+   */
+  readonly ignoredReason?: string;
 }
 
 export class SettingsService {
+  /** Boot's refusals, cleared per key the moment a legal value replaces one. */
+  readonly #ignored: Map<string, string>;
+
   constructor(private readonly deps: SettingsServiceDeps) {
+    this.#ignored = new Map(Object.entries(deps.ignored ?? {}));
     for (const entry of SETTINGS_CATALOG) {
       const hasApplier = entry.key in deps.liveAppliers;
       if (entry.appliesWithoutRestart !== hasApplier) {
@@ -106,8 +126,16 @@ export class SettingsService {
 
   set(key: string, rawValue: unknown, actor: Author): SettingReport {
     const entry = this.require(key);
-    const value = validateValue(entry, rawValue);
+    // The same judgement boot applies to a value it reads back
+    // (`checkSettingValue`), so this surface cannot store what a boot would
+    // refuse to run under.
+    const wrong = checkSettingValue(entry, rawValue);
+    if (wrong !== null) throw badRequest(`"${entry.key}" must be ${wrong}`);
+    const value = rawValue;
 
+    // Accepting a value clears any earlier ignore for this key: the process is
+    // about to run under what was just written.
+    this.#ignored.delete(key);
     this.deps.store.set(key, JSON.stringify(value));
     this.deps.liveAppliers[key]?.(value);
     this.publish(entry, actor);
@@ -119,6 +147,7 @@ export class SettingsService {
   remove(key: string, actor: Author): SettingReport {
     const entry = this.require(key);
 
+    this.#ignored.delete(key);
     this.deps.store.remove(key);
     const fallback = readPath(this.deps.defaults, entry.path);
     this.deps.liveAppliers[key]?.(fallback);
@@ -135,7 +164,11 @@ export class SettingsService {
 
   private reportFor(entry: SettingDefinition): SettingReport {
     const row = this.deps.store.get(entry.key);
-    const overridden = row !== undefined;
+    const ignoredReason = this.#ignored.get(entry.key);
+    // A stored value boot refused is not an override in effect, so it is not
+    // reported as one: `value` is what this process is running under and
+    // `ignoredReason` says why the row is not it.
+    const overridden = row !== undefined && ignoredReason === undefined;
     const defaultValue = readPath(this.deps.defaults, entry.path);
     const value = overridden
       ? (JSON.parse(row.valueJson) as unknown)
@@ -163,6 +196,7 @@ export class SettingsService {
           : "[redacted]"
         : defaultValue,
       overridden,
+      ...(ignoredReason === undefined ? {} : { ignoredReason }),
     };
   }
 
@@ -180,57 +214,5 @@ export class SettingsService {
       setting,
       author: actor,
     });
-  }
-}
-
-/** Type-checks a raw write against the catalog's declared shape (§11). */
-function validateValue(entry: SettingDefinition, raw: unknown): unknown {
-  switch (entry.type) {
-    case "string": {
-      if (raw === null) return null;
-      if (typeof raw !== "string") {
-        throw badRequest(`"${entry.key}" must be a string or null`);
-      }
-      return raw;
-    }
-    case "number": {
-      if (typeof raw !== "number" || !Number.isFinite(raw)) {
-        throw badRequest(`"${entry.key}" must be a finite number`);
-      }
-      // The same bound the environment variable is parsed against, pointed at
-      // rather than restated (`config.ts`'s `NumericBound`): a settings write
-      // must not be able to store a value a boot would have refused — a stored
-      // `concurrencyLimit` of zero refused every admission for ever, and
-      // survived restarts, because only the env path knew the rule.
-      const wrong =
-        entry.bound === undefined ? null : outsideBound(entry.bound, raw);
-      if (wrong !== null) {
-        throw badRequest(`"${entry.key}" must be ${wrong}`);
-      }
-      return raw;
-    }
-    case "boolean": {
-      if (typeof raw !== "boolean") {
-        throw badRequest(`"${entry.key}" must be a boolean`);
-      }
-      return raw;
-    }
-    case "enum": {
-      if (typeof raw !== "string" || !entry.enumValues?.includes(raw)) {
-        throw badRequest(
-          `"${entry.key}" must be one of: ${(entry.enumValues ?? []).join(", ")}`,
-        );
-      }
-      return raw;
-    }
-    case "string[]": {
-      if (
-        !Array.isArray(raw) ||
-        !raw.every((item): item is string => typeof item === "string")
-      ) {
-        throw badRequest(`"${entry.key}" must be an array of strings`);
-      }
-      return raw;
-    }
   }
 }

@@ -1,7 +1,9 @@
 import {
+  checkBound,
   CONCURRENCY_LIMIT_BOUND,
   DEFAULT_RUNTIME_ADAPTER,
   INTERVAL_SECONDS_BOUND,
+  PORT_BOUND,
   type NumericBound,
 } from "../config.js";
 import { LOG_LEVELS } from "../logging/logger.js";
@@ -78,6 +80,11 @@ export const SETTINGS_CATALOG: readonly SettingDefinition[] = [
     label: "Port",
     description: "The port the server listens on.",
     type: "number",
+    // The one setting a bad stored value can make the product *unbootable*
+    // with no in-app way back (a stored port beats the environment variable,
+    // and deleting the row needs a running server), so it is bounded on every
+    // path rather than trusted.
+    bound: PORT_BOUND,
     path: ["port"],
     envVar: "PLOTROOM_PORT",
     appliesWithoutRestart: false,
@@ -343,6 +350,47 @@ export const SETTINGS_CATALOG: readonly SettingDefinition[] = [
 
 export function findSetting(key: string): SettingDefinition | undefined {
   return SETTINGS_CATALOG.find((entry) => entry.key === key);
+}
+
+/**
+ * Why `value` is not a legal value for `entry`, as the tail of "X must be …", or
+ * `null` when it is legal.
+ *
+ * The one place a settings value is judged. Two callers need the same answer for
+ * different reasons — the route refuses a **write** with it, and boot refuses to
+ * apply a **stored** value with it — and a stored value only the write path
+ * checked is one an older build (or a hand-edited store) walks straight past:
+ * that is how a `concurrencyLimit` of `0` survived restarts, and how a stored
+ * `"abc"` would have been handed to the queue as its limit.
+ */
+export function checkSettingValue(
+  entry: SettingDefinition,
+  value: unknown,
+): string | null {
+  switch (entry.type) {
+    case "string":
+      // Null is a value here, not an absence: a credential that is not set.
+      return value === null || typeof value === "string"
+        ? null
+        : "a string or null";
+    case "number": {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        return "a finite number";
+      }
+      return entry.bound === undefined ? null : checkBound(entry.bound, value);
+    }
+    case "boolean":
+      return typeof value === "boolean" ? null : "a boolean";
+    case "enum":
+      return typeof value === "string" && entry.enumValues?.includes(value)
+        ? null
+        : `one of: ${(entry.enumValues ?? []).join(", ")}`;
+    case "string[]":
+      return Array.isArray(value) &&
+        value.every((item): item is string => typeof item === "string")
+        ? null
+        : "an array of strings";
+  }
 }
 
 /** Reads `path` off any nested object, returning `undefined` short of the leaf. */

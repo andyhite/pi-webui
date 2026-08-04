@@ -1,6 +1,6 @@
 import type { SettingRow } from "@plotroom/db";
-import { outsideBound, type ServerConfig } from "../config.js";
-import { findSetting, writePath } from "./catalog.js";
+import type { ServerConfig } from "../config.js";
+import { checkSettingValue, findSetting, writePath } from "./catalog.js";
 
 export interface StoredSettingsResult {
   readonly config: ServerConfig;
@@ -31,15 +31,21 @@ export interface StoredSettingsResult {
  * one retired must not silently reach for a field that no longer means what
  * it did.
  *
- * A stored **number outside its bound** is skipped for the same reason, and it
- * is not a hypothetical: before the bound was stated in one place
- * (`config.ts`'s `NumericBound`), the settings route accepted a
- * `concurrencyLimit` of zero, and every boot afterwards read it back and
- * refused every admission. Refusing the value here rather than at the write
- * alone is what makes that unwedgeable — a store written by an older build, or
- * edited by hand, cannot make this process unusable, and the env-derived
- * default is what it runs under instead. Both kinds of skip are reported to the
- * caller to log; nothing about them is silent.
+ * A stored value the catalog would refuse as a **write** is skipped for the same
+ * reason, judged by the same `checkSettingValue` the route uses — wrong type or
+ * outside its bound. It is not a hypothetical: before the bound was stated in
+ * one place (`config.ts`'s `NumericBound`), the settings route accepted a
+ * `concurrencyLimit` of zero, and every boot afterwards read it back and refused
+ * every admission; a stored `"abc"` reached the queue as its limit and did the
+ * same thing. Refusing the value here rather than at the write alone is what
+ * makes that unwedgeable — a store written by an older build, or edited by hand,
+ * cannot make this process unusable, and the env-derived default is what it runs
+ * under instead.
+ *
+ * Both kinds of skip are returned rather than logged here (there is no logger
+ * this early) and nothing about them is silent: `startServer` logs each one, and
+ * `SettingsService` reports the reason on the setting itself, so the read cannot
+ * show a stored value the process is not running under.
  */
 export function applyStoredSettings(
   config: ServerConfig,
@@ -61,15 +67,13 @@ export function applyStoredSettings(
     }
 
     const value = JSON.parse(row.valueJson) as unknown;
-    if (entry.bound !== undefined && typeof value === "number") {
-      const wrong = outsideBound(entry.bound, value);
-      if (wrong !== null) {
-        ignored.push({
-          key: row.key,
-          reason: `stored value ${value} is not ${wrong}; running the default instead`,
-        });
-        continue;
-      }
+    const wrong = checkSettingValue(entry, value);
+    if (wrong !== null) {
+      ignored.push({
+        key: row.key,
+        reason: `stored value ${JSON.stringify(value)} is not ${wrong}; running the default instead`,
+      });
+      continue;
     }
 
     writePath(next, entry.path, value);

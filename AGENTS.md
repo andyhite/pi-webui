@@ -839,8 +839,15 @@ Decided (recorded as they were made):
   settings write (§11), and boot reading a stored override back all apply the same
   bound, because a rule only the boot path knew was one a settings write walked
   around — a stored zero was accepted, persisted, and refused every admission for
-  ever. A stored number outside its bound is therefore **ignored and reported** at
-  boot rather than applied, so no persisted value can make the process unusable.
+  ever. Every numeric setting is bounded, `port` included: a stored port is the one
+  value that can make the product **unbootable** (it beats the environment
+  variable, and deleting the row needs a running server), and an interval past
+  2^31-1 ms is clamped by `setInterval` to 1 ms, so “practically never” would have
+  meant “every millisecond”. A stored value the catalog would refuse as a write is
+  therefore **ignored and reported** at boot rather than applied — wrong type as
+  well as out of bounds, judged by the one `checkSettingValue` the write path uses
+  — so no persisted value can make the process unusable, and the setting’s own read
+  carries the reason rather than reporting a value nothing is running under.
 - **The limit bounds initiation, not one endpoint.** `POST /api/runs` goes through
   the same admission as a scoped run: 201 with `{run, session, status}` when a slot
   was free, **202 with `{queued, run: null, session: null}`** when the gesture was
