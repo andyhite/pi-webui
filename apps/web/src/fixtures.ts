@@ -37,7 +37,10 @@ import {
   type PaletteTicketEntry,
   type ScriptedTurnDelivery,
   type WarningFacts,
+  type LogsResult,
   type PluginHealthEntry,
+  type SearchResult,
+  type SettingRow,
   type WarningGraphNode,
   type WorkspaceDiff,
   type WorkstreamActivityEntry,
@@ -743,3 +746,121 @@ export const FIXTURE_PLUGIN_HEALTH: readonly PluginHealthEntry[] = [
     integration: null,
   },
 ];
+
+/**
+ * The Search panel's fixture (§6.8, §11) for offline/dev mode: a query and
+ * its ranked hits, one of them archived — reported as archived rather than
+ * hidden, exactly as §6.8 requires. `LIVE` mode queries the real thing
+ * (`createApiSearchDataSource`, over `GET /api/search`).
+ */
+export const FIXTURE_SEARCH_RESULTS: ReadonlyMap<string, SearchResult> =
+  new Map([
+    [
+      "migrate",
+      {
+        query: "migrate",
+        hits: [
+          {
+            kind: "session",
+            refKind: "session",
+            refId: "session-running",
+            title: "session session-running",
+            location: "workstream-oxy-2982",
+            snippet: "...still migrating the schema...",
+            rank: 0.92,
+            archived: false,
+          },
+          {
+            kind: "session",
+            refKind: "session",
+            refId: "session-ended",
+            title: "session session-ended",
+            location: "workstream-oxy-2982",
+            snippet: "...the migration finished cleanly...",
+            rank: 0.41,
+            archived: true,
+          },
+        ],
+      },
+    ],
+  ]);
+
+/**
+ * The Settings panel's fixture (§11, §8) for offline/dev mode: a handful of
+ * catalog rows spanning every rendered shape — a live-applying number, a
+ * restart-required string, and a sensitive credential with no value set.
+ * `LIVE` mode reads the real catalog (`createApiSettingsDataSource`, over
+ * `GET`/`PUT`/`DELETE /api/settings(/:key)`).
+ */
+export const FIXTURE_SETTINGS: readonly SettingRow[] = [
+  {
+    key: "concurrencyLimit",
+    group: "Runs",
+    label: "Concurrency limit",
+    description: "How many sessions may run at once (§4.1).",
+    type: "number",
+    envVar: "PLOTROOM_CONCURRENCY_LIMIT",
+    sensitive: false,
+    appliesWithoutRestart: true,
+    value: 4,
+    defaultValue: 4,
+    overridden: false,
+  },
+  {
+    key: "host",
+    group: "Network",
+    label: "Bind address",
+    description: "The network address the server listens on.",
+    type: "string",
+    envVar: "PLOTROOM_HOST",
+    sensitive: false,
+    appliesWithoutRestart: false,
+    restartReason:
+      "the server is already bound to an address; changing this takes effect on the next start",
+    value: "127.0.0.1",
+    defaultValue: "127.0.0.1",
+    overridden: false,
+  },
+  {
+    key: "credential",
+    group: "Security",
+    label: "Operator credential",
+    description:
+      "The shared secret required for non-local access (§12); optional while bound to loopback.",
+    type: "string",
+    envVar: "PLOTROOM_CREDENTIAL",
+    sensitive: true,
+    appliesWithoutRestart: true,
+    value: null,
+    defaultValue: null,
+    overridden: false,
+  },
+];
+
+/**
+ * The Logs panel's fixture (§8, §11) for offline/dev mode: a couple of lines
+ * and an honest zero drop count. `LIVE` mode reads the real ring buffer
+ * (`createApiLogsDataSource`, over `GET /api/logs`).
+ */
+export const FIXTURE_LOGS: LogsResult = {
+  entries: [
+    {
+      seq: 1,
+      time: "2024-01-01T00:00:00.000Z",
+      level: "info",
+      msg: "server started",
+      component: "http",
+    },
+    {
+      seq: 2,
+      time: "2024-01-01T00:00:01.000Z",
+      level: "warn",
+      msg: "slow compaction sweep",
+      component: "maintenance",
+    },
+  ],
+  droppedTotal: 0,
+  capacity: 5_000,
+  oldestSeq: 1,
+  newestSeq: 2,
+};

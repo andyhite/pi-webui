@@ -26,10 +26,13 @@ import {
   FleetPanel,
   GraphWarningsPanel,
   KeyBindingsProvider,
+  LogsPanel,
   NotePanel,
   PaletteRail,
   PlotCanvas,
   QueuePanel,
+  SearchPanel,
+  SettingsPanel,
   ShortcutsOverlay,
   StopControls,
   TimelinePanel,
@@ -45,17 +48,23 @@ import {
   createApiDiffDataSource,
   createApiFleetDataSource,
   createApiGraphDataSource,
+  createApiLogsDataSource,
   createApiQuestionDataSource,
+  createApiSearchDataSource,
   createApiSessionDataSource,
+  createApiSettingsDataSource,
   createFixtureActivityDataSource,
   createFixtureAttentionDataSource,
   createEmptyPluginHealthDataSource,
   createFixtureDiffDataSource,
   createFixtureFleetDataSource,
   createFixtureGraphDataSource,
+  createFixtureLogsDataSource,
   createFixturePluginHealthDataSource,
   createFixtureQuestionDataSource,
+  createFixtureSearchDataSource,
   createFixtureSessionDataSource,
+  createFixtureSettingsDataSource,
   createHttpClient,
   createInBoxContributionRegistry,
   createNote,
@@ -96,10 +105,13 @@ import {
   FIXTURE_COLLECTION,
   FIXTURE_FLEET_SUMMARY,
   FIXTURE_INJECTIONS,
+  FIXTURE_LOGS,
   FIXTURE_OPEN_QUESTIONS,
   FIXTURE_PLUGIN_HEALTH,
   FIXTURE_RELEASED_CONTENT,
+  FIXTURE_SEARCH_RESULTS,
   FIXTURE_SESSIONS,
+  FIXTURE_SETTINGS,
   FIXTURE_WHAT_CHANGED,
   FIXTURE_SESSION_STATUSES,
   FIXTURE_SNAPSHOT,
@@ -277,6 +289,34 @@ const fleetDataSource = LIVE
 const activityDataSource = LIVE
   ? createApiActivityDataSource({ http: httpClient })
   : createFixtureActivityDataSource(FIXTURE_WHAT_CHANGED);
+
+/**
+ * The Search panel's data seam (§6.8, Epic 8.2): live over `GET /api/search`
+ * (operator-only server-side; the browser's own calls are the human
+ * operator by the actor header's default). Fixture-fed for
+ * `VITE_USE_FIXTURES`.
+ */
+const searchDataSource = LIVE
+  ? createApiSearchDataSource({ http: httpClient })
+  : createFixtureSearchDataSource(FIXTURE_SEARCH_RESULTS);
+
+/**
+ * The Settings panel's data seam (§11, §8, Epic 8.3): live over
+ * `GET`/`PUT`/`DELETE /api/settings(/:key)` plus the `setting` `/ws` entity.
+ * Fixture-fed for `VITE_USE_FIXTURES`.
+ */
+const settingsDataSource = LIVE
+  ? createApiSettingsDataSource({ http: httpClient, createSocket: wsFactory })
+  : createFixtureSettingsDataSource(FIXTURE_SETTINGS);
+
+/**
+ * The Logs panel's data seam (§8, §11, Epic 8.3): live over `GET /api/logs`
+ * plus the `log` `/ws` entity's drop notice. Fixture-fed for
+ * `VITE_USE_FIXTURES`.
+ */
+const logsDataSource = LIVE
+  ? createApiLogsDataSource({ http: httpClient, createSocket: wsFactory })
+  : createFixtureLogsDataSource(FIXTURE_LOGS);
 
 /** Drafts and prompt history persist per session (§6.2), the same durable-store seam as placement. */
 const sessionDraftsStore = createWebStorageSessionDraftsStore(
@@ -1367,6 +1407,32 @@ function Board() {
         title: "Fleet",
         initialState: null,
         render: () => <FleetPanel dataSource={fleetDataSource} />,
+      }),
+    );
+    registry.register(
+      definePanel<null>({
+        id: "search",
+        title: "Search",
+        initialState: null,
+        render: () => (
+          <SearchPanel dataSource={searchDataSource} onSelectNode={select} />
+        ),
+      }),
+    );
+    registry.register(
+      definePanel<null>({
+        id: "settings",
+        title: "Settings",
+        initialState: null,
+        render: () => <SettingsPanel dataSource={settingsDataSource} />,
+      }),
+    );
+    registry.register(
+      definePanel<null>({
+        id: "logs",
+        title: "Logs",
+        initialState: null,
+        render: () => <LogsPanel dataSource={logsDataSource} />,
       }),
     );
     registry.register(
