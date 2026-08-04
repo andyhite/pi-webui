@@ -69,6 +69,7 @@ export type FetchLike = (
     readonly method: string;
     readonly headers: Readonly<Record<string, string>>;
     readonly body?: string;
+    readonly keepalive?: boolean;
   },
 ) => Promise<{
   readonly ok: boolean;
@@ -76,12 +77,28 @@ export type FetchLike = (
   json(): Promise<unknown>;
 }>;
 
+/**
+ * Opt-in, per-request (spec §5, §12's durable-placement seam is the first
+ * caller): a normal `fetch` is aborted the instant the document that made
+ * it is torn down — navigation, reload, tab close. `keepalive` is the
+ * browser's own mechanism for letting a small request outlive that (the
+ * same guarantee `navigator.sendBeacon` gave before `fetch` grew the
+ * option; unlike `sendBeacon`, it works for any method, including `PATCH`,
+ * and any request this client sends fits comfortably under its combined
+ * body-size budget — in the tens of KB, browser-dependent). Every existing
+ * caller that never passes this is unaffected: the flag is absent from the
+ * `fetch` call entirely, not merely `false`.
+ */
+export interface RequestOptions {
+  readonly keepalive?: boolean;
+}
+
 export interface HttpClient {
-  get<T>(path: string): Promise<T>;
-  post<T>(path: string, body?: unknown): Promise<T>;
-  put<T>(path: string, body?: unknown): Promise<T>;
-  patch<T>(path: string, body?: unknown): Promise<T>;
-  delete<T>(path: string): Promise<T>;
+  get<T>(path: string, options?: RequestOptions): Promise<T>;
+  post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
+  put<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
+  patch<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T>;
+  delete<T>(path: string, options?: RequestOptions): Promise<T>;
 }
 
 const ABSOLUTE_URL = /^[a-z][a-z\d+.-]*:\/\//i;
@@ -103,6 +120,7 @@ export function createHttpClient(fetchImpl: FetchLike): HttpClient {
     method: string,
     path: string,
     requestBody?: unknown,
+    options?: RequestOptions,
   ): Promise<T> {
     assertSameOriginPath(path);
 
@@ -113,6 +131,7 @@ export function createHttpClient(fetchImpl: FetchLike): HttpClient {
       ...(requestBody === undefined
         ? {}
         : { body: JSON.stringify(requestBody) }),
+      ...(options?.keepalive ? { keepalive: true } : {}),
     });
 
     if (!response.ok) {
@@ -126,10 +145,10 @@ export function createHttpClient(fetchImpl: FetchLike): HttpClient {
   }
 
   return {
-    get: (path) => request("GET", path),
-    post: (path, body) => request("POST", path, body),
-    put: (path, body) => request("PUT", path, body),
-    patch: (path, body) => request("PATCH", path, body),
-    delete: (path) => request("DELETE", path),
+    get: (path, options) => request("GET", path, undefined, options),
+    post: (path, body, options) => request("POST", path, body, options),
+    put: (path, body, options) => request("PUT", path, body, options),
+    patch: (path, body, options) => request("PATCH", path, body, options),
+    delete: (path, options) => request("DELETE", path, undefined, options),
   };
 }

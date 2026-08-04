@@ -562,4 +562,42 @@ describe("createApiActions", () => {
     expect(get).toHaveBeenCalledWith("/api/commands/cmd1/continuation");
     expect(result.recommended).toBe("fresh");
   });
+
+  it("setNodePosition/setArrangement plumb an options bag (e.g. keepalive) straight through to http.patch", async () => {
+    const patch = vi.fn(async () => undefined);
+    const actions = createApiActions(fakeHttp({ patch }));
+
+    await actions.setNodePosition("n1", { x: 1, y: 2 }, { keepalive: true });
+    expect(patch).toHaveBeenLastCalledWith(
+      "/api/nodes/n1/position",
+      { position: { x: 1, y: 2 } },
+      { keepalive: true },
+    );
+
+    await actions.setArrangement([{ nodeId: "n1", position: { x: 1, y: 2 } }], {
+      keepalive: true,
+    });
+    expect(patch).toHaveBeenLastCalledWith(
+      "/api/arrangement",
+      { positions: [{ nodeId: "n1", position: { x: 1, y: 2 } }] },
+      { keepalive: true },
+    );
+  });
+
+  it("setNodePosition/setArrangement pass no keepalive at all when the caller opts into nothing", async () => {
+    const patch = vi.fn(
+      async (
+        _path: string,
+        _body?: unknown,
+        _options?: { keepalive?: boolean },
+      ) => undefined,
+    );
+    const actions = createApiActions(fakeHttp({ patch }));
+
+    await actions.setNodePosition("n1", { x: 1, y: 2 });
+    expect(patch.mock.calls[0]?.[2]?.keepalive).toBeUndefined();
+
+    await actions.setArrangement([{ nodeId: "n1", position: { x: 1, y: 2 } }]);
+    expect(patch.mock.calls[1]?.[2]?.keepalive).toBeUndefined();
+  });
 });

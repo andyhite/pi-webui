@@ -24,14 +24,30 @@ export interface ArrangementWriteResult {
   };
 }
 
+/**
+ * A per-write escape hatch from the ordinary debounced flow (§5, §12): the
+ * only member today is `keepalive`, for the one flush that must survive the
+ * page tearing down around it (`apps/web/src/App.tsx`'s `pagehide`/
+ * `visibilitychange` handling). Deliberately its own shape, not an import
+ * of the HTTP transport's `RequestOptions` — this module's own
+ * `ArrangementWriter` abstraction has no reason to know it is backed by
+ * HTTP specifically, even though today it is (`actions.ts` satisfies both
+ * shapes structurally, so nothing has to convert between them).
+ */
+export interface ArrangementWriteOptions {
+  readonly keepalive?: boolean;
+}
+
 /** The two real endpoints (§5): one node, or a whole settled selection at once. */
 export interface ArrangementWriter {
   setNodePosition(
     nodeId: string,
     position: Point,
+    options?: ArrangementWriteOptions,
   ): Promise<ArrangementWriteResult>;
   setArrangement(
     positions: readonly { readonly nodeId: string; readonly position: Point }[],
+    options?: ArrangementWriteOptions,
   ): Promise<ArrangementWriteResult>;
 }
 
@@ -60,8 +76,12 @@ export interface ArrangementWriteQueue {
    * Send whatever is pending right now, bypassing the debounce window —
    * for a caller that needs the guarantee before doing something else (a
    * page unload handler, a test assertion), not part of the ordinary flow.
+   * `options` (today, only `keepalive`) passes straight through to the
+   * `ArrangementWriter` call this makes — the ordinary debounced path
+   * (`enqueue`'s own internal timer) never passes any, so nothing about
+   * the everyday write changes.
    */
-  flush(): Promise<void>;
+  flush(options?: ArrangementWriteOptions): Promise<void>;
 }
 
 export function createArrangementWriteQueue(
@@ -82,7 +102,7 @@ export function createArrangementWriteQueue(
     }
   }
 
-  async function flush(): Promise<void> {
+  async function flush(flushOptions?: ArrangementWriteOptions): Promise<void> {
     clearScheduled();
     const ids = Object.keys(pending);
     if (ids.length === 0) return;
@@ -91,14 +111,20 @@ export function createArrangementWriteQueue(
 
     const entries = Object.entries(batch);
     const [first] = entries;
+    // Omitted entirely rather than passed as an explicit `undefined` third
+    // argument when nobody asked for `keepalive` — the ordinary debounced
+    // flush's call to `writer` stays byte-for-byte what it was before this
+    // option existed.
+    const withOptions = flushOptions === undefined ? [] : [flushOptions];
 
     let result: ArrangementWriteResult;
     try {
       result =
         entries.length === 1 && first
-          ? await writer.setNodePosition(first[0], first[1])
+          ? await writer.setNodePosition(first[0], first[1], ...withOptions)
           : await writer.setArrangement(
               entries.map(([nodeId, position]) => ({ nodeId, position })),
+              ...withOptions,
             );
     } catch (err) {
       // A *thrown* write (a network failure, a 5xx, the server mid-restart)

@@ -264,4 +264,80 @@ describe("createArrangementWriteQueue", () => {
     await queue.flush(); // retry
     expect(setNodePosition).toHaveBeenLastCalledWith("a", { x: 9, y: 9 });
   });
+
+  it("flush({ keepalive: true }) passes the option through to a single-node write", async () => {
+    const timers = fakeTimers();
+    const w = writer();
+    const queue = createArrangementWriteQueue(w, {
+      onFailure: () => {},
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+    });
+
+    queue.enqueue({ a: { x: 1, y: 1 } });
+    await queue.flush({ keepalive: true });
+
+    expect(w.setNodePosition).toHaveBeenCalledWith(
+      "a",
+      { x: 1, y: 1 },
+      { keepalive: true },
+    );
+  });
+
+  it("flush({ keepalive: true }) passes the option through to a batched write", async () => {
+    const timers = fakeTimers();
+    const w = writer();
+    const queue = createArrangementWriteQueue(w, {
+      onFailure: () => {},
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+    });
+
+    queue.enqueue({ a: { x: 1, y: 1 }, b: { x: 2, y: 2 } });
+    await queue.flush({ keepalive: true });
+
+    expect(w.setArrangement).toHaveBeenCalledTimes(1);
+    const call = (w.setArrangement as ReturnType<typeof vi.fn>).mock
+      .calls[0] as [readonly unknown[], { keepalive: boolean } | undefined];
+    expect(call[1]).toEqual({ keepalive: true });
+  });
+
+  it("the ordinary debounced flush never passes keepalive (or any options argument at all)", async () => {
+    const timers = fakeTimers();
+    const w = writer();
+    const queue = createArrangementWriteQueue(w, {
+      onFailure: () => {},
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+    });
+
+    queue.enqueue({ a: { x: 1, y: 1 } });
+    timers.fireAll();
+    await Promise.resolve();
+
+    // Not `toHaveBeenCalledWith("a", { x: 1, y: 1 }, undefined)` on purpose:
+    // an explicit `undefined` third argument is a different call shape from
+    // no third argument at all, and this must be the latter — the everyday
+    // write is unaffected by the option's existence.
+    expect(
+      (w.setNodePosition as ReturnType<typeof vi.fn>).mock.calls[0],
+    ).toHaveLength(2);
+  });
+
+  it("a caller-triggered flush() with no options also omits the third argument", async () => {
+    const timers = fakeTimers();
+    const w = writer();
+    const queue = createArrangementWriteQueue(w, {
+      onFailure: () => {},
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+    });
+
+    queue.enqueue({ a: { x: 1, y: 1 } });
+    await queue.flush();
+
+    expect(
+      (w.setNodePosition as ReturnType<typeof vi.fn>).mock.calls[0],
+    ).toHaveLength(2);
+  });
 });

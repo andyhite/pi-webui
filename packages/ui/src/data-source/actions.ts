@@ -16,7 +16,11 @@
 import type { ContinueVsFresh, NodeRole } from "@plotroom/core";
 
 import type { Point } from "../solver/push.js";
-import { HttpError, type HttpClient } from "../transport/http.js";
+import {
+  HttpError,
+  type HttpClient,
+  type RequestOptions,
+} from "../transport/http.js";
 
 export interface ApiRefusal {
   readonly reason: string;
@@ -164,7 +168,11 @@ export interface GraphActions {
    * {@link GraphActions.setArrangement} instead, never this in a loop (one
    * gesture is one transaction, principle 9).
    */
-  setNodePosition(nodeId: string, position: Point): Promise<ActionResult<void>>;
+  setNodePosition(
+    nodeId: string,
+    position: Point,
+    options?: RequestOptions,
+  ): Promise<ActionResult<void>>;
   /**
    * Durable placement, a whole selection at once (§5, §12): a rigid-body
    * push displaces neighbours in the same gesture that moved the dragged
@@ -173,6 +181,7 @@ export interface GraphActions {
    */
   setArrangement(
     positions: readonly ArrangementEntry[],
+    options?: RequestOptions,
   ): Promise<ActionResult<void>>;
   /**
    * "Reset arrangement" (§5's only automatic-layout verb), gone durable:
@@ -377,16 +386,18 @@ export function createApiActions(http: HttpClient): GraphActions {
         await http.delete(apiPath("/api/nodes", nodeId));
       }),
 
-    setNodePosition: (nodeId, position) =>
+    setNodePosition: (nodeId, position, options) =>
       asAction(async () => {
-        await http.patch(`${apiPath("/api/nodes", nodeId)}/position`, {
-          position,
-        });
+        await http.patch(
+          `${apiPath("/api/nodes", nodeId)}/position`,
+          { position },
+          options,
+        );
       }),
 
-    setArrangement: (positions) =>
+    setArrangement: (positions, options) =>
       asAction(async () => {
-        await http.patch("/api/arrangement", { positions });
+        await http.patch("/api/arrangement", { positions }, options);
       }),
 
     resetArrangement: () =>

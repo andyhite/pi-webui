@@ -121,4 +121,50 @@ describe("createHttpClient", () => {
       /same-origin/,
     );
   });
+
+  it("sets fetch's own keepalive when a caller opts in", async () => {
+    const spy = vi.fn(() => ({ ok: true, status: 200, body: {} }));
+    const client = createHttpClient(fakeFetch(spy));
+    await client.patch(
+      "/api/arrangement",
+      { positions: [] },
+      { keepalive: true },
+    );
+    expect(spy).toHaveBeenCalledWith(
+      "/api/arrangement",
+      expect.objectContaining({ method: "PATCH", keepalive: true }),
+    );
+  });
+
+  it("never sets keepalive when a caller does not opt in — absent, not false", async () => {
+    let capturedInit: Parameters<FetchLike>[1];
+    const client = createHttpClient(
+      fakeFetch((_path, init) => {
+        capturedInit = init;
+        return { ok: true, status: 200, body: {} };
+      }),
+    );
+    await client.patch("/api/arrangement", { positions: [] });
+    expect(capturedInit && "keepalive" in capturedInit).toBe(false);
+  });
+
+  it("plumbs keepalive through get/post/put/delete too, not only patch", async () => {
+    const captured: Parameters<FetchLike>[1][] = [];
+    const client = createHttpClient(
+      fakeFetch((_path, init) => {
+        captured.push(init);
+        return { ok: true, status: 200, body: {} };
+      }),
+    );
+
+    await client.get("/api/graph", { keepalive: true });
+    await client.post("/api/notes", { text: "hi" }, { keepalive: true });
+    await client.put("/api/notes/1", { text: "hi" }, { keepalive: true });
+    await client.delete("/api/notes/1", { keepalive: true });
+
+    expect(captured).toHaveLength(4);
+    for (const init of captured) {
+      expect(init?.keepalive).toBe(true);
+    }
+  });
 });
