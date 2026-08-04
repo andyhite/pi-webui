@@ -23,6 +23,14 @@ pnpm verify        # format:check + typecheck + lint + test
 
 Requires Node 22+ and pnpm 9. Husky hooks install with `pnpm install`.
 
+**Plus Bun 1.3.14+, for one package.** `apps/session-host` embeds the agent SDK,
+which is Bun-only, and runs its tests with `bun test`; everything else stays on
+Node, with pnpm as the package manager and turbo as the task runner. Without Bun
+on `PATH`, `pnpm verify` fails at that package's `test` — the rest of the
+workspace builds, typechecks and tests normally. Install it from
+[bun.sh](https://bun.sh); point the server at a Bun kept elsewhere with
+`PLOTROOM_SESSION_HOST_BUN`.
+
 | Command       | Does                                      |
 | ------------- | ----------------------------------------- |
 | `pnpm verify` | everything CI checks — run before pushing |
