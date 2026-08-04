@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { humanAuthor } from "@plotroom/core";
 import type { SessionId, SessionPhase, Transcript } from "@plotroom/core";
 import type {
+  AppVerb,
   AttentionItem,
   BubbleSource,
   CommandPaletteItem,
@@ -23,15 +24,19 @@ import {
   DockRail,
   FleetPanel,
   GraphWarningsPanel,
+  KeyBindingsProvider,
   NotePanel,
   PaletteRail,
   PlotCanvas,
   QueuePanel,
+  ShortcutsOverlay,
   StopControls,
   TimelinePanel,
   WhatChangedPanel,
   attentionCount,
   beginRun,
+  bindingKeysLabel,
+  bindingsFromVerbs,
   browserWebSocketFactory,
   createApiActions,
   createApiActivityDataSource,
@@ -58,6 +63,7 @@ import {
   createWebStoragePlacementStore,
   createWebStorageSessionDraftsStore,
   commandPaletteItemsFromRegistry,
+  commandPaletteItemsFromVerbs,
   decideNotification,
   definePanel,
   deriveBadgeCount,
@@ -76,6 +82,10 @@ import {
   panelDefinitionsFromRegistry,
   PluginHealthPanel,
   pruneMember,
+  runAppVerb,
+  useAttentionQueueCursor,
+  useKeyBindingDispatch,
+  useKeyBindings,
   useSelectionRoute,
 } from "@plotroom/ui";
 import type { InjectionLedgerEntry, WarningGraphNode } from "@plotroom/ui";
@@ -273,7 +283,22 @@ const sessionDraftsStore = createWebStorageSessionDraftsStore(
   "plotroom.session-drafts.v1",
 );
 
+/**
+ * One binding registry for the whole app (§11, Epic 8.1): the provider is what
+ * makes the surfaces that *register* bindings (the canvas, the palette, the
+ * queue, this board's own verbs) and the surface that *lists* them (the
+ * shortcuts overlay) see the same set — which is what makes "a binding cannot
+ * exist undocumented" structural rather than a habit.
+ */
 export function App() {
+  return (
+    <KeyBindingsProvider>
+      <Board />
+    </KeyBindingsProvider>
+  );
+}
+
+function Board() {
   const [placements, setPlacements] = useState<Placements | null>(null);
   // A one-shot bump for PlotCanvas's `arrangementEpoch` prop: writing fresh
   // `placements` alone never moves an already-mounted node (durable
@@ -298,6 +323,24 @@ export function App() {
     >
   >(new Map());
   const { selectedNodeId, select } = useSelectionRoute();
+  // The shortcuts overlay (§11), opened by its own registered binding below.
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  // The app's single keydown listener (§11, Epic 8.1): every binding any
+  // surface registered dispatches through here, scoped by what has focus.
+  useKeyBindingDispatch();
+
+  /**
+   * The attention queue's cursor (§7.1, §11), held here rather than inside
+   * `QueuePanel`: §11's queue verbs are keyboard verbs first — "move through
+   * the queue, answer the selected item" — so they have to work whether or
+   * not the panel is open, and a keypress and a click must be the same act on
+   * the same selection.
+   */
+  const queueCursor = useAttentionQueueCursor({
+    dataSource: attentionDataSource,
+    onNavigate: select,
+  });
 
   const [graph, setGraph] = useState<GraphSnapshot | null>(null);
 
@@ -698,9 +741,297 @@ export function App() {
     return map;
   }, [warnings]);
 
+  /**
+   * The run gesture (§4.1), as one function: the canvas's run button, the
+   * `R` binding, and the palette's own row all call *this* — never three
+   * paths that agree by coincidence (principle 8, one vocabulary).
+   */
+  function runCommandNode(commandNodeId: string): void {
+    if (!LIVE) {
+      log(`offline mode: running ${commandNodeId} was not started`);
+      return;
+    }
+    // The gesture-level guard (§4.1, principle 9): a double-click — or a held
+    // `R` — before the first request settles must not mint a second
+    // initiation key. Checked and applied via one state update, so two
+    // gestures handled in the same tick cannot both read "not yet in flight".
+    let guardedIn = false;
+    setRunsInFlight((current) => {
+      const guard = beginRun(current, commandNodeId);
+      guardedIn = guard.allowed;
+      return guard.inFlight;
+    });
+    if (!guardedIn) {
+      log(
+        `run already in flight for ${commandNodeId}; ignoring the extra gesture`,
+      );
+      return;
+    }
+
+    const commandNode = graph?.nodes.find((node) => node.id === commandNodeId);
+    if (!commandNode?.refId) {
+      setRunsInFlight((current) => endRun(current, commandNodeId));
+      return;
+    }
+    // The client's own idea of "this gesture" (principle 9): a retry with the
+    // same key would get the same run and session back, never a second one —
+    // a fresh key per gesture is exactly one run per gesture.
+    const initiationKey = `run-${crypto.randomUUID()}`;
+    void actions
+      .runCommand({ commandId: commandNode.refId, initiationKey })
+      .then((result) => {
+        setRunsInFlight((current) => endRun(current, commandNodeId));
+        if (!result.ok) {
+          log(`refused: ${result.refusal.reason} - ${result.refusal.message}`);
+          return;
+        }
+        const outcome = result.value;
+        if (outcome.kind === "queued") {
+          setQueuedRuns((current) => {
+            const next = new Map(current);
+            next.set(commandNodeId, {
+              queueEntryId: outcome.queueEntryId,
+              position: outcome.position,
+            });
+            return next;
+          });
+          log(
+            `run for ${commandNodeId} queued at position ${outcome.position ?? "?"} (concurrency limit reached)`,
+          );
+          return;
+        }
+        log(`run ${outcome.runId} started; session ${outcome.sessionId}`);
+      });
+  }
+
+  /**
+   * Placing a palette entry (§5), for the pointer and the keyboard alike: a
+   * drop supplies the position it landed on, and a keyboard activation
+   * supplies none — in which case the node gets no stored placement at all and
+   * the canvas's own derived initial arrangement puts it somewhere sensible
+   * (§5: "an initial arrangement is derived"). Same action, same refusal
+   * channel, one function (principle 8).
+   */
+  function placePaletteEntry(
+    entryId: string,
+    position?: { readonly x: number; readonly y: number },
+  ): void {
+    if (!LIVE) {
+      log(`offline mode: placing ${entryId} was not saved`);
+      return;
+    }
+    const entry = graph?.paletteEntries.find((e) => e.id === entryId);
+    if (!entry || entry.kind === "command_definition") return;
+    const role = entry.kind === "session" ? "session" : "content";
+    void actions
+      .placeNode({
+        role,
+        refId: entryId,
+        ...(role === "session" ? { running: false } : {}),
+      })
+      .then((result) => {
+        if (!result.ok) {
+          log(`refused: ${result.refusal.reason} - ${result.refusal.message}`);
+          return;
+        }
+        log(`placed ${entryId} as node ${result.value.nodeId}`);
+        if (position === undefined) return;
+        setPlacements((current) => {
+          const next = { ...current, [result.value.nodeId]: position };
+          void placementStore.save(next);
+          return next;
+        });
+      });
+  }
+
+  /** §5's only automatic-layout verb: re-derive every position from structure. */
+  function resetArrangement(): void {
+    if (!graph) return;
+    const next = deriveInitialArrangement(
+      graph.nodes.map((node) => ({
+        id: node.id,
+        ...(node.containerId ? { containerId: node.containerId } : {}),
+      })),
+      graph.edges.map((edge) => ({ source: edge.source, target: edge.target })),
+      graph.containers.map((container) => ({ id: container.id })),
+    );
+    setPlacements(next);
+    void placementStore.save(next);
+    // A fresh `placements` value alone never moves an already-mounted node;
+    // this bump is what actually applies it, exactly once.
+    setArrangementEpoch((epoch) => epoch + 1);
+    log("reset arrangement: re-derived from graph structure");
+  }
+
+  /**
+   * Stop the selected session (§6.7), the one scope that needs no
+   * confirmation. The same `stopScope` action the Stop panel's buttons call,
+   * riding the same refusal channel — a keyboard stop is not a second stop.
+   */
+  function stopSelectedSession(): void {
+    if (!selectedSessionId) {
+      log("nothing to stop: no session is selected");
+      return;
+    }
+    void actions
+      .stopScope({ scope: "session", sessionId: selectedSessionId })
+      .then((result) => {
+        if (!result.ok) {
+          log(`refused to stop (session): ${result.refusal.message}`);
+          return;
+        }
+        log(
+          `stopped (session): ${
+            result.value.stoppedSessionIds.length
+              ? result.value.stoppedSessionIds.join(", ")
+              : "nothing was running"
+          }`,
+        );
+      });
+  }
+
+  /**
+   * The high-frequency verbs (§11), declared **once**: each becomes a
+   * registry binding (and so a row in the shortcuts overlay) and a command
+   * palette row, from this one definition. Every `run` below is the same
+   * action the mouse path calls — the keyboard is a second way to ask, never
+   * a second implementation.
+   */
+  const verbs = useMemo<readonly AppVerb[]>(
+    () => [
+      {
+        id: "verb-queue-next",
+        label: "move to the next attention item",
+        description:
+          "moves the queue's highlight down, whether or not the Queue panel is open",
+        chords: [{ key: "j" }],
+        run: () => queueCursor.move("next"),
+      },
+      {
+        id: "verb-queue-prev",
+        label: "move to the previous attention item",
+        description: "moves the queue's highlight up",
+        chords: [{ key: "k" }],
+        run: () => queueCursor.move("prev"),
+      },
+      {
+        id: "verb-queue-answer-option",
+        label: "answer the selected item with its Nth option",
+        description:
+          "answers the highlighted question with option 1–9 (§6.4); the answer returns to the session as a result",
+        chords: Array.from({ length: 9 }, (_unused, index) => ({
+          key: String(index + 1),
+        })),
+        keysLabel: "1–9",
+        run: (chord) => {
+          const index = Number(chord?.key ?? "") - 1;
+          if (!Number.isInteger(index)) return;
+          if (!queueCursor.answerOption(index)) {
+            log("nothing answered: the selected item has no such option");
+          }
+        },
+      },
+      {
+        id: "verb-queue-approve",
+        label: "approve the selected item",
+        description: "approves the highlighted approval once (§6.6)",
+        chords: [{ key: "a" }],
+        run: () => {
+          if (!queueCursor.approve()) {
+            log("nothing approved: the selected item is not an approval");
+          }
+        },
+      },
+      {
+        id: "verb-queue-acknowledge",
+        label: "acknowledge the selected item",
+        description:
+          "clears the highlighted row from the queue without answering anything (§4.5)",
+        chords: [{ key: "e" }],
+        run: () => {
+          if (!queueCursor.acknowledge()) log("nothing to acknowledge");
+        },
+      },
+      {
+        id: "verb-queue-snooze",
+        label: "snooze the selected item",
+        description: "brings the highlighted row back in an hour (§4.5)",
+        run: () => {
+          if (!queueCursor.snooze()) log("nothing to snooze");
+        },
+      },
+      {
+        id: "verb-queue-mute",
+        label: "mute the selected item",
+        description: "stops the highlighted row from returning at all (§4.5)",
+        run: () => {
+          if (!queueCursor.mute()) log("nothing to mute");
+        },
+      },
+      {
+        id: "verb-run-selected-node",
+        label: "run the selected node",
+        description:
+          "runs the selected command node — the same gesture as its run button (§4.1)",
+        chords: [{ key: "r" }],
+        run: () => {
+          const node = graph?.nodes.find(
+            (candidate) => candidate.id === selectedNodeId,
+          );
+          if (!node || node.role !== "command") {
+            log("nothing to run: the selected node is not a command");
+            return;
+          }
+          runCommandNode(node.id);
+        },
+      },
+      {
+        id: "verb-stop-selected-session",
+        label: "stop the selected session",
+        description:
+          "stops the selected session — the narrowest of §6.7's three scopes",
+        chords: [{ key: "s" }],
+        run: () => stopSelectedSession(),
+      },
+      {
+        id: "verb-shortcuts-overlay",
+        label: "show keyboard shortcuts",
+        description:
+          "lists every registered binding — no binding exists undocumented (§11)",
+        chords: [{ key: "?" }],
+        run: () => setShortcutsOpen(true),
+      },
+      {
+        id: "verb-reset-arrangement",
+        label: "reset arrangement",
+        description:
+          "re-derives every node's position from the graph's structure (§5)",
+        run: () => resetArrangement(),
+      },
+      {
+        id: "verb-clear-log",
+        label: "clear gesture log",
+        description: "empties this page's log of gestures and refusals",
+        run: () => setGestureLog([]),
+      },
+    ],
+    // The verb closures read exactly these: the graph, what is selected, and
+    // the queue's cursor. The helpers they call (`runCommandNode`,
+    // `stopSelectedSession`, `resetArrangement`) are re-created every render
+    // over the same values, so this list is what decides when a binding is
+    // re-registered with a fresher closure.
+    [graph, selectedNodeId, selectedSessionId, queueCursor],
+  );
+
+  // The bindings these verbs back, registered for as long as the board is
+  // mounted — which is also what puts them in the shortcuts overlay.
+  const verbBindings = useMemo(() => bindingsFromVerbs(verbs), [verbs]);
+  useKeyBindings(verbBindings);
+
   // Command palette (§11): one keyboard entry point for navigation and
   // every verb. Navigation items always resolve through `select` — the same
-  // selection-as-route primitive the canvas click uses (§5).
+  // selection-as-route primitive the canvas click uses (§5) — and the verb
+  // rows come from the same `verbs` the bindings do, each showing its own key.
   const commandPaletteItems = useMemo<readonly CommandPaletteItem[]>(
     () => [
       ...(graph?.nodes ?? []).map((node): CommandPaletteItem => ({
@@ -709,19 +1040,19 @@ export function App() {
         kind: "navigate",
         nodeId: node.id,
       })),
-      { id: "verb-clear-log", label: "clear gesture log", kind: "verb" },
-      {
-        id: "verb-reset-arrangement",
-        label: "reset arrangement",
-        kind: "verb",
-      },
+      ...commandPaletteItemsFromVerbs(verbs, (verb) => {
+        const binding = verbBindings.find(
+          (candidate) => candidate.id === verb.id,
+        );
+        return binding ? bindingKeysLabel(binding) : undefined;
+      }),
       // Plugin-contributed verbs (§10.1, §11): empty today —
       // `contributionRegistry` has nothing registered until an in-box
       // plugin's manifest lands — but resolved through the same call a
       // registered one would go through.
       ...commandPaletteItemsFromRegistry(contributionRegistry),
     ],
-    [graph],
+    [graph, verbs, verbBindings],
   );
 
   // Ordered context inputs into the selected command (§3.5), read from the
@@ -965,9 +1296,7 @@ export function App() {
         id: "queue",
         title: "Queue",
         initialState: null,
-        render: () => (
-          <QueuePanel dataSource={attentionDataSource} onNavigate={select} />
-        ),
+        render: () => <QueuePanel cursor={queueCursor} />,
       }),
     );
     registry.register(
@@ -1063,7 +1392,14 @@ export function App() {
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         <div style={{ width: 240, borderRight: "1px solid black", padding: 8 }}>
           <h2>palette (§5)</h2>
-          <PaletteRail entries={graph.paletteEntries} />
+          <PaletteRail
+            entries={graph.paletteEntries}
+            // The keyboard's equivalent of dropping a row on the canvas
+            // (§11): the same `placeNode` action the drop calls, at a position
+            // the derived arrangement will resolve rather than one a pointer
+            // supplied — so a keyboard user can place anything a mouse can.
+            onActivateEntry={placePaletteEntry}
+          />
         </div>
 
         <div style={{ width: "100%", height: "100%" }}>
@@ -1071,40 +1407,28 @@ export function App() {
             items={commandPaletteItems}
             onSelectNode={select}
             onRunVerb={(itemId) => {
-              // Plugin-contributed verbs (§10.1) dispatch through the
-              // registry first; `false` means `itemId` wasn't one, so the
-              // in-box verbs below still apply.
+              // One vocabulary (§11, principle 8): a palette row runs the
+              // *same* verb definition its keyboard binding does — there is no
+              // second switch over verb ids here.
+              if (runAppVerb(verbs, itemId)) return;
+              // Plugin-contributed verbs (§10.1) are the only other rows the
+              // palette can hold; `false` means nothing owned that id.
               void invokePluginPaletteEntry(contributionRegistry, itemId).then(
                 (handled) => {
-                  if (handled) log(`ran plugin verb: ${itemId}`);
+                  log(
+                    handled
+                      ? `ran plugin verb: ${itemId}`
+                      : `no verb owns ${itemId}`,
+                  );
                 },
               );
-              if (itemId === "verb-clear-log") setGestureLog([]);
-              if (itemId === "verb-reset-arrangement") {
-                // §5's only automatic-layout verb: re-derive every position from
-                // the graph's own structure, discarding whatever was stored.
-                const next = deriveInitialArrangement(
-                  graph.nodes.map((node) => ({
-                    id: node.id,
-                    ...(node.containerId
-                      ? { containerId: node.containerId }
-                      : {}),
-                  })),
-                  graph.edges.map((edge) => ({
-                    source: edge.source,
-                    target: edge.target,
-                  })),
-                  graph.containers.map((container) => ({ id: container.id })),
-                );
-                setPlacements(next);
-                void placementStore.save(next);
-                // A fresh `placements` value alone never moves an
-                // already-mounted node; this bump is what actually applies
-                // it, exactly once, to every node currently on the canvas.
-                setArrangementEpoch((epoch) => epoch + 1);
-                log("reset arrangement: re-derived from graph structure");
-              }
             }}
+          />
+          {/* Every binding, listed from the registry that dispatches them
+              (§11) — opened by the `?` verb above. */}
+          <ShortcutsOverlay
+            open={shortcutsOpen}
+            onClose={() => setShortcutsOpen(false)}
           />
           <PlotCanvas
             nodes={graph.nodes}
@@ -1204,103 +1528,9 @@ export function App() {
                 );
               })();
             }}
-            onDropPaletteEntry={(entryId, position) => {
-              if (!LIVE) {
-                log(`offline mode: dropping ${entryId} was not saved`);
-                return;
-              }
-              const entry = graph.paletteEntries.find((e) => e.id === entryId);
-              if (!entry || entry.kind === "command_definition") return;
-              const role = entry.kind === "session" ? "session" : "content";
-              void actions
-                .placeNode({
-                  role,
-                  refId: entryId,
-                  ...(role === "session" ? { running: false } : {}),
-                })
-                .then((result) => {
-                  if (!result.ok) {
-                    log(
-                      `refused: ${result.refusal.reason} - ${result.refusal.message}`,
-                    );
-                    return;
-                  }
-                  setPlacements((current) => {
-                    const next = {
-                      ...current,
-                      [result.value.nodeId]: position,
-                    };
-                    void placementStore.save(next);
-                    return next;
-                  });
-                });
-            }}
+            onDropPaletteEntry={placePaletteEntry}
             runningCommandNodeIds={runsInFlight}
-            onRunCommand={(commandNodeId) => {
-              if (!LIVE) {
-                log(`offline mode: running ${commandNodeId} was not started`);
-                return;
-              }
-              // The gesture-level guard (§4.1, principle 9): a double-click
-              // before the first request settles must not mint a second
-              // initiation key. Checked and applied via one state update, so
-              // two clicks handled in the same tick cannot both read "not yet
-              // in flight".
-              let guardedIn = false;
-              setRunsInFlight((current) => {
-                const guard = beginRun(current, commandNodeId);
-                guardedIn = guard.allowed;
-                return guard.inFlight;
-              });
-              if (!guardedIn) {
-                log(
-                  `run already in flight for ${commandNodeId}; ignoring the extra click`,
-                );
-                return;
-              }
-
-              const commandNode = graph.nodes.find(
-                (node) => node.id === commandNodeId,
-              );
-              if (!commandNode?.refId) {
-                setRunsInFlight((current) => endRun(current, commandNodeId));
-                return;
-              }
-              // The client's own idea of "this gesture" (principle 9): a retry
-              // with the same key would get the same run and session back,
-              // never a second one — a fresh key per click is exactly one run
-              // per click.
-              const initiationKey = `run-${crypto.randomUUID()}`;
-              void actions
-                .runCommand({ commandId: commandNode.refId, initiationKey })
-                .then((result) => {
-                  setRunsInFlight((current) => endRun(current, commandNodeId));
-                  if (!result.ok) {
-                    log(
-                      `refused: ${result.refusal.reason} - ${result.refusal.message}`,
-                    );
-                    return;
-                  }
-                  const outcome = result.value;
-                  if (outcome.kind === "queued") {
-                    setQueuedRuns((current) => {
-                      const next = new Map(current);
-                      next.set(commandNodeId, {
-                        queueEntryId: outcome.queueEntryId,
-                        position: outcome.position,
-                      });
-                      return next;
-                    });
-                    log(
-                      `run for ${commandNodeId} queued at position ${outcome.position ?? "?"} (concurrency limit reached)`,
-                    );
-                    return;
-                  }
-                  log(
-                    `run ${outcome.runId} started; session ${outcome.sessionId}`,
-                  );
-                });
-            }}
+            onRunCommand={runCommandNode}
           />
         </div>
 

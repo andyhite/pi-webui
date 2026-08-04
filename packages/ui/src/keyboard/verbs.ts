@@ -29,6 +29,8 @@ export interface AppVerb {
   readonly keysLabel?: string;
   /** Defaults to `global`. */
   readonly scope?: KeyScope;
+  /** Which surface inside that scope, when it holds more than one. */
+  readonly surface?: string;
   readonly allowInTextEntry?: boolean;
 }
 
@@ -43,6 +45,7 @@ export function bindingFromVerb(verb: AppVerb): DispatchedKeyBinding | null {
     label: verb.label,
     description: verb.description,
     scope: verb.scope ?? "global",
+    ...(verb.surface === undefined ? {} : { surface: verb.surface }),
     ...(verb.allowInTextEntry === undefined
       ? {}
       : { allowInTextEntry: verb.allowInTextEntry }),

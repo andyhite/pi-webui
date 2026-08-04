@@ -236,6 +236,83 @@ describe("createKeyBindingRegistry", () => {
     ).not.toThrow();
   });
 
+  it("allows two surfaces in one scope to bind the same key — every dialog wants Escape", () => {
+    const registry = createKeyBindingRegistry();
+    registry.register(
+      dispatched({
+        id: "palette-close",
+        chords: [{ key: "Escape" }],
+        scope: "dialog",
+        surface: "command-palette",
+      }),
+    );
+    expect(() =>
+      registry.register(
+        dispatched({
+          id: "overlay-close",
+          chords: [{ key: "Escape" }],
+          scope: "dialog",
+          surface: "shortcuts-overlay",
+        }),
+      ),
+    ).not.toThrow();
+    expect(registry.list()).toHaveLength(2);
+  });
+
+  it("still refuses a clash inside one surface", () => {
+    const registry = createKeyBindingRegistry();
+    registry.register(
+      dispatched({
+        id: "palette-close",
+        chords: [{ key: "Escape" }],
+        scope: "dialog",
+        surface: "command-palette",
+      }),
+    );
+    expect(() =>
+      registry.register(
+        dispatched({
+          id: "palette-cancel",
+          chords: [{ key: "Escape" }],
+          scope: "dialog",
+          surface: "command-palette",
+        }),
+      ),
+    ).toThrow(/would shadow "palette-close"/);
+  });
+
+  it("dispatches only the focused surface's binding, though both are registered and both are listed", () => {
+    const registry = createKeyBindingRegistry();
+    const palette = vi.fn();
+    const overlay = vi.fn();
+    registry.register(
+      dispatched({
+        id: "palette-close",
+        chords: [{ key: "Escape" }],
+        scope: "dialog",
+        surface: "command-palette",
+        allowInTextEntry: true,
+        run: palette,
+      }),
+    );
+    registry.register(
+      dispatched({
+        id: "overlay-close",
+        chords: [{ key: "Escape" }],
+        scope: "dialog",
+        surface: "shortcuts-overlay",
+        run: overlay,
+      }),
+    );
+    registry.dispatch(event({ key: "Escape" }), {
+      scopes: ["dialog"],
+      surfaces: ["shortcuts-overlay"],
+      inTextEntry: false,
+    });
+    expect(overlay).toHaveBeenCalledOnce();
+    expect(palette).not.toHaveBeenCalled();
+  });
+
   it("unregisters exactly its own binding, so an unmounted surface stops dispatching", () => {
     const registry = createKeyBindingRegistry();
     const unregister = registry.register(dispatched());

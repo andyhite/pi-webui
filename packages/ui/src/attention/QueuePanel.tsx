@@ -3,9 +3,7 @@
  * wanting a decision, keyboard-driven, where each row carries enough
  * context to answer without opening anything." Selecting a row navigates
  * the canvas through the exact same selection-as-route primitive every
- * other entry point uses (§5) — the queue is a lens, not a place, so it
- * never keeps its own idea of "where you are" beyond which row is
- * highlighted.
+ * other entry point uses (§5) — the queue is a lens, not a place.
  *
  * In-place answers reuse the same shape the bubble layer already answers
  * questions with (`BubbleLayer.tsx`'s option buttons) rather than a second
@@ -14,51 +12,35 @@
  * two included, per §7.1's "every feed supports acknowledge, snooze, and
  * mute" — carries the three triage verbs.
  *
- * **Keyboard bindings** (§7.1, §11 — "move through the queue, answer the
- * selected item"), all on the listbox itself, none of them undocumented:
+ * **The cursor is the host's** (`useAttentionQueueCursor`), not this panel's,
+ * because §11's queue verbs are keyboard verbs first: they have to work
+ * whether or not this panel happens to be open, and a click and a keypress
+ * must be the same act on the same selection. So every button below calls
+ * the same cursor method the registered binding does — and the panel adds
+ * only the two bindings that need something it owns: the arrows (a listbox's
+ * expected keys) and `d`, which denies with the reason typed into the
+ * highlighted row.
  *
- *   - `j` / `ArrowDown` — move the highlight to the next row (clamped, not
- *     wrapping — see `moveQueueSelection`)
- *   - `k` / `ArrowUp` — move the highlight to the previous row
- *   - `Enter` — navigate to the highlighted row's target (the same act as
- *     clicking its own button; the queue is a lens, §5)
- *   - `1`–`9` — on a highlighted `question` row, answer with the Nth
- *     option (1-indexed)
- *   - `a` — on a highlighted `approval` row, approve once
- *   - `d` — on a highlighted `approval` row, deny using whatever reason
- *     is currently typed into its row (a deny with no reason is refused
- *     server-side, §6.6 — "declining is feedback... never a bare
- *     refusal" — so the binding is a no-op until one is typed, same as
- *     the row's own deny button being disabled)
- *
- * A full shortcuts overlay (§11: "every binding appears in a shortcuts
- * overlay") does not exist anywhere in this codebase yet — a pre-existing
- * gap this panel does not close on its own — so these bindings are
- * documented here, in code, until that surface is built.
+ * Announced (§11): a listbox with `aria-activedescendant` naming the
+ * highlighted row, so the highlight is announced and not merely drawn, and
+ * `data-key-scope="queue"` so the queue's own keys are live exactly while it
+ * has focus.
  *
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
  */
 
-import { useEffect, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { APPROVAL_ANSWER_OPTIONS } from "@plotroom/core";
 
-import { moveQueueSelection, rankAttentionItems } from "./queue.js";
-import type {
-  AttentionDataSource,
-  AttentionItem,
-  TriageActionInput,
-} from "./types.js";
+import type { KeyBinding } from "../keyboard/bindings.js";
+import { useKeyBindings } from "../keyboard/use-key-bindings.js";
+import type { AttentionQueueCursor } from "./use-queue-cursor.js";
+import type { AttentionItem } from "./types.js";
 
 export interface QueuePanelProps {
-  readonly dataSource: AttentionDataSource;
-  /** Selection-as-route (§5): the host's `select()`, the one navigation primitive. */
-  readonly onNavigate: (nodeId: string) => void;
-  /** Injectable so triage timestamps are testable without a real clock. */
-  readonly now?: () => number;
-  readonly triageAuthor?: TriageActionInput["by"];
+  /** The host's cursor — one queue selection, shared with the bindings. */
+  readonly cursor: AttentionQueueCursor;
 }
-
-const DEFAULT_SNOOZE_SECONDS = 60 * 60; // an hour: "bring it back later" (§4.5), not gone forever
 
 function feedBadge(feed: AttentionItem["feed"]): string {
   switch (feed) {
@@ -77,130 +59,86 @@ function feedBadge(feed: AttentionItem["feed"]): string {
   }
 }
 
-export function QueuePanel({
-  dataSource,
-  onNavigate,
-  now = () => Math.floor(Date.now() / 1000),
-  triageAuthor,
-}: QueuePanelProps) {
-  const [items, setItems] = useState<readonly AttentionItem[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+export function QueuePanel({ cursor }: QueuePanelProps) {
   // A deny needs a reason (§6.6: "declining is feedback... never a bare
   // refusal") — typed per row, keyed by item id, so several approval rows
   // never clobber each other's draft.
   const [denyReasons, setDenyReasons] = useState<Record<string, string>>({});
 
-  useEffect(() => {
-    const unsubscribe = dataSource.subscribe((next) => {
-      setItems(next);
-      setSelectedId((current) =>
-        current !== null && next.some((item) => item.id === current)
-          ? current
-          : (next[0]?.id ?? null),
-      );
-    });
-    return unsubscribe;
-  }, [dataSource]);
+  const cursorRef = useRef(cursor);
+  cursorRef.current = cursor;
+  const denyReasonsRef = useRef(denyReasons);
+  denyReasonsRef.current = denyReasons;
 
-  // A data source is expected to already apply triage before emitting
-  // (`createFixtureAttentionDataSource` does, and a live one will too, per
-  // `types.ts`'s NORMATIVE rule: hiding a muted or currently-snoozed item
-  // is the source's job) — this only ranks what it was given, over
-  // `rankAttentionItems`, never re-filters against a ledger it has no real
-  // copy of.
-  const ranked = rankAttentionItems(items);
+  const bindings = useMemo<readonly KeyBinding[]>(
+    () => [
+      {
+        kind: "dispatched",
+        id: "queue-move-arrows",
+        chords: [{ key: "ArrowDown" }, { key: "ArrowUp" }],
+        keysLabel: "↓ / ↑",
+        label: "move through the attention queue",
+        description:
+          "moves the highlight while the queue has focus — the same act as J/K",
+        scope: "queue",
+        run: (_event, chord) =>
+          cursorRef.current.move(chord.key === "ArrowDown" ? "next" : "prev"),
+      },
+      {
+        kind: "dispatched",
+        id: "queue-navigate",
+        chords: [{ key: "Enter" }],
+        label: "go to the highlighted item",
+        description:
+          "moves the canvas to the highlighted row's node (the queue is a lens)",
+        scope: "queue",
+        run: () => cursorRef.current.navigate(),
+      },
+      {
+        kind: "dispatched",
+        id: "queue-deny",
+        chords: [{ key: "d" }],
+        label: "deny the highlighted approval",
+        description:
+          "denies with the reason typed in that row; a bare refusal is refused (§6.6)",
+        scope: "queue",
+        run: () => {
+          const id = cursorRef.current.selectedId;
+          if (id === null) return;
+          cursorRef.current.deny(denyReasonsRef.current[id] ?? "");
+        },
+      },
+    ],
+    [],
+  );
+  useKeyBindings(bindings);
 
-  function move(direction: "next" | "prev"): void {
-    setSelectedId((current) => moveQueueSelection(ranked, current, direction));
-  }
-
-  function select(item: AttentionItem): void {
-    setSelectedId(item.id);
-    onNavigate(item.target.nodeId);
-  }
-
-  function triageInput(): TriageActionInput {
-    return { at: now(), by: triageAuthor ?? { kind: "human" } };
-  }
-
-  function onKeyDown(event: React.KeyboardEvent): void {
-    if (event.key === "j" || event.key === "ArrowDown") {
-      event.preventDefault();
-      move("next");
-      return;
-    }
-    if (event.key === "k" || event.key === "ArrowUp") {
-      event.preventDefault();
-      move("prev");
-      return;
-    }
-
-    const highlighted = ranked.find((item) => item.id === selectedId);
-    if (!highlighted) return;
-
-    if (event.key === "Enter") {
-      event.preventDefault();
-      select(highlighted);
-      return;
-    }
-
-    if (highlighted.payload.kind === "question") {
-      const index = Number(event.key) - 1;
-      const option = highlighted.payload.options[index];
-      if (Number.isInteger(index) && index >= 0 && option !== undefined) {
-        event.preventDefault();
-        void dataSource.answerQuestion(
-          highlighted.id,
-          option.id,
-          triageInput(),
-        );
-        return;
-      }
-    }
-
-    if (highlighted.payload.kind === "approval") {
-      if (event.key === "a") {
-        event.preventDefault();
-        void dataSource.decideApproval(
-          highlighted.id,
-          "approve-once",
-          triageInput(),
-        );
-        return;
-      }
-      if (event.key === "d") {
-        const reason = denyReasons[highlighted.id]?.trim();
-        if (reason) {
-          event.preventDefault();
-          void dataSource.decideApproval(
-            highlighted.id,
-            "deny",
-            triageInput(),
-            reason,
-          );
-        }
-        return;
-      }
-    }
-  }
+  const activeOptionId =
+    cursor.selectedId === null
+      ? undefined
+      : `queue-option-${cursor.selectedId}`;
 
   return (
     <ul
       data-testid="attention-queue"
+      data-key-scope="queue"
       role="listbox"
       aria-label="attention queue"
       tabIndex={0}
-      onKeyDown={onKeyDown}
+      {...(activeOptionId === undefined
+        ? {}
+        : { "aria-activedescendant": activeOptionId })}
     >
-      {ranked.length === 0 ? <li>nothing needs attention</li> : null}
-      {ranked.map((item) => (
+      {cursor.items.length === 0 ? <li>nothing needs attention</li> : null}
+      {cursor.items.map((item) => (
         <li
           key={item.id}
+          id={`queue-option-${item.id}`}
           data-testid={`queue-row-${item.id}`}
           role="option"
-          aria-selected={item.id === selectedId}
+          aria-selected={item.id === cursor.selectedId}
         >
-          <button type="button" onClick={() => select(item)}>
+          <button type="button" onClick={() => cursor.navigate(item.id)}>
             [{feedBadge(item.feed)}] {item.summary}
           </button>
 
@@ -210,13 +148,7 @@ export function QueuePanel({
                 <button
                   key={option.id}
                   type="button"
-                  onClick={() =>
-                    void dataSource.answerQuestion(
-                      item.id,
-                      option.id,
-                      triageInput(),
-                    )
-                  }
+                  onClick={() => cursor.answer(option.id, item.id)}
                 >
                   {option.label}
                 </button>
@@ -244,12 +176,7 @@ export function QueuePanel({
                       type="button"
                       disabled={!denyReasons[item.id]?.trim()}
                       onClick={() =>
-                        void dataSource.decideApproval(
-                          item.id,
-                          option.decision,
-                          triageInput(),
-                          denyReasons[item.id]?.trim(),
-                        )
+                        cursor.deny(denyReasons[item.id] ?? "", item.id)
                       }
                     >
                       {option.label}
@@ -259,13 +186,7 @@ export function QueuePanel({
                   <button
                     key={option.decision}
                     type="button"
-                    onClick={() =>
-                      void dataSource.decideApproval(
-                        item.id,
-                        option.decision,
-                        triageInput(),
-                      )
-                    }
+                    onClick={() => cursor.approve(item.id)}
                   >
                     {option.label}
                   </button>
@@ -274,27 +195,13 @@ export function QueuePanel({
             </span>
           ) : null}
 
-          <button
-            type="button"
-            onClick={() => void dataSource.acknowledge(item.id, triageInput())}
-          >
+          <button type="button" onClick={() => cursor.acknowledge(item.id)}>
             acknowledge
           </button>
-          <button
-            type="button"
-            onClick={() =>
-              void dataSource.snooze(item.id, {
-                ...triageInput(),
-                snoozedUntil: now() + DEFAULT_SNOOZE_SECONDS,
-              })
-            }
-          >
+          <button type="button" onClick={() => cursor.snooze(item.id)}>
             snooze
           </button>
-          <button
-            type="button"
-            onClick={() => void dataSource.mute(item.id, triageInput())}
-          >
+          <button type="button" onClick={() => cursor.mute(item.id)}>
             mute
           </button>
         </li>

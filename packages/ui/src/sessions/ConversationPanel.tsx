@@ -18,12 +18,19 @@
  * through the same durable-store seam `placement/store.ts` established,
  * unaffected by whether sending is wired.
  *
+ * Streaming is announced on **start and completion, never per token** (§11,
+ * Epic 8.1): the transcript arrives an observation at a time, so a live region
+ * fed by the transcript itself would read every fragment aloud. The rule is a
+ * fold over what the session currently is (`nextStreamAnnouncement`) — one
+ * announcement when a turn starts streaming, one when it finishes — and the
+ * transcript itself is *not* a live region.
+ *
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
  * `<details>`/`<summary>` supplies collapsible mechanics for tool calls with
  * no styling decision involved.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SessionId, Transcript, TranscriptExport } from "@plotroom/core";
 import { restoreReleased } from "@plotroom/core";
 
@@ -33,6 +40,12 @@ import type {
   SessionDetail,
 } from "./data-source.js";
 import type { SessionDraftsStore } from "./drafts.js";
+import type { StreamAnnouncementState } from "../keyboard/announce.js";
+import {
+  EMPTY_STREAM_ANNOUNCEMENT_STATE,
+  nextStreamAnnouncement,
+} from "../keyboard/announce.js";
+import { LiveRegion } from "../keyboard/LiveRegion.js";
 import { exportIncompleteMessage, exportTranscriptAsync } from "./export.js";
 import { buildTranscriptView } from "./transcript-view.js";
 import type { TranscriptViewItem } from "./transcript-view.js";
@@ -248,6 +261,30 @@ export function ConversationPanel({
     };
   }, [sessionId, dataSource, draftsStore]);
 
+  // Streaming announced on start and completion only (§11). `busy` is the
+  // session's own derived fact (§3.6, never agent-reported), and the turn
+  // count identifies *which* stream — so a new turn announces again, and the
+  // dozens of observations inside one turn announce nothing at all.
+  const [streamAnnouncement, setStreamAnnouncement] = useState<string | null>(
+    null,
+  );
+  const streamStateRef = useRef<StreamAnnouncementState>(
+    EMPTY_STREAM_ANNOUNCEMENT_STATE,
+  );
+  const busy = detail?.status.facts.busy ?? false;
+  const turnCount = transcript.turns.length;
+  useEffect(() => {
+    const result = nextStreamAnnouncement(
+      streamStateRef.current,
+      { streaming: busy, streamId: `${sessionId}:${turnCount}` },
+      "response",
+    );
+    streamStateRef.current = result.state;
+    if (result.announcement) {
+      setStreamAnnouncement(result.announcement.message);
+    }
+  }, [busy, sessionId, turnCount]);
+
   const turns = buildTranscriptView(transcript);
   // Bounded rendering (§6.1 mechanics, Epic 5.1 finish): a live tail window
   // of turns, not the whole history — "load earlier turns" grows it one
@@ -347,6 +384,14 @@ export function ConversationPanel({
         ) : null}
       </div>
 
+      {/* Start and completion, never per token (§11) — the transcript below
+          is deliberately not a live region. */}
+      <LiveRegion
+        message={streamAnnouncement}
+        label="session streaming"
+        testId="stream-announcement"
+      />
+
       <div>
         {hasEarlierTurns(turnWindow) ? (
           <button type="button" onClick={handleLoadEarlierTurns}>
@@ -356,7 +401,7 @@ export function ConversationPanel({
         {windowedTurns.map((turn) => (
           <div key={turn.ordinal}>
             <div>turn {turn.ordinal}</div>
-            <ul>
+            <ul aria-label={`turn ${turn.ordinal} entries`}>
               {turn.items.map((item, index) => (
                 <li key={index}>
                   {item.kind === "reasoning" ? (

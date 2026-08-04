@@ -10,12 +10,21 @@
  * rule: `stopScope` is called with `confirm: false` first, and a
  * `confirmation_required` refusal is what turns this into a two-step
  * gesture — the server's own gate, not a guess repeated here.
+ *
+ * The confirmation is a dialog (§11, Epic 8.1): it traps focus so the
+ * confirm/cancel choice cannot be Tab-walked past, restores focus to the stop
+ * button that raised it, and its Escape is a registered binding — so the
+ * widest-scope stop is never confirmed by a keypress meant for something
+ * behind it.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { StopPreview, StopScopeInput } from "../data-source/actions.js";
 import type { ActionResult } from "../data-source/actions.js";
+import type { KeyBinding } from "../keyboard/bindings.js";
+import { useFocusTrap } from "../keyboard/use-focus-trap.js";
+import { useKeyBindings } from "../keyboard/use-key-bindings.js";
 
 export interface StopControlsProps {
   /** Null when nothing is selected — the session-scope button disables honestly. */
@@ -34,6 +43,57 @@ export interface StopControlsProps {
 }
 
 type ScopeKind = StopScopeInput["scope"];
+
+/** The widest-scope confirmation (§6.7), as a focus-trapping dialog (§11). */
+function StopConfirmation({
+  description,
+  onConfirm,
+  onCancel,
+}: {
+  readonly description: string;
+  readonly onConfirm: () => void;
+  readonly onCancel: () => void;
+}) {
+  const containerRef = useFocusTrap<HTMLDivElement>(true);
+  const cancelRef = useRef(onCancel);
+  cancelRef.current = onCancel;
+  const bindings = useMemo<readonly KeyBinding[]>(
+    () => [
+      {
+        kind: "dispatched",
+        id: "stop-confirm-cancel",
+        chords: [{ key: "Escape" }],
+        label: "cancel the stop confirmation",
+        description: "dismisses the confirmation, stopping nothing",
+        scope: "dialog",
+        surface: "stop-confirm",
+        run: () => cancelRef.current(),
+      },
+    ],
+    [],
+  );
+  useKeyBindings(bindings);
+
+  return (
+    <div
+      ref={containerRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="confirm this stop"
+      data-key-scope="dialog:stop-confirm"
+      data-testid="stop-confirm"
+      tabIndex={-1}
+    >
+      <div>{description}</div>
+      <button type="button" data-testid="stop-confirm-yes" onClick={onConfirm}>
+        confirm
+      </button>
+      <button type="button" onClick={onCancel}>
+        cancel
+      </button>
+    </div>
+  );
+}
 
 function scopeFor(
   kind: ScopeKind,
@@ -136,19 +196,11 @@ export function StopControls({
       <StopButton kind="workstream" label="stop this workstream" />
       <StopButton kind="everything" label="stop everything running" />
       {pendingConfirm ? (
-        <div data-testid="stop-confirm">
-          <div>{pendingConfirm.description}</div>
-          <button
-            type="button"
-            data-testid="stop-confirm-yes"
-            onClick={() => void attemptStop(pendingConfirm.scope, true)}
-          >
-            confirm
-          </button>
-          <button type="button" onClick={() => setPendingConfirm(null)}>
-            cancel
-          </button>
-        </div>
+        <StopConfirmation
+          description={pendingConfirm.description}
+          onConfirm={() => void attemptStop(pendingConfirm.scope, true)}
+          onCancel={() => setPendingConfirm(null)}
+        />
       ) : null}
     </div>
   );

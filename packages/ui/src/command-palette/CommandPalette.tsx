@@ -1,19 +1,37 @@
 /**
  * The command palette (spec §11): one keyboard entry point for navigation
- * and every verb. Cmd/Ctrl+K opens it from anywhere; Escape closes it; arrow
- * keys move the highlighted row; Enter activates it. Navigation always goes
- * through `onSelectNode` — the one navigation primitive (§5) shared with the
- * canvas click and the attention queue.
+ * and every verb. Navigation always goes through `onSelectNode` — the one
+ * navigation primitive (§5) shared with the canvas click and the attention
+ * queue.
+ *
+ * Every key it answers to is a **registered binding** (Epic 8.1): its own
+ * Mod+K toggle, Escape, the arrows, Enter. This component installs no
+ * keyboard listener of its own — the app has exactly one (`useKeyBinding
+ * Dispatch`) — so the shortcuts overlay lists the palette's keys because
+ * they are the same objects the dispatcher runs, not because someone wrote
+ * them down twice. The dialog bindings are registered whether or not the
+ * palette is open (they are scoped to its own surface, `scope.ts`), which is
+ * what lets the overlay document them while it is closed.
+ *
+ * Accessibility (§11): a real combobox — `aria-expanded`, `aria-controls`,
+ * and `aria-activedescendant` naming the highlighted option, so the
+ * highlight is announced rather than merely drawn — over a listbox whose
+ * rows are `role="option"`. Focus is trapped while open and restored to
+ * whatever had it when it closes (`useFocusTrap`).
  *
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
- * An accessible listbox (aria roles, announced state) is Epic 8.1's job; this
- * uses the right roles now so that epic is additive, not a rewrite.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
+import type { KeyBinding } from "../keyboard/bindings.js";
+import { useFocusTrap } from "../keyboard/use-focus-trap.js";
+import { useKeyBindings } from "../keyboard/use-key-bindings.js";
 import type { CommandPaletteItem } from "./model.js";
 import { filterCommandPaletteItems } from "./model.js";
+
+/** The palette's own surface name, for `data-key-scope="dialog:…"`. */
+const SURFACE = "command-palette";
 
 export interface CommandPaletteProps {
   readonly items: readonly CommandPaletteItem[];
@@ -29,11 +47,15 @@ export function CommandPalette({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useFocusTrap<HTMLDivElement>(open);
 
   const filtered = filterCommandPaletteItems(items, query);
 
-  function activate(item: CommandPaletteItem) {
+  /**
+   * Activating a row is one function, called by the click and by the Enter
+   * binding alike — never two paths that agree by coincidence (principle 8).
+   */
+  function activateItem(item: CommandPaletteItem): void {
     if (item.kind === "navigate" && item.nodeId) {
       onSelectNode(item.nodeId);
     } else {
@@ -44,66 +66,135 @@ export function CommandPalette({
     setActiveIndex(0);
   }
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const isToggle =
-        (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
-      if (isToggle) {
-        event.preventDefault();
-        setOpen((current) => !current);
-        return;
-      }
-      if (!open) return;
+  // The Enter binding acts on whatever is on screen *now*, so it reads the
+  // filtered rows, the highlight, and the activation function through refs
+  // rather than re-registering the whole set on every keystroke.
+  const filteredRef = useRef(filtered);
+  filteredRef.current = filtered;
+  const activeIndexRef = useRef(activeIndex);
+  activeIndexRef.current = activeIndex;
+  const activateRef = useRef(activateItem);
+  activateRef.current = activateItem;
 
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setOpen(false);
-      } else if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setActiveIndex((current) =>
-          filtered.length === 0 ? 0 : (current + 1) % filtered.length,
-        );
-      } else if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setActiveIndex((current) =>
-          filtered.length === 0
-            ? 0
-            : (current - 1 + filtered.length) % filtered.length,
-        );
-      } else if (event.key === "Enter") {
-        event.preventDefault();
-        const item = filtered[activeIndex];
-        if (item) activate(item);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, filtered, activeIndex]);
+  const bindings = useMemo<readonly KeyBinding[]>(() => {
+    function move(delta: number): void {
+      const count = filteredRef.current.length;
+      setActiveIndex((current) =>
+        count === 0 ? 0 : (current + delta + count) % count,
+      );
+    }
+    return [
+      {
+        kind: "dispatched",
+        id: "command-palette-open",
+        chords: [{ key: "k", mod: true }],
+        label: "open the command palette",
+        description:
+          "opens the one keyboard entry point for navigation and every verb",
+        scope: "global",
+        allowInTextEntry: true,
+        run: () => setOpen(true),
+      },
+      {
+        kind: "dispatched",
+        id: "command-palette-close",
+        chords: [{ key: "Escape" }, { key: "k", mod: true }],
+        keysLabel: "Escape",
+        label: "close the command palette",
+        description: "closes the palette and returns focus where it was",
+        scope: "dialog",
+        surface: SURFACE,
+        allowInTextEntry: true,
+        run: () => setOpen(false),
+      },
+      {
+        kind: "dispatched",
+        id: "command-palette-next",
+        chords: [{ key: "ArrowDown" }],
+        label: "highlight the next palette row",
+        description: "moves the palette's highlight down, wrapping at the end",
+        scope: "dialog",
+        surface: SURFACE,
+        allowInTextEntry: true,
+        run: () => move(1),
+      },
+      {
+        kind: "dispatched",
+        id: "command-palette-prev",
+        chords: [{ key: "ArrowUp" }],
+        label: "highlight the previous palette row",
+        description: "moves the palette's highlight up, wrapping at the start",
+        scope: "dialog",
+        surface: SURFACE,
+        allowInTextEntry: true,
+        run: () => move(-1),
+      },
+      {
+        kind: "dispatched",
+        id: "command-palette-activate",
+        chords: [{ key: "Enter" }],
+        label: "run the highlighted palette row",
+        description:
+          "navigates to the highlighted node, or runs the highlighted verb",
+        scope: "dialog",
+        surface: SURFACE,
+        allowInTextEntry: true,
+        run: () => {
+          const item = filteredRef.current[activeIndexRef.current];
+          if (item) activateRef.current(item);
+        },
+      },
+    ];
+  }, []);
 
-  useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
+  useKeyBindings(bindings);
 
   if (!open) return null;
 
+  const activeOptionId = filtered[activeIndex]
+    ? `command-palette-option-${filtered[activeIndex]?.id}`
+    : undefined;
+
   return (
-    <div role="dialog" aria-label="command palette">
+    <div
+      ref={containerRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="command palette"
+      data-key-scope={`dialog:${SURFACE}`}
+      data-testid="command-palette"
+      tabIndex={-1}
+    >
       <input
-        ref={inputRef}
         role="combobox"
+        aria-label="command palette query"
         aria-expanded
         aria-controls="command-palette-listbox"
+        aria-autocomplete="list"
+        {...(activeOptionId === undefined
+          ? {}
+          : { "aria-activedescendant": activeOptionId })}
         value={query}
         onChange={(event) => {
           setQuery(event.target.value);
           setActiveIndex(0);
         }}
       />
-      <ul id="command-palette-listbox" role="listbox">
+      <ul
+        id="command-palette-listbox"
+        role="listbox"
+        aria-label="command palette results"
+      >
         {filtered.map((item, index) => (
-          <li key={item.id} role="option" aria-selected={index === activeIndex}>
-            <button type="button" onClick={() => activate(item)}>
+          <li
+            key={item.id}
+            id={`command-palette-option-${item.id}`}
+            role="option"
+            aria-selected={index === activeIndex}
+          >
+            <button type="button" onClick={() => activateItem(item)}>
               {item.label}
+              {item.keys === undefined ? "" : ` (${item.keys})`}
             </button>
           </li>
         ))}

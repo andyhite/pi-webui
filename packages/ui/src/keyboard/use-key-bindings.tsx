@@ -26,7 +26,7 @@ import type {
   KeyEventLike,
 } from "./bindings.js";
 import { createKeyBindingRegistry } from "./bindings.js";
-import { activeScopes, scopeChainFromElement } from "./scope.js";
+import { resolveKeyContext, scopeChainFromElement } from "./scope.js";
 
 /**
  * A process-wide fallback registry, so a component that registers bindings
@@ -108,10 +108,10 @@ export function useKeyBindingDispatch(): void {
       const target =
         event.target instanceof Element ? event.target : document.body;
       const chain = scopeChainFromElement(target);
-      registryRef.current.dispatch(event as KeyEventLike, {
-        scopes: activeScopes(chain),
-        inTextEntry: chain?.textEntry === true,
-      });
+      registryRef.current.dispatch(
+        event as KeyEventLike,
+        resolveKeyContext(chain),
+      );
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);

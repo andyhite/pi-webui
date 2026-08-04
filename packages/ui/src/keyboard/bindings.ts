@@ -86,9 +86,18 @@ interface BindingBase {
   readonly description: string;
   readonly scope: KeyScope;
   /**
+   * Which surface inside that scope, when the scope holds more than one:
+   * every dialog wants Escape and every keyboard-navigable list wants the
+   * arrows, and they must mean *that* surface's version. Declared in the DOM
+   * as `data-key-scope="dialog:command-palette"` (`scope.ts`). Omitted: live
+   * for every surface in the scope.
+   */
+  readonly surface?: string;
+  /**
    * Live while a text field has focus. Off by default — a single-letter verb
    * binding must never eat a character being typed — and on for the few keys
-   * that mean the same thing everywhere (Escape, the palette's own toggle).
+   * that mean the same thing everywhere (Escape, the palette's own toggle,
+   * anything in a dialog whose focus lives in its own input).
    */
   readonly allowInTextEntry?: boolean;
 }
@@ -120,8 +129,10 @@ export interface KeyEventLike {
 }
 
 export interface DispatchContext {
-  /** Active scopes, innermost first (`activeScopes` in `scope.ts`). */
+  /** Active scopes, innermost first (`resolveKeyContext` in `scope.ts`). */
   readonly scopes: readonly KeyScope[];
+  /** Active surface names, from the same `data-key-scope` declarations. */
+  readonly surfaces?: readonly string[];
   /** True when focus is in an input/textarea/contenteditable. */
   readonly inTextEntry: boolean;
 }
@@ -190,9 +201,16 @@ export function matchBinding(
   const scopes = KEY_SCOPE_PRECEDENCE.filter((scope) =>
     context.scopes.includes(scope),
   );
+  const surfaces = context.surfaces ?? [];
   for (const scope of scopes) {
     for (const binding of bindings) {
       if (binding.scope !== scope) continue;
+      if (
+        binding.surface !== undefined &&
+        !surfaces.includes(binding.surface)
+      ) {
+        continue;
+      }
       if (context.inTextEntry && binding.allowInTextEntry !== true) continue;
       const chord = binding.chords.find((candidate) =>
         eventMatchesChord(event, candidate),
@@ -269,6 +287,9 @@ export function createKeyBindingRegistry(): KeyBindingRegistry {
       }
       for (const other of bindings.values()) {
         if (other.scope !== binding.scope) continue;
+        // Two surfaces in one scope (two dialogs, two lists) legitimately
+        // want the same key: only a clash *within* one surface shadows.
+        if (other.surface !== binding.surface) continue;
         const clash = binding.chords.find((chord) =>
           other.chords.some(
             (candidate) =>

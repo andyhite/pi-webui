@@ -7,6 +7,12 @@
  * `panelStates` survives untouched, so reopening it hands the same state
  * right back.
  *
+ * Accessibility (§11, Epic 8.1): the rail is a labelled `nav` of toggle
+ * buttons — `aria-pressed` for which one is open and `aria-controls`/
+ * `aria-expanded` naming the region each opens — and the open panel's region
+ * is focusable, so a keyboard reaches the panel it just opened rather than
+ * Tab-walking the whole rail again.
+ *
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
  */
 
@@ -34,12 +40,14 @@ export function DockRail({ registry }: DockRailProps) {
 
   return (
     <div>
-      <nav>
+      <nav aria-label="panels">
         {panels.map((panel) => (
           <button
             key={panel.id}
             type="button"
             aria-pressed={panel.id === openPanelId}
+            aria-expanded={panel.id === openPanelId}
+            aria-controls={`panel-region-${panel.id}`}
             onClick={() =>
               setOpenPanelId((current) => nextOpenPanelId(current, panel.id))
             }
@@ -49,7 +57,12 @@ export function DockRail({ registry }: DockRailProps) {
         ))}
       </nav>
       {openPanel ? (
-        <div role="region" aria-label={openPanel.title}>
+        <div
+          id={`panel-region-${openPanel.id}`}
+          role="region"
+          aria-label={openPanel.title}
+          tabIndex={-1}
+        >
           {openPanel.render({
             state: panelStates[openPanel.id] ?? openPanel.initialState,
             setState: (next) =>

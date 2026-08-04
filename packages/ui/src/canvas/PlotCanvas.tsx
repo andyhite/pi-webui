@@ -67,7 +67,12 @@ import {
   legalCreateMenuOptions,
 } from "../legality/create-menu.js";
 import type { CreateMenuOption } from "../legality/create-menu.js";
+import type { KeyBinding } from "../keyboard/bindings.js";
+import { useFocusTrap } from "../keyboard/use-focus-trap.js";
+import { useKeyBindings } from "../keyboard/use-key-bindings.js";
+import { LiveRegion } from "../keyboard/LiveRegion.js";
 import { createUndoStack } from "../undo/stack.js";
+import { focusedCanvasNodeId } from "./focused-node.js";
 import {
   addTombstones,
   clearTombstones,
@@ -572,7 +577,15 @@ function AttentionMarkers({
   );
 }
 
-/** Drag-to-empty-canvas create menu, filtered to legal targets (spec §5). */
+/**
+ * Drag-to-empty-canvas create menu, filtered to legal targets (spec §5).
+ *
+ * A dialog like any other (§11, Epic 8.1): focus moves into it on open,
+ * cycles inside it, and returns to whatever had it when it closes
+ * (`useFocusTrap`); `data-key-scope="dialog:create-menu"` keeps the canvas's
+ * own keys from firing behind it, and its Escape is a registered binding so
+ * the shortcuts overlay lists it.
+ */
 function CreateMenu({
   position,
   options,
@@ -584,8 +597,36 @@ function CreateMenu({
   onPick: (option: CreateMenuOption) => void;
   onDismiss: () => void;
 }) {
+  const containerRef = useFocusTrap<HTMLDivElement>(true);
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
+  const bindings = useMemo<readonly KeyBinding[]>(
+    () => [
+      {
+        kind: "dispatched",
+        id: "create-menu-dismiss",
+        chords: [{ key: "Escape" }],
+        label: "dismiss the create menu",
+        description:
+          "closes the menu a drag to empty canvas opened, creating nothing",
+        scope: "dialog",
+        surface: "create-menu",
+        run: () => dismissRef.current(),
+      },
+    ],
+    [],
+  );
+  useKeyBindings(bindings);
+
   return (
     <div
+      ref={containerRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="create from this connection"
+      data-key-scope="dialog:create-menu"
+      data-testid="create-menu"
+      tabIndex={-1}
       style={{
         position: "absolute",
         zIndex: 10,
@@ -596,11 +637,11 @@ function CreateMenu({
       }}
     >
       {options.length === 0 ? (
-        <div>nothing here can legally receive that</div>
+        <div role="status">nothing here can legally receive that</div>
       ) : (
-        <ul>
+        <ul role="listbox" aria-label="what this connection can legally create">
           {options.map((option) => (
-            <li key={option.kind}>
+            <li key={option.kind} role="option" aria-selected={false}>
               <button type="button" onClick={() => onPick(option)}>
                 {option.kind}
               </button>
@@ -639,6 +680,9 @@ function toBoxNode(
   return {
     id: input.id,
     type: "box" as const,
+    // Tab traversal must announce what it landed on (§11): xyflow already
+    // makes every node wrapper tabbable, and this is what it reads out.
+    ariaLabel: `${input.role}: ${input.label}`,
     position: ctx.placements[input.id] ?? input.defaultPosition,
     ...(input.containerId
       ? { parentId: input.containerId, extent: "parent" as const }
@@ -760,6 +804,7 @@ function CanvasInner({
     const containerNodes: ContainerNode[] = containers.map((container) => ({
       id: container.id,
       type: "container" as const,
+      ariaLabel: `workstream: ${container.label}`,
       position: effectivePlacements[container.id] ?? container.defaultPosition,
       style: { width: CONTAINER_WIDTH, height: CONTAINER_HEIGHT },
       data: {
@@ -900,6 +945,7 @@ function CanvasInner({
       ).map((container) => ({
         id: container.id,
         type: "container" as const,
+        ariaLabel: `workstream: ${container.label}`,
         position:
           effectivePlacements[container.id] ?? container.defaultPosition,
         style: { width: CONTAINER_WIDTH, height: CONTAINER_HEIGHT },
@@ -1394,29 +1440,163 @@ function CanvasInner({
     [setNodes, setEdges],
   );
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const isUndo =
-        (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z";
-      if (!isUndo) return;
+  /**
+   * Keyboard wiring (§11's "every interactive surface is keyboard-reachable",
+   * Epic 8.1): the drag gesture's equivalent, in two presses. `W` on a
+   * focused node marks it as the source; `W` on another node completes the
+   * wire. It is the **same** act as the drag, not a parallel one — the same
+   * `checkConnection` predicate refuses it (§3.7, principle 8), the same
+   * `onWireContext` authors it, and the same local edge is drawn — so a
+   * keyboard user cannot create something a mouse user could not, or vice
+   * versa. A refusal is announced with the predicate's own reason rather
+   * than silently doing nothing, which is the keyboard's version of "an
+   * illegal connection never looks legal".
+   */
+  const [pendingWireSourceId, setPendingWireSourceId] = useState<string | null>(
+    null,
+  );
+  const [keyboardAnnouncement, setKeyboardAnnouncement] = useState<
+    string | null
+  >(null);
 
-      // N2: a global listener must not hijack native undo inside a text
-      // field (e.g. the note editor's textarea) — only the canvas's own
-      // undo binds here.
-      const target = event.target;
-      const isTextEditingTarget =
-        target instanceof HTMLElement &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable);
-      if (isTextEditingTarget) return;
+  const wireByKeyboard = useCallback(
+    (targetId: string) => {
+      const sourceId = pendingWireSourceId;
+      if (sourceId === null) {
+        setPendingWireSourceId(targetId);
+        setKeyboardAnnouncement(
+          `wiring from ${targetId}: press W on the node to wire it into`,
+        );
+        return;
+      }
+      setPendingWireSourceId(null);
+      if (sourceId === targetId) {
+        setKeyboardAnnouncement("wiring cancelled: same node");
+        return;
+      }
+      const from = graphNodes.get(sourceId);
+      const to = graphNodes.get(targetId);
+      if (!from || !to) {
+        setKeyboardAnnouncement("wiring cancelled: node is no longer here");
+        return;
+      }
+      const check = checkConnection(from, to);
+      if (!check.legal) {
+        // The predicate's own reason, never a rephrasing of it (principle 8).
+        setKeyboardAnnouncement(`refused: ${check.refusal.message}`);
+        return;
+      }
+      setEdges((current) =>
+        addEdge(
+          {
+            source: sourceId,
+            target: targetId,
+            sourceHandle: null,
+            targetHandle: null,
+          },
+          current,
+        ),
+      );
+      onWireContext?.(sourceId, targetId);
+      setKeyboardAnnouncement(`wired ${sourceId} into ${targetId}`);
+    },
+    [graphNodes, onWireContext, pendingWireSourceId, setEdges],
+  );
 
-      event.preventDefault();
-      undoStack.current.undo(null);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  /**
+   * The canvas's bindings, registered rather than listened for (Epic 8.1):
+   * undo, route selection on the focused node, keyboard wiring — plus the
+   * keys xyflow itself implements, declared as `documented` so "every binding
+   * appears in the shortcuts overlay" (§11) stays true for them too, without
+   * pretending this file handles them.
+   */
+  const canvasBindings = useMemo<readonly KeyBinding[]>(
+    () => [
+      {
+        kind: "dispatched",
+        id: "canvas-undo",
+        chords: [{ key: "z", mod: true }],
+        label: "undo the last destructive canvas gesture",
+        description:
+          "restores what a delete removed, including when an agent deleted it (principle 10)",
+        scope: "global",
+        run: () => undoStack.current.undo(null),
+      },
+      {
+        kind: "dispatched",
+        id: "canvas-select-focused-node",
+        chords: [{ key: "Enter" }],
+        label: "select the focused node",
+        description:
+          "makes the focused node the selected one — selection is the route (§5)",
+        scope: "canvas",
+        // xyflow's own Enter toggles its multi-selection; this sets the
+        // route, exactly as a mouse click does both.
+        preventDefault: false,
+        run: () => {
+          const nodeId = focusedCanvasNodeId(
+            document.activeElement as HTMLElement | null,
+          );
+          if (nodeId) onSelectNode(nodeId);
+        },
+      },
+      {
+        kind: "dispatched",
+        id: "canvas-wire-context",
+        chords: [{ key: "w" }],
+        label: "wire context between two nodes",
+        description:
+          "press once on the source node and again on the target; refused by the same predicate a drag is",
+        scope: "canvas",
+        run: () => {
+          const nodeId = focusedCanvasNodeId(
+            document.activeElement as HTMLElement | null,
+          );
+          if (nodeId) wireByKeyboard(nodeId);
+        },
+      },
+      {
+        kind: "dispatched",
+        id: "canvas-cancel-wire",
+        chords: [{ key: "Escape" }],
+        label: "cancel a keyboard wiring in progress",
+        description: "forgets the marked source node, wiring nothing",
+        scope: "canvas",
+        preventDefault: false,
+        run: () => {
+          setPendingWireSourceId(null);
+          setKeyboardAnnouncement(null);
+        },
+      },
+      {
+        kind: "documented",
+        id: "canvas-delete-selection",
+        chords: [{ key: "Backspace" }, { key: "Delete" }],
+        label: "delete the selected nodes and edges",
+        description: "undoable with the undo binding above (principle 10)",
+        scope: "canvas",
+        implementedBy: "xyflow",
+      },
+      {
+        kind: "documented",
+        id: "canvas-nudge-selection",
+        chords: [
+          { key: "ArrowUp" },
+          { key: "ArrowDown" },
+          { key: "ArrowLeft" },
+          { key: "ArrowRight" },
+        ],
+        keysLabel: "↑ ↓ ← →",
+        label: "move the selected node",
+        description:
+          "nudges the selected node; Shift moves further. Pushes what it touches, like a drag",
+        scope: "canvas",
+        implementedBy: "xyflow",
+      },
+    ],
+    [onSelectNode, wireByKeyboard],
+  );
+  useKeyBindings(canvasBindings);
 
   // Palette drop onto empty canvas (§5): a palette row is a plain HTML5
   // drag source (`PaletteRail`), so the drop target only needs the standard
@@ -1445,6 +1625,10 @@ function CanvasInner({
   return (
     <div
       ref={containerRef}
+      // The canvas's own key scope (§11, Epic 8.1): the bindings above are
+      // live exactly while focus is inside the canvas — a node, the pane —
+      // and never while a panel or a dialog has it.
+      data-key-scope="canvas"
       style={{ width: "100%", height: "100%", position: "relative" }}
       onDragOver={onCanvasDragOver}
       onDrop={onCanvasDrop}
@@ -1487,6 +1671,15 @@ function CanvasInner({
         onAction={(action) => onBatchAction?.(action, selectedIds)}
       />
       <AttentionMarkers markers={attentionMarkers} />
+      {/* Keyboard gestures answer where a screen reader can hear them (§11):
+          a wiring in progress, and a refusal carrying the predicate's own
+          reason — the keyboard's equivalent of "an illegal connection never
+          looks legal" (§5). */}
+      <LiveRegion
+        message={keyboardAnnouncement}
+        label="canvas keyboard gestures"
+        testId="canvas-announcement"
+      />
       <BubbleLayer
         placements={bubblePlacements}
         onAnswerQuestion={onAnswerQuestion}

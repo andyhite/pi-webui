@@ -75,6 +75,7 @@ export * from "./attention/queue.js";
 export * from "./attention/notifications.js";
 export * from "./attention/surfaces.js";
 export * from "./attention/what-changed.js";
+export * from "./attention/use-queue-cursor.js";
 export * from "./attention/QueuePanel.js";
 export * from "./attention/WhatChangedPanel.js";
 export * from "./fleet/types.js";
