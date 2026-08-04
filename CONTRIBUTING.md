@@ -31,13 +31,19 @@ workspace builds, typechecks and tests normally. Install it from
 [bun.sh](https://bun.sh); point the server at a Bun kept elsewhere with
 `PLOTROOM_SESSION_HOST_BUN`.
 
-| Command       | Does                                      |
-| ------------- | ----------------------------------------- |
-| `pnpm verify` | everything CI checks — run before pushing |
-| `pnpm build`  | `tsc -b` across the project graph         |
-| `pnpm test`   | Vitest                                    |
-| `pnpm lint`   | ESLint                                    |
-| `pnpm format` | Prettier, writing changes                 |
+| Command        | Does                                                       |
+| -------------- | ---------------------------------------------------------- |
+| `pnpm verify`  | everything CI checks — run before pushing                  |
+| `pnpm build`   | `tsc -b` across the project graph                          |
+| `pnpm test`    | Vitest                                                     |
+| `pnpm lint`    | ESLint                                                     |
+| `pnpm format`  | Prettier, writing changes                                  |
+| `pnpm compile` | the session host as this platform's standalone binary, run |
+
+`pnpm compile` is not part of `verify`: it produces ~400MB (the binary plus the
+agent SDK's native addon staged beside it) for the platform it runs on, and only
+a packaged build needs it. It ends by running what it built, so a compile that
+succeeds is one whose artifact starts.
 
 Local hooks refuse commits on `main`, reject non-conforming branch names, and
 run commitlint on every message. CI repeats all of it and additionally rejects
