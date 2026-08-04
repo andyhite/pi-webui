@@ -71,6 +71,19 @@ export class SearchIndex {
       .run(refKind, refId);
   }
 
+  /**
+   * Whether this entity already has a row — the backfill's own idempotency
+   * check (§6.8, Epic 8.2): a boot-time sweep over every session asks this
+   * first, so a session already indexed costs one indexed lookup rather than
+   * a full re-derivation and re-write every time the process starts.
+   */
+  has(refKind: string, refId: string): boolean {
+    const row = this.state.sqlite
+      .prepare("SELECT 1 FROM search WHERE ref_kind = ? AND ref_id = ? LIMIT 1")
+      .get(refKind, refId);
+    return row !== undefined;
+  }
+
   query(match: string, options: SearchOptions = {}): SearchHit[] {
     const limit = options.limit ?? 25;
     const kinds = options.kinds ?? [];

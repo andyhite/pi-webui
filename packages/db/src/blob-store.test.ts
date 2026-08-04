@@ -206,6 +206,27 @@ describe("search (spec §6.8)", () => {
       0,
     );
   });
+
+  it("has() answers a backfill's own idempotency check", () => {
+    const search = new SearchIndex(state);
+
+    expect(search.has("session", "sess_1")).toBe(false);
+
+    search.index({
+      title: "a session",
+      location: "world",
+      body: "content",
+      kind: "session",
+      refKind: "session",
+      refId: "sess_1",
+    });
+
+    expect(search.has("session", "sess_1")).toBe(true);
+    expect(search.has("session", "sess_2")).toBe(false);
+
+    search.remove("session", "sess_1");
+    expect(search.has("session", "sess_1")).toBe(false);
+  });
 });
 
 describe("portability (spec §12)", () => {
