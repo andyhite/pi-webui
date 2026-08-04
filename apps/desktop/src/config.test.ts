@@ -25,4 +25,11 @@ describe("resolvePort", () => {
     expect(() => resolvePort({ PLOTROOM_PORT: "0" })).toThrow();
     expect(() => resolvePort({ PLOTROOM_PORT: "-1" })).toThrow();
   });
+
+  it("rejects a value above the last port, agreeing with the server's own bound", () => {
+    // `PORT_BOUND` in apps/server/src/config.ts refuses this too. A desktop that
+    // accepted a port the server refuses would spawn a backend that dies at boot.
+    expect(() => resolvePort({ PLOTROOM_PORT: "65536" })).toThrow();
+    expect(resolvePort({ PLOTROOM_PORT: "65535" })).toBe(65_535);
+  });
 });

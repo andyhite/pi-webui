@@ -23,7 +23,7 @@ describe("checkBound", () => {
     expect(checkBound(CONCURRENCY_LIMIT_BOUND, 1)).toBeNull();
     expect(checkBound(INTERVAL_SECONDS_BOUND, 0)).toBeNull();
     expect(checkBound(INTERVAL_SECONDS_BOUND, 2_147_483)).toBeNull();
-    expect(checkBound(PORT_BOUND, 0)).toBeNull();
+    expect(checkBound(PORT_BOUND, 1)).toBeNull();
     expect(checkBound(PORT_BOUND, 65_535)).toBeNull();
   });
 
@@ -35,6 +35,8 @@ describe("checkBound", () => {
       INTERVAL_SECONDS_BOUND.requirement,
     );
     expect(checkBound(PORT_BOUND, -5)).toBe(PORT_BOUND.requirement);
+    // Zero is a port a product cannot be reached at, not a convenience.
+    expect(checkBound(PORT_BOUND, 0)).toBe(PORT_BOUND.requirement);
   });
 
   it("refuses above the maximum where one exists, and nowhere else", () => {

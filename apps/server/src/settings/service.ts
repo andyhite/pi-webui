@@ -133,10 +133,11 @@ export class SettingsService {
     if (wrong !== null) throw badRequest(`"${entry.key}" must be ${wrong}`);
     const value = rawValue;
 
-    // Accepting a value clears any earlier ignore for this key: the process is
-    // about to run under what was just written.
-    this.#ignored.delete(key);
+    // Written first, then the ignore cleared: if the write itself fails, the
+    // earlier refusal is still the truth about what this process is running
+    // under, and a read must not start reporting the bad row as being in effect.
     this.deps.store.set(key, JSON.stringify(value));
+    this.#ignored.delete(key);
     this.deps.liveAppliers[key]?.(value);
     this.publish(entry, actor);
 

@@ -846,8 +846,12 @@ Decided (recorded as they were made):
   meant “every millisecond”. A stored value the catalog would refuse as a write is
   therefore **ignored and reported** at boot rather than applied — wrong type as
   well as out of bounds, judged by the one `checkSettingValue` the write path uses
-  — so no persisted value can make the process unusable, and the setting’s own read
-  carries the reason rather than reporting a value nothing is running under.
+  — so no persisted value **of the wrong type or outside its bound** can make the
+  process unusable, and the setting’s own read carries the reason rather than
+  reporting a value nothing is running under. A stored value that is legal and
+  still unbindable (a port already in use, a host this machine does not have) is
+  **not** covered by any bound and still fails at every boot; that needs a caught
+  listen error and a fallback, and is tracked as its own issue.
 - **The limit bounds initiation, not one endpoint.** `POST /api/runs` goes through
   the same admission as a scoped run: 201 with `{run, session, status}` when a slot
   was free, **202 with `{queued, run: null, session: null}`** when the gesture was

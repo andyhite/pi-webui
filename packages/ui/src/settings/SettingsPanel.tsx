@@ -155,6 +155,9 @@ export function SettingsPanel({ dataSource }: SettingsPanelProps) {
                   {row.label}
                 </button>
                 {row.overridden ? <span> (overridden)</span> : null}
+                {row.ignoredReason ? (
+                  <span> (stored value ignored)</span>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -171,6 +174,11 @@ export function SettingsPanel({ dataSource }: SettingsPanelProps) {
               : `restart required: ${selected.restartReason ?? "takes effect on the next start"}`}
           </div>
           {selected.envVar ? <div>env default: {selected.envVar}</div> : null}
+          {selected.ignoredReason ? (
+            <div data-testid="settings-ignored-reason">
+              stored value ignored: {selected.ignoredReason}
+            </div>
+          ) : null}
           <div data-testid="settings-current-value">
             current value:{" "}
             {selected.sensitive
@@ -226,7 +234,12 @@ export function SettingsPanel({ dataSource }: SettingsPanelProps) {
           <button
             type="button"
             data-testid="settings-remove-override"
-            disabled={!selected.overridden}
+            // An ignored row is not "overridden" — the process is running the
+            // default — but it is still a row, and removing it is the only way to
+            // clear it from a surface. Disabling this for one would have taken
+            // away the operator's way out of exactly the state the ignore exists
+            // to report.
+            disabled={!selected.overridden && !selected.ignoredReason}
             onClick={removeOverride}
           >
             remove override

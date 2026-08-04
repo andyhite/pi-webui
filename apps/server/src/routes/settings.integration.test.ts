@@ -195,12 +195,22 @@ describe("settings (§11, Epic 8.3)", () => {
       expect(refused.status, String(value)).toBe(400);
     }
 
-    // Zero is legal: it means "let the OS pick".
+    // Zero is refused too, and it is the interesting one: it binds an ephemeral
+    // port, so the server comes up somewhere nothing can find — the log says
+    // `0` and the desktop keeps probing 4600. "Let the OS pick" is not a thing
+    // an operator can want from a product they have to reach.
     const ephemeral = await harness.call("/settings/port", {
       method: "PUT",
       body: { value: 0 },
     });
-    expect(ephemeral.status).toBe(200);
+    expect(ephemeral.status).toBe(400);
+
+    // A real port is accepted, so this is a bound and not a refusal to be set.
+    const real = await harness.call("/settings/port", {
+      method: "PUT",
+      body: { value: 4700 },
+    });
+    expect(real.status).toBe(200);
   });
 
   it("refuses a stored value of the wrong type, not only one outside its bound", async () => {

@@ -223,6 +223,11 @@ export const DEFAULT_CONCURRENCY_LIMIT = 4;
  * the settings catalog points its numeric entries at it, and boot skips a stored
  * value that violates it (principle 8 — the rule has one statement).
  *
+ * `overrides` is deliberately *not* checked against these: it is the programmatic
+ * seam a test or an embedding caller passes values through directly, not a
+ * surface an operator reaches. The two paths an operator has — the environment
+ * and a settings write — are the ones a bound has to hold on.
+ *
  * `requirement` is written to complete the sentence "X must be …", so the
  * environment variable's message and the settings route's refusal say the same
  * thing about the same number without either restating it.
@@ -262,21 +267,27 @@ export const INTERVAL_SECONDS_BOUND: NumericBound = {
 };
 
 /**
- * A TCP port. Zero stays legal because it is meaningful — the OS picks a free
- * one — and 65535 is where ports end.
+ * A TCP port the operator must be able to reach.
  *
- * This bound exists because a stored port is the one setting that can make the
- * product **unbootable**: a persisted `-5` beats the environment variable, and
- * `serve()` refuses it, and the settings API that could delete the row needs a
- * running server. So the same rule the desktop's own `resolvePort` has always
- * applied is stated here, where both the server's parse and the settings write
- * can read it.
+ * Zero is **refused**, unlike in most port parsers: it means "let the OS pick",
+ * and a product nobody can find is worse than one that refused the value. A
+ * stored `0` bound an ephemeral port, logged `0` as the port, and left the
+ * desktop probing 4600 for ever — recoverable only by reading `ss -ltnp` or
+ * editing the database by hand.
+ *
+ * That is the shape of every rule here: a stored port beats the environment
+ * variable, `serve()` refuses what it cannot use, and the settings API that
+ * would delete the row needs a running server. So this is bounded on every path
+ * rather than trusted. `apps/desktop/src/config.ts` states the same rule for its
+ * own process, because Electron's main cannot import this package (the same
+ * reason `DEFAULT_PLOTROOM_PORT` is duplicated there) — the two are kept in
+ * step by hand, and that duplication is the only one of its kind.
  */
 export const PORT_BOUND: NumericBound = {
-  min: 0,
+  min: 1,
   max: 65_535,
   integer: true,
-  requirement: "a whole port number from 0 to 65535",
+  requirement: "a whole port number from 1 to 65535",
 };
 
 /**

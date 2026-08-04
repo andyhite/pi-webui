@@ -21,8 +21,15 @@ export function resolvePort(
   const raw = env.PLOTROOM_PORT;
   if (raw === undefined) return DEFAULT_PLOTROOM_PORT;
   const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`PLOTROOM_PORT must be a positive integer, got ${raw}`);
+  // The same rule the server states as `PORT_BOUND` (`apps/server/src/config.ts`),
+  // restated because Electron's main cannot import that package — the same reason
+  // `DEFAULT_PLOTROOM_PORT` is duplicated above. Keep the two in step: a desktop
+  // that accepted a port the server refuses would spawn a backend that dies at
+  // boot, and one that refused a port the server accepts could never attach.
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) {
+    throw new Error(
+      `PLOTROOM_PORT must be a whole port number from 1 to 65535, got ${raw}`,
+    );
   }
   return parsed;
 }

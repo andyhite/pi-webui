@@ -31,6 +31,15 @@ export interface SettingRow {
   readonly value: unknown;
   readonly defaultValue: unknown;
   readonly overridden: boolean;
+  /**
+   * Why the stored override for this key is **not** in effect — boot refused it
+   * (wrong type, or outside the setting's bound). `value` is then what the
+   * process is actually running under, and `overridden` is false because the row
+   * is not an override in force. Render this: a stored value the operator cannot
+   * see is being ignored is the surface lying, and the row is still there to
+   * remove.
+   */
+  readonly ignoredReason?: string;
 }
 
 /** What the `setting` WS event carries (`@plotroom/core`'s `SettingChange`) — a live nudge to refetch, not a full row. */
