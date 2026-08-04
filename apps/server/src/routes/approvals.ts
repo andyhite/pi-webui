@@ -5,9 +5,10 @@ import {
   APPROVAL_WRITE_EXTENTS,
   approvalAttention,
   type Approval,
+  type Author,
 } from "@plotroom/core";
 import type { ApprovalService } from "../approvals/service.js";
-import { badRequest } from "../http/errors.js";
+import { badRequest, forbidden } from "../http/errors.js";
 import { validateJsonBody } from "../http/validate.js";
 import { actorOf, body, param, type ApiEnv } from "./api.js";
 
@@ -51,6 +52,31 @@ const preGrantBody = z.object({
   extents: z.array(z.enum(APPROVAL_WRITE_EXTENTS)).min(1).optional(),
 });
 
+/**
+ * The reads here are the operator's, enforced by the actor rather than by the
+ * catalog's flag alone — the same way the triage verbs, `/api/logs` and
+ * `/api/search` are: a flag describes, and this is the gate (§6.6, principle 1).
+ *
+ * These endpoints have no agent tool, which is a decision already recorded
+ * against each of them; what was missing is that a session-attributed call was
+ * refused by nothing, so one could read `?status=all&sessionId=<somebody else>`
+ * and see another session's asks whole — the tool, the target, the summary, and
+ * the message of an effect that failed. **A session needs none of it.** How its
+ * own blocked call was answered reaches it as that call's result, not as a read
+ * (§6.6), and the standing decisions that bind it would only tell it which shapes
+ * of call to try.
+ *
+ * The refusal is a 403 with the reason, like every other operator surface: this
+ * bounds a *session-attributed* call, and nothing more — `X-PlotRoom-Actor` is
+ * self-declared and its absence means the operator (`http/actor.ts`).
+ */
+function operatorOnly(actor: Author, gesture: string): void {
+  if (actor.kind === "human") return;
+  throw forbidden(
+    `${gesture} is the operator's own read; a session learns how its own blocked call was answered from the call, never from another session's asks (§6.6, principle 1)`,
+  );
+}
+
 export function approvalRoutes(approvals: ApprovalService): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
 
@@ -59,6 +85,8 @@ export function approvalRoutes(approvals: ApprovalService): Hono<ApiEnv> {
    * record, so the queue and this endpoint word one approval the same way.
    */
   app.get("/approvals", (c) => {
+    operatorOnly(actorOf(c), "the approval queue");
+
     const sessionId = c.req.query("sessionId");
     const status = c.req.query("status") ?? "pending";
     if (status !== "pending" && status !== "all") {
@@ -81,6 +109,8 @@ export function approvalRoutes(approvals: ApprovalService): Hono<ApiEnv> {
   });
 
   app.get("/approvals/:id", (c) => {
+    operatorOnly(actorOf(c), "reading one approval");
+
     const approval = approvals.get(param(c, "id"));
     return c.json({ approval, attention: approvalAttention(approval) });
   });
@@ -118,9 +148,13 @@ export function approvalRoutes(approvals: ApprovalService): Hono<ApiEnv> {
    * Every standing decision, withdrawn ones included (§6.6). The operator's own
    * list: which capabilities have been granted in advance is a statement about
    * what sessions may do, and a session reading it would only learn which shapes
-   * of call to try.
+   * of call to try — which is why the sentence above is now a gate rather than a
+   * note beside an open endpoint.
    */
-  app.get("/pre-grants", (c) => c.json({ preGrants: approvals.preGrants() }));
+  app.get("/pre-grants", (c) => {
+    operatorOnly(actorOf(c), "the standing decisions");
+    return c.json({ preGrants: approvals.preGrants() });
+  });
 
   /**
    * Declare one, per session or per workstream — "a human decision about

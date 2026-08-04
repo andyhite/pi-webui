@@ -656,3 +656,68 @@ describe("the queue answers an approval without opening the session (§7.1)", ()
     expect(after.some((item) => at(item, "feed") === "approval")).toBe(false);
   });
 });
+
+/**
+ * Reading approvals is the operator's (§6.6, principle 1, issue #119).
+ *
+ * `OPERATOR_ONLY_ROUTES` already recorded that these three reads have no agent
+ * tool; nothing refused a session-attributed call to them, so one could ask for
+ * `?status=all&sessionId=<somebody else>` and read another session's asks whole.
+ * A session needs none of it: how its own blocked call was answered reaches it as
+ * that call's result.
+ */
+describe("reading approvals is the operator's own read (§6.6)", () => {
+  it("refuses a session the queue, one approval, and the standing decisions", async () => {
+    const harness = await boot(repository());
+    const { sessionId, objectId } = await board(harness);
+
+    // A real approval to read, raised by this very session — so the refusal is
+    // about who is asking and not about there being nothing to see.
+    const attempt = await harness.call(`/objects/${objectId}`, {
+      method: "DELETE",
+      actor: `session:${sessionId}`,
+    });
+    const approvalId = str(attempt.body, "approval.id");
+
+    for (const path of [
+      "/approvals",
+      "/approvals?status=all",
+      `/approvals?status=all&sessionId=${sessionId}`,
+      `/approvals/${approvalId}`,
+      "/pre-grants",
+    ]) {
+      const refused = await harness.call(path, {
+        actor: `session:${sessionId}`,
+      });
+      expect(refused.status).toBe(403);
+      expect(str(refused.body, "error.message")).toContain(
+        "the operator's own read",
+      );
+    }
+
+    // The operator's own reads are untouched, which is what these endpoints are
+    // for: the queue answers from them without opening the session (§7.1).
+    expect(list(await harness.ok("/approvals"), "approvals")).toHaveLength(1);
+    expect(
+      at(await harness.ok(`/approvals/${approvalId}`), "approval.id"),
+    ).toBe(approvalId);
+    expect(list(await harness.ok("/pre-grants"), "preGrants")).toHaveLength(0);
+  });
+
+  it("still tells the session what it is waiting for, from its own call", async () => {
+    const harness = await boot(repository());
+    const { sessionId, objectId } = await board(harness);
+
+    // The one thing a session needs to know reaches it as the result of the call
+    // that raised it — which is why the read being closed costs it nothing (§6.6).
+    const attempt = await harness.call(`/objects/${objectId}`, {
+      method: "DELETE",
+      actor: `session:${sessionId}`,
+    });
+
+    expect(attempt.status).toBe(202);
+    expect(at(attempt.body, "executed")).toBe(false);
+    expect(at(attempt.body, "approval.sessionId")).toBe(sessionId);
+    expect(str(attempt.body, "attention.sentence")).toContain(objectId);
+  });
+});
