@@ -52,11 +52,21 @@ describe("startedAndRefused", () => {
   const REFUSAL = '{"type":"fatal","message":"unknown session-host argument"}';
 
   it("accepts PlotRoom's own refusal, which only a started binary can write", () => {
-    expect(startedAndRefused({ code: 2, stdout: REFUSAL, stderr: "" })).toBe(
-      true,
-    );
     expect(
-      startedAndRefused({ code: 2, stdout: `${REFUSAL}\n`, stderr: "" }),
+      startedAndRefused({
+        running: false,
+        code: 2,
+        stdout: REFUSAL,
+        stderr: "",
+      }),
+    ).toBe(true);
+    expect(
+      startedAndRefused({
+        running: false,
+        code: 2,
+        stdout: `${REFUSAL}\n`,
+        stderr: "",
+      }),
     ).toBe(true);
   });
 
@@ -64,29 +74,56 @@ describe("startedAndRefused", () => {
     // What a missing native addon looks like: the runtime dies before PlotRoom's
     // code runs, so there is no frame and the exit code is not the parser's.
     expect(
-      startedAndRefused({ code: 1, stdout: "", stderr: "error: Failed to" }),
+      startedAndRefused({
+        running: false,
+        code: 1,
+        stdout: "",
+        stderr: "error: Failed to",
+      }),
     ).toBe(false);
-    expect(startedAndRefused({ code: 2, stdout: "", stderr: "" })).toBe(false);
+    expect(
+      startedAndRefused({ running: false, code: 2, stdout: "", stderr: "" }),
+    ).toBe(false);
   });
 
   it("rejects output that is not a frame, and a frame that is not fatal", () => {
     expect(
-      startedAndRefused({ code: 2, stdout: "unknown flag\n", stderr: "" }),
+      startedAndRefused({
+        running: false,
+        code: 2,
+        stdout: "unknown flag\n",
+        stderr: "",
+      }),
     ).toBe(false);
-    expect(startedAndRefused({ code: 2, stdout: "[1,2]", stderr: "" })).toBe(
-      false,
-    );
     expect(
-      startedAndRefused({ code: 2, stdout: '{"type":"ready"}', stderr: "" }),
+      startedAndRefused({
+        running: false,
+        code: 2,
+        stdout: "[1,2]",
+        stderr: "",
+      }),
+    ).toBe(false);
+    expect(
+      startedAndRefused({
+        running: false,
+        code: 2,
+        stdout: '{"type":"ready"}',
+        stderr: "",
+      }),
     ).toBe(false);
   });
 
   it("rejects a launch that was killed on the timeout", () => {
     // A hang is the failure the timeout exists for; a null code must never read
     // as health however the artifact's stdout looks.
-    expect(startedAndRefused({ code: null, stdout: REFUSAL, stderr: "" })).toBe(
-      false,
-    );
+    expect(
+      startedAndRefused({
+        running: true,
+        code: null,
+        stdout: REFUSAL,
+        stderr: "",
+      }),
+    ).toBe(false);
   });
 });
 
@@ -94,14 +131,20 @@ describe("dispatchedTheWorker", () => {
   it("passes a launch still waiting for the IPC peer it was never given", () => {
     // Killed at the bound, which is what a dispatched worker looks like: it has
     // nothing to say and nothing to exit for.
-    expect(dispatchedTheWorker({ code: null, stdout: "", stderr: "" })).toBe(
-      true,
-    );
+    expect(
+      dispatchedTheWorker({
+        running: true,
+        code: null,
+        stdout: "",
+        stderr: "",
+      }),
+    ).toBe(true);
   });
 
   it("fails the session parser answering a worker launch", () => {
     expect(
       dispatchedTheWorker({
+        running: false,
         code: 2,
         stdout:
           '{"type":"fatal","message":"unknown session-host argument: __omp_worker_js_eval_process"}',
@@ -116,13 +159,26 @@ describe("dispatchedTheWorker", () => {
     // both are workers that never ran, and neither writes the parser's sentence.
     expect(
       dispatchedTheWorker({
+        running: false,
         code: 1,
         stdout: "",
         stderr: "Error: unknown worker selector: __omp_worker_js_eval_process",
       }),
     ).toBe(false);
-    expect(dispatchedTheWorker({ code: 0, stdout: "", stderr: "" })).toBe(
-      false,
-    );
+    expect(
+      dispatchedTheWorker({ running: false, code: 0, stdout: "", stderr: "" }),
+    ).toBe(false);
+
+    // The reason `running` is carried rather than derived: a worker that died on
+    // a signal reports no exit code either, and reading "no code" as "we killed
+    // it at the bound" would pass a crash.
+    expect(
+      dispatchedTheWorker({
+        running: false,
+        code: null,
+        stdout: "",
+        stderr: "Segmentation fault",
+      }),
+    ).toBe(false);
   });
 });
