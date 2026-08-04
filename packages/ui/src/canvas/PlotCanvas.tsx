@@ -80,7 +80,7 @@ import {
 } from "./tombstones.js";
 import { remotelyDeletedIds, withConfirmed } from "./reconcile.js";
 import { applyArrangementReset } from "./arrangement-reset.js";
-import { diffDraggedPositions } from "./drag-diff.js";
+import { diffDraggedPositions, excludeContainers } from "./drag-diff.js";
 import {
   computeAbsoluteScreenExtents,
   toExtentAwareNodes,
@@ -1283,13 +1283,35 @@ function CanvasInner({
 
   // Durable placement: only what this gesture actually settled — the
   // dragged node and everything it pushed — is persisted when the drag
-  // ends, diffed against the positions captured at its start.
+  // ends, diffed against the positions captured at its start. Restricted to
+  // top-level nodes on *both* sides of the diff (matching `dragStartPositions`
+  // itself): a contained node's parent-relative position never changes via
+  // this drag mechanism (only the push solver's own top-level extents do,
+  // §5's "follow-on refinement" noted above), so diffing against unfiltered
+  // `getNodes()` spuriously reported *every* contained node on the whole
+  // canvas as "changed" on every drag, regardless of whether it moved (found
+  // live, via `canvas-arrangement-durability.spec.ts`'s real-UI fixture: a
+  // command node's untouched default offset rode along in the batch).
+  //
+  // A container is then excluded again, one layer further: it has no
+  // durable placement of its own yet — the server has no row to write a
+  // workstream's position onto (its `defaultPosition` is derived, never
+  // authored) — so persisting one here sent `PATCH /api/arrangement` an id
+  // it does not recognise, which refuses the *whole* batch (one
+  // transaction, §5) and lost the box nodes' own legitimate moves right
+  // along with it. The push solver still moves a container visually, live,
+  // for this session's own rigid-body physics (both bugs were masked until
+  // a drag actually pushed one); only the write-back excludes it.
   const onNodeDragStop: OnNodeDrag<CanvasNode> = useCallback(() => {
     const before = dragStartPositions.current;
     dragStartPositions.current = null;
     if (!before) return;
-    const changed = diffDraggedPositions(before, getNodes());
-    if (Object.keys(changed).length > 0) onPlacementsChange(changed);
+    const topLevelAfter = getNodes().filter((node) => !node.parentId);
+    const persistable = excludeContainers(
+      diffDraggedPositions(before, topLevelAfter),
+      topLevelAfter,
+    );
+    if (Object.keys(persistable).length > 0) onPlacementsChange(persistable);
   }, [getNodes, onPlacementsChange]);
 
   // Multi-select (§5): xyflow's own marquee/modified-click drives node

@@ -31,3 +31,36 @@ export function diffDraggedPositions(
   }
   return changed;
 }
+
+/**
+ * A container has no durable placement of its own yet (spec §5, §12): the
+ * server has no row to write a workstream's position onto — its own
+ * `defaultPosition` (`build-snapshot.ts`) is a derived default, never an
+ * authored one, and there is no `PATCH .../workstreams/:id/position` the
+ * way a `PlacedNode` has. Persisting one anyway sends `PATCH
+ * /api/arrangement` a node id it does not recognise, which refuses the
+ * *whole* batch (one transaction, §5) and loses every box node's own
+ * legitimate move riding along in it — found live, via
+ * `canvas-arrangement-durability.spec.ts`'s real-UI fixture: dragging a
+ * bare ticket into a workstream's own extent pushed the container too, and
+ * the container's id in the batch 404'd the entire write.
+ *
+ * The rigid-body push solver still moves a container visually, live, for
+ * this session's own physics (`PlotCanvas.tsx`'s `onNodeDrag`); this is
+ * strictly the write-back's own filter, applied to `diffDraggedPositions`'s
+ * output right before it reaches the API.
+ */
+export function excludeContainers<
+  T extends { readonly id: string; readonly type?: string },
+>(changed: Placements, nodes: readonly T[]): Placements {
+  const containerIds = new Set(
+    nodes.filter((node) => node.type === "container").map((node) => node.id),
+  );
+  if (![...containerIds].some((id) => id in changed)) return changed;
+
+  const persistable: Record<string, Point> = {};
+  for (const [id, position] of Object.entries(changed)) {
+    if (!containerIds.has(id)) persistable[id] = position;
+  }
+  return persistable;
+}

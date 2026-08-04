@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { diffDraggedPositions } from "./drag-diff.js";
+import { diffDraggedPositions, excludeContainers } from "./drag-diff.js";
 import type { PositionedNode } from "./arrangement-reset.js";
 
 describe("diffDraggedPositions", () => {
@@ -57,5 +57,59 @@ describe("diffDraggedPositions", () => {
 
   it("returns an empty object for no nodes", () => {
     expect(diffDraggedPositions(new Map(), [])).toEqual({});
+  });
+});
+
+describe("excludeContainers", () => {
+  it("drops a container's own id from what gets persisted", () => {
+    const changed = { ws1: { x: 1, y: 2 }, node1: { x: 3, y: 4 } };
+    const nodes = [
+      { id: "ws1", type: "container" },
+      { id: "node1", type: "box" },
+    ];
+    expect(excludeContainers(changed, nodes)).toEqual({
+      node1: { x: 3, y: 4 },
+    });
+  });
+
+  it("keeps every box node's own move when no container moved at all", () => {
+    const changed = { node1: { x: 3, y: 4 }, node2: { x: 5, y: 6 } };
+    const nodes = [
+      { id: "node1", type: "box" },
+      { id: "node2", type: "box" },
+    ];
+    const result = excludeContainers(changed, nodes);
+    expect(result).toEqual(changed);
+    // Referentially unchanged when nothing needed dropping — no reason to
+    // allocate a new object for the common case.
+    expect(result).toBe(changed);
+  });
+
+  it("drops every container even when several moved (a chain pushed two frames)", () => {
+    const changed = {
+      ws1: { x: 1, y: 1 },
+      ws2: { x: 2, y: 2 },
+      node1: { x: 3, y: 3 },
+    };
+    const nodes = [
+      { id: "ws1", type: "container" },
+      { id: "ws2", type: "container" },
+      { id: "node1", type: "box" },
+    ];
+    expect(excludeContainers(changed, nodes)).toEqual({
+      node1: { x: 3, y: 3 },
+    });
+  });
+
+  it("returns an empty object when only a container moved", () => {
+    const changed = { ws1: { x: 1, y: 1 } };
+    const nodes = [{ id: "ws1", type: "container" }];
+    expect(excludeContainers(changed, nodes)).toEqual({});
+  });
+
+  it("is unaffected by a node with no `type` at all (never a container)", () => {
+    const changed = { node1: { x: 1, y: 1 } };
+    const nodes = [{ id: "node1" }];
+    expect(excludeContainers(changed, nodes)).toEqual(changed);
   });
 });
