@@ -178,11 +178,29 @@ test.describe("the keyboard and accessibility gate", () => {
       page.getByTestId("shortcut-verb-queue-navigate"),
     ).toBeVisible();
     await expect(page.getByTestId("shortcut-queue-move-arrows")).toBeVisible();
-    await expect(page.getByTestId("shortcut-palette-rail-place")).toBeVisible();
-    // A key xyflow implements, documented honestly rather than claimed.
+    // Keys xyflow implements, documented honestly rather than claimed — the
+    // space bar included, which is live on a focused node whether or not this
+    // codebase wanted it (`elementSelectionKeys`, plus `panActivationKeyCode`).
     await expect(
       page.getByTestId("shortcut-canvas-delete-selection"),
     ).toContainText("handled by xyflow");
+    const spaceRow = page.getByTestId(
+      "shortcut-canvas-toggle-focused-node-selection",
+    );
+    await expect(spaceRow).toContainText("Space");
+    await expect(spaceRow).toContainText("handled by xyflow");
+
+    // Every chord that fires a binding is shown, not just the first: a hidden
+    // second key is the same failure as an unlisted binding (§11).
+    await expect(
+      page.getByTestId("shortcut-command-palette-close"),
+    ).toContainText("Escape / Ctrl+K");
+    await expect(
+      page.getByTestId("shortcut-shortcuts-overlay-close"),
+    ).toContainText("Escape / ?");
+    await expect(page.getByTestId("shortcut-palette-rail-place")).toContainText(
+      "Enter / Space",
+    );
 
     // Trapped: focus is inside the dialog, and stays there however many Tabs.
     const focusedInsideOverlay = () =>

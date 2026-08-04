@@ -1560,7 +1560,8 @@ function CanvasInner({
         id: "canvas-cancel-wire",
         chords: [{ key: "Escape" }],
         label: "cancel a keyboard wiring in progress",
-        description: "forgets the marked source node, wiring nothing",
+        description:
+          "forgets the marked source node, wiring nothing; xyflow also unselects the focused node",
         scope: "canvas",
         preventDefault: false,
         run: () => {
@@ -1574,6 +1575,23 @@ function CanvasInner({
         chords: [{ key: "Backspace" }, { key: "Delete" }],
         label: "delete the selected nodes and edges",
         description: "undoable with the undo binding above (principle 10)",
+        scope: "canvas",
+        implementedBy: "xyflow",
+      },
+      {
+        // xyflow's `elementSelectionKeys` are `Enter`, `Space` and `Escape`, so
+        // the space bar is a live canvas key whether or not this codebase
+        // wanted one — and a live key that appears in no overlay is exactly
+        // what §11 forbids. Documented rather than taken over: Space is also
+        // xyflow's `panActivationKeyCode`, and binding a route selection to a
+        // key that already means "pan while held" would be inventing a gesture
+        // rather than describing one. Enter stays the key that moves the route.
+        kind: "documented",
+        id: "canvas-toggle-focused-node-selection",
+        chords: [{ key: " " }],
+        label: "toggle the focused node's selection (not the route)",
+        description:
+          "adds or removes the focused node from the multi-selection the action bar acts on; held over the pane it activates panning instead. Enter is what moves the route (§5)",
         scope: "canvas",
         implementedBy: "xyflow",
       },
