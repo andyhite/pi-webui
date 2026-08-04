@@ -6,9 +6,10 @@
  * server. When the backend is remote, workspaces and diffs refer to this
  * machine, not the operator's.
  */
+import { existsSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
-import { openDatabase, SettingsStore } from "@plotroom/db";
+import { openDatabase, SettingsStore, stateLayout } from "@plotroom/db";
 import { Hono } from "hono";
 import { configureApp } from "./app.js";
 import { checkBindPolicy } from "./security/bind-policy.js";
@@ -25,6 +26,28 @@ import { applyStoredSettings } from "./settings/boot.js";
 export const SERVER_NAME = "plotroom-server";
 
 export function startServer(config = loadServerConfig()) {
+  // A boot that is going to be refused should not leave a state directory
+  // behind that it created only to refuse (§12: the state directory is the unit
+  // of portability, and an empty one is a thing the operator now has to wonder
+  // about). When there is no database file there can be no stored override of
+  // `host`, `allowNonLoopbackBind` or `credential` — there is nowhere for one to
+  // live — so the caller's own config *is* the effective config, and the bind
+  // policy can answer now, before anything is created or migrated. An existing
+  // state directory is a different question and is answered below, after its
+  // overrides have been read: refusing a first boot early must never become
+  // refusing a configured one on stale values.
+  if (
+    config.stateDir !== ":memory:" &&
+    !existsSync(stateLayout(config.stateDir).databaseFile)
+  ) {
+    const firstBoot = checkBindPolicy({
+      host: config.host,
+      allowNonLoopbackBind: config.allowNonLoopbackBind,
+      credential: config.credential,
+    });
+    if (!firstBoot.ok) throw new Error(firstBoot.reason);
+  }
+
   // `stateDir` itself is never a stored setting (§12, `settings/catalog.ts`'s
   // own note): the override for every other key lives *inside* the store this
   // path locates, so the store must already be open, at this path, before
@@ -54,9 +77,11 @@ export function startServer(config = loadServerConfig()) {
     credential: effectiveConfig.credential,
   });
   if (!bindPolicy.ok) {
-    // Refused before a socket ever opens, but the store above is already
-    // open; close it rather than leaving a WAL file behind for a boot that
-    // never actually started.
+    // Refused before a socket ever opens. Reaching here means the state
+    // directory already existed (a first boot with a refusing config was
+    // refused above, before anything was created), so the store this closes is
+    // one that was already there — closed rather than left holding a WAL file
+    // for a boot that never actually started.
     db.close();
     throw new Error(bindPolicy.reason);
   }

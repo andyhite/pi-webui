@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -157,5 +157,67 @@ describe("persisted host/port/allowNonLoopbackBind take effect on the next boot 
     expect(withAuth.status).toBe(200);
 
     void second;
+  });
+});
+
+/**
+ * A refused boot should leave nothing behind. The bind policy must still be
+ * checked against the *effective* config for a state directory that exists
+ * (the suite above is what proves that), so the early answer is only taken
+ * when there is provably nowhere for an override to live yet.
+ */
+describe("a refused boot creates no state (§12)", () => {
+  it("refuses a first boot before creating or migrating the state directory", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "plotroom-refused-boot-"));
+    scratch.push(parent);
+    const dir = join(parent, "state");
+    const port = await ephemeralPort();
+
+    // Non-loopback with neither the opt-in nor a credential: refused by
+    // `checkBindPolicy` on its own, and no stored setting could say otherwise
+    // because there is no store.
+    expect(() =>
+      startServer(
+        loadServerConfig(
+          {},
+          {
+            ...baseOverrides(dir, port),
+            host: "0.0.0.0",
+          },
+        ),
+      ),
+    ).toThrow(/loopback|credential/i);
+
+    // Nothing was created: no directory, so no database and no blobs tree.
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it("still refuses on the effective config once a state directory exists, and leaves it as it found it", async () => {
+    const dir = stateDir();
+    const port = await ephemeralPort();
+
+    // A first, legal boot creates the state directory.
+    const first = await boot(baseOverrides(dir, port));
+    await first.close();
+    handles.pop();
+    expect(existsSync(join(dir, "plotroom.db"))).toBe(true);
+
+    // The second boot's config is refused — read from the store this time,
+    // since the store exists and could have said otherwise.
+    expect(() =>
+      startServer(
+        loadServerConfig(
+          {},
+          {
+            ...baseOverrides(dir, port),
+            host: "0.0.0.0",
+          },
+        ),
+      ),
+    ).toThrow(/loopback|credential/i);
+
+    // The directory it found is still there: a refusal removes nothing
+    // (principle 10), it just does not add anything either.
+    expect(existsSync(join(dir, "plotroom.db"))).toBe(true);
   });
 });
