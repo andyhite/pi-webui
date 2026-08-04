@@ -1675,11 +1675,25 @@ function CanvasInner({
           a wiring in progress, and a refusal carrying the predicate's own
           reason — the keyboard's equivalent of "an illegal connection never
           looks legal" (§5). */}
-      <LiveRegion
-        message={keyboardAnnouncement}
-        label="canvas keyboard gestures"
-        testId="canvas-announcement"
-      />
+      {/* Positioned and pointer-transparent for the same reason bubbles are
+          kept off the minimap and controls (§5): an announcement must never be
+          the thing a click lands on. Not a visual decision — the design gate
+          (fleet rule 5) still owns how it looks. */}
+      <div
+        style={{
+          position: "absolute",
+          left: 8,
+          bottom: 4,
+          zIndex: 5,
+          pointerEvents: "none",
+        }}
+      >
+        <LiveRegion
+          message={keyboardAnnouncement}
+          label="canvas keyboard gestures"
+          testId="canvas-announcement"
+        />
+      </div>
       <BubbleLayer
         placements={bubblePlacements}
         onAnswerQuestion={onAnswerQuestion}
