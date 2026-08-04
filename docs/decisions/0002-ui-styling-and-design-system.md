@@ -2,12 +2,13 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-04
+- **Issues:** #53 (decision), #86 (the toolkit package)
 - **Deciders:** operator
 
 ## Context
 
 Nothing in the tree was styled: no authored CSS, no `className` attributes, no
-CSS-in-JS — 21 inline `style={{…}}` props across four files, each annotated as
+CSS-in-JS — 20 inline `style={{…}}` props across four files, each annotated as
 layout mechanics, under a standing design gate. The visual design is authored in
 **Claude Design**, which exports self-contained HTML/CSS/JS, and the requirement is
 that the export is a **reference to re-implement**, not an artifact to adopt.
@@ -75,5 +76,5 @@ catches a dropped style.
 
 While the shell is Electron the renderer is Chromium only, so modern CSS
 (`:has()`, container queries, subgrid) is fair game. If a system-webview shell is
-adopted later (see 0005), revisiting those is one auditable pass over the toolkit's
+adopted later, revisiting those is one auditable pass over the toolkit's
 CSS rather than a permanent tax on every component.
