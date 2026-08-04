@@ -30,7 +30,11 @@ export function restorableRoutes(stores: ApiStores): Hono<ApiEnv> {
         title: row.title,
         deletedAt: row.deletedAt,
       })),
-      nodes: graph.deletedNodes().map((row) => toPlacedNode(row)),
+      // What the node verb will take back, not every deleted node: a node whose
+      // subject is deleted comes back with the subject's own entry below, and
+      // offering it here as well would advertise an undo that answers 409
+      // (principle 10, principle 12).
+      nodes: graph.restorableNodes().map((row) => toPlacedNode(row)),
       edges: graph.deletedEdges().map((row) => toEdge(row)),
       workstreams: workstreams.deleted().map((row) => toWorkstream(row)),
       commands: commands.deletedCommands().map((row) => toCommandNode(row)),

@@ -623,6 +623,23 @@ describe("a node does not come back without its subject (principle 10)", () => {
 
     expect(graph.restoreNode(node.id).changed).toBe(true);
   });
+
+  it("leaves a node the restore verb would refuse out of the restorable list", () => {
+    const { objectId, nodeId } = noteNode();
+    const separately = place.command("cmd_1").id;
+    graph.removeNode(separately);
+    objects.delete(objectId);
+    graph.removeNode(nodeId);
+
+    // The undo list has to be exactly what the verb accepts, or it advertises a
+    // gesture the server refuses. The object is in the operator's undo under its
+    // own kind, and restoring it brings this node with it.
+    expect(graph.deletedNodes().map((row) => row.id)).toContain(nodeId);
+    expect(graph.restorableNodes().map((row) => row.id)).toEqual([separately]);
+
+    objects.restore(objectId);
+    expect(graph.restorableNodes().map((row) => row.id)).toContain(nodeId);
+  });
 });
 
 describe("provenance is recorded, never authored (§3.7)", () => {
@@ -644,6 +661,45 @@ describe("provenance is recorded, never authored (§3.7)", () => {
       );
     }
     expect(graph.edge(edge.id).deletedAt).toBeNull();
+  });
+
+  it("refuses to record it against a node that is off the board", () => {
+    const source = place.session("sess_1").id;
+    const target = place.session("sess_2").id;
+    graph.removeNode(source);
+
+    // Exempt from the legality checks, not from the board (issue #76): a live edge
+    // out of a removed node is one `liveEdges` hands the canvas as a wire from a
+    // card it does not have, and the node's restore would bring back a wire its
+    // removal never took down.
+    const record = () =>
+      graph.recordProvenance(source, target, "session_handoff");
+    expect(record).toThrow(ConnectionRefused);
+    try {
+      record();
+    } catch (err) {
+      expect((err as ConnectionRefused).refusal.reason).toBe("node_deleted");
+    }
+
+    graph.restoreNode(source);
+    expect(graph.recordProvenance(source, target, "session_handoff").kind).toBe(
+      "provenance",
+    );
+  });
+
+  it("still hands back a fact it already recorded, whatever happened since", () => {
+    const source = place.session("sess_1").id;
+    const target = place.session("sess_2").id;
+    const edge = graph.recordProvenance(source, target, "session_handoff");
+
+    // The lookup comes before the refusal on purpose: the gestures that record
+    // provenance are retryable, and a retry must not be refused over a fact this
+    // store already holds (principle 9). The cascade took the edge down with the
+    // node, so restoring the node is what puts it back — not this call.
+    graph.removeNode(source);
+    expect(graph.recordProvenance(source, target, "session_handoff").id).toBe(
+      edge.id,
+    );
   });
 });
 

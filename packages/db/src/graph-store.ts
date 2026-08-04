@@ -411,20 +411,26 @@ export class GraphStore {
   }
 
   /**
-   * Provenance is recorded as work happens, never authored (§3.7). It carries
-   * the reserved author "system" and no ordinal, and it is exempt from the
-   * legality and lineage checks — a delegation's result returning to its
-   * delegator is intent the delegator already authored.
-   */
-  /**
-   * Record a provenance edge (§3.7). Recorded as work happens, never authored.
+   * Record a provenance edge (§3.7). Recorded as work happens, never authored: it
+   * carries the reserved author "system" and no ordinal, and it is exempt from the
+   * legality and lineage checks — a delegation's result returning to its delegator
+   * is intent the delegator already authored.
    *
    * **Idempotent in the fact it states.** A provenance edge is a fact — this session
    * was forked from that one — and recording the same fact twice does not make two
    * facts, it draws one relationship twice on the board. That matters because the
    * gestures that record provenance are retryable (a fork, a handoff, a delegation),
    * and a retry that got as far as this line the first time must not leave a second
-   * edge behind (principle 9).
+   * edge behind (principle 9). The lookup is therefore first: a fact already stated
+   * is handed back before anything below can refuse it.
+   *
+   * **Exempt from the legality checks, not from the board.** It is refused when
+   * either endpoint's node is deleted, the same refusal `addContextEdge` makes for
+   * the same reason: a live edge to a node that is not on the board is one
+   * `liveEdges()` hands the canvas as a wire from a card it does not have, and
+   * restoring that node later would bring back a wire its removal never took down.
+   * Every producer goes through here — fork, handoff, delegation — so the rule is
+   * stated once rather than remembered at each of them (principle 8).
    */
   recordProvenance(
     from: string,
@@ -444,6 +450,15 @@ export class GraphStore {
       )
       .get();
     if (existing) return existing;
+
+    for (const row of [this.node(from), this.node(to)]) {
+      if (row.deletedAt !== null) {
+        throw new ConnectionRefused({
+          reason: "node_deleted",
+          message: `that ${row.role} was removed from the board; restore it before recording provenance against it`,
+        });
+      }
+    }
 
     const id = newEdgeId();
 
@@ -605,10 +620,15 @@ export class GraphStore {
    * **Refused while its subject is deleted.** A node stands for a record, and the
    * reads the board is drawn from filter deleted records out — so restoring the
    * node alone produces a card with nothing behind it, and an undo that produced
-   * one would be returning more than its own removal took. The subject's own
-   * restore is the gesture that brings the node back with it, which is why that
-   * one restores the record *first* and reaches this method with the subject
-   * already live.
+   * one would be returning more than its own removal took.
+   *
+   * What to do instead depends on the role, and the refusal says which. An object's
+   * and a session's own restore carry their node back with them — those routes
+   * restore the record first and reach this method with the subject already live.
+   * A command's does not: `CommandStore.delete` leaves its node alone, so nothing
+   * cascaded and nothing un-cascades, and the node's own restore is the gesture
+   * once the command is back. Telling every role the same thing would send an
+   * operator to a verb that does not do what they were told it does.
    */
   restoreNode(nodeId: string): NodeRemoval {
     const row = this.node(nodeId);
@@ -617,10 +637,15 @@ export class GraphStore {
     if (this.subjectIsDeleted(row)) {
       throw new PlacementRefused({
         reason: "subject_deleted",
-        message: `that ${row.role}'s record is deleted; restore it instead — its node comes back with it`,
+        message:
+          row.role === "command"
+            ? `that command's record is deleted; restore the command first, then this node`
+            : `that ${row.role}'s record is deleted; restore it instead — its node comes back with it`,
       });
     }
 
+    // The stamp its removal wrote, which is what identifies the edges that went
+    // down with it rather than ones a later gesture removed separately.
     const at = row.deletedAt;
 
     return this.state.db.transaction(() => {
@@ -694,6 +719,19 @@ export class GraphStore {
       .from(nodes)
       .where(isNotNull(nodes.deletedAt))
       .all();
+  }
+
+  /**
+   * The deleted nodes `restoreNode` will actually take back — which is what an
+   * undo list has to offer, or it is advertising a verb that answers 409.
+   *
+   * A node whose subject is deleted is not missing from the operator's undo: the
+   * subject is in the list under its own kind, and restoring it is what brings the
+   * node with it. Listing the node as well would be offering two ways to undo one
+   * removal, one of which is refused.
+   */
+  restorableNodes(): NodeRow[] {
+    return this.deletedNodes().filter((row) => !this.subjectIsDeleted(row));
   }
 
   deletedEdges(): EdgeRow[] {
