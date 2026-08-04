@@ -8,7 +8,7 @@ Canonical operating rules for any agent (or human) working in this repository. R
 
 - **Historical record:** the development plan that carried the rebuild through Phase 8 (with its per-epic landed notes — the best written account of _why_ things are shaped as they are) has been removed from the working tree and lives in **git history**: `git show d336340:docs/development-plan.md`.
 - **Source of truth for behavior:** [`docs/product-spec.md`](docs/product-spec.md) ("North Star v1"). It describes _what_ the product does and never _how_. Treat its 12 governing principles and §15 ("What must exist in the first cut") as binding constraints, not suggestions.
-- **Status:** greenfield rebuild. The stack is decided (see "Stack" below); no application code exists yet.
+- **Status:** the rebuild is past its first cut — server, canvas, persistence, plugins and the session sidecar all exist and land continuously. The stack is decided (see "Stack" below); what is planned, claimed or in review is on the tracker, never in this file.
 - **Explicit non-goals** are listed in spec §14. Do not implement workflow control flow, schedulers/triggers that start work, inbound webhooks, inferred relationships, multi-user, or silent truncation.
 
 ### Spec invariants worth memorizing
@@ -38,7 +38,7 @@ Decided. Do not substitute alternatives without asking.
 | Enforcement | commitlint + husky (Conventional Commits)                                        |
 | CI          | GitHub Actions: typecheck, lint, test, commitlint                                |
 
-### Layout (scaffolded)
+### Layout
 
 ```
 apps/
@@ -84,80 +84,25 @@ Husky hooks run locally and CI repeats them:
 
 The renderer is one web app. Desktop and browser are two ways to load it; never fork the UI per target.
 
-### Persistence notes
+### Architecture notes
 
-The schema must satisfy the four §15 invariants from day one:
+The decisions behind each subsystem — why a table is shaped as it is, which rule is
+a predicate, what a column is load-bearing for — live in `.omp/skills/`. They are
+discovered automatically, cost nothing until you read them, and are binding wherever
+they state a rule. **Load the one that covers the files you are about to edit.** They
+are cut by subsystem rather than by track, so one skill can serve several lanes and
+no lane has a skill of its own name.
 
-- `edges.author_id` is `NOT NULL` and distinguishes human vs session authors.
-- `runs` stores the full assembled content **and** the configuration it ran under.
-- outputs are addressed per run (`output@n`); `latest` is a derived view, never the only address.
-- versions carry retention metadata so the compaction rule is implementable, not retrofitted.
+| Skill                          | Covers                                                                                                                                                                |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `skill://plotroom-persistence` | `packages/db`: the state directory, inline-vs-blob content, migrations, maintenance and reset, objects and versions, retention defaults, search, the injectable clock |
+| `skill://plotroom-runs`        | commands, runs, the preview, `output@n` addressing, scoped-run batches, the admission queue, initiation keys                                                          |
+| `skill://plotroom-sessions`    | sessions, the observation log, phases, workspaces, transcripts, steering, and the runtime adapter seam (`apps/session-host`)                                          |
+| `skill://plotroom-governance`  | attention, path claims, spend attribution, budgets, approvals and pre-grants, plugin grants, standing instructions                                                    |
+| `skill://plotroom-canvas`      | the canvas built on top of xyflow                                                                                                                                     |
 
-**Content storage is hybrid, decided.** One state directory is the unit of
-backup and movement:
-
-```
-<state-dir>/
-  plotroom.db          rows, indexes, FTS index, inline content
-  blobs/ab/cdef0123…   content-addressed files, large content only
-```
-
-- Bytes at or below `INLINE_MAX_BYTES` (64KB) live inline in the `blobs` row;
-  larger content spills to `blobs/<hash>`. Callers never choose — everything
-  goes through `BlobStore` in `packages/db`.
-- Blobs are identified by sha256, so identical content is stored once. Assembled
-  run content repeats heavily across runs; dedup is load-bearing, not an
-  optimization.
-- `blob_refs` makes retention a query, not a guess: anything referenced is
-  retained, `compact()` removes only what nothing points at, and `pinned` marks
-  what must never be compacted.
-- Transcript release (§6.1) deletes the external file and keeps the row, so a
-  marker can be drawn and the content reloaded. Nothing is silently deleted.
-- Migrations are embedded in `src/migrations.ts` (append-only, never edit a
-  shipped one), not read from disk — a packaged build cannot ship without its
-  schema. A migration that must change a CHECK constraint sets
-  `rebuildsTable: true`, and the runner then does SQLite's documented rebuild
-  properly: foreign keys off **before** the transaction begins (the pragma is a
-  no-op inside one, and a `DROP TABLE` with them on cascades every child row
-  away), then back on plus `PRAGMA foreign_key_check`. Migration 9 is the
-  worked example, and its test upgrades a seeded store to prove no child row is
-  lost.
-- **Durability and cleanup** live in `Maintenance` (`packages/db`) and
-  `apps/server/src/maintenance/`. The portable unit is the state directory's
-  `plotroom.db` plus `blobs/`; `workspaces/`, `git-cache/`, and `runtime/` sit
-  inside it but are derived and excluded from the backup story, which
-  `GET /api/maintenance/state` states rather than leaves to be inferred. Every
-  reset verb is a plan and an execution: an unconfirmed `POST /api/reset`
-  answers with the plan and removes nothing, and the plan asks git which
-  checkouts hold uncommitted, untracked, or unpushed work so it can name what
-  deleting them would destroy (an unreadable checkout is reported as unreadable,
-  never as clean). The compaction job schedules the
-  sweep (injected timers, `PLOTROOM_COMPACTION_INTERVAL_SECONDS`, `0` disables
-  the schedule but never the endpoint) and decides nothing — the rules stay the
-  predicates in `@plotroom/core`, and the sweep order is runs → versions →
-  blobs, because each step is what releases the next one's references.
-
-**Objects and versions** live in `objects` / `object_versions`. External
-identity is uniquely indexed so a re-read reconciles rather than duplicating;
-content identical to the latest version writes no version. The compaction rule
-is a pure predicate (`isCompactable` in `@plotroom/core`) mirrored by
-`ObjectStore.compactVersions` — change both together, and keep the predicate as
-the place the rule is stated.
-
-**Attention is one derivation** (`@plotroom/core`'s `attention/`, joined by
-`apps/server/src/attention/`). Six feeds — questions, approvals, drift, health,
-completions, broadcasts — become one ranked list, and **hiding is the source's job**:
-a muted item never leaves the server again, a snoozed one does not leave until its
-time is up, and no surface holds a ledger of its own. Every item id is derived from
-the fact behind it, because the outbound edge-trigger and the queue's selection both
-fold state forward by id. §7.2's five health alerts are derived **from observation
-only**, with configurable thresholds. The queue is re-derived when something is
-observed to change, plus a slow tick (`PLOTROOM_ATTENTION_TICK_SECONDS`, default 30)
-for the two facts elapsed time alone makes true — a threshold coming due and a snooze
-elapsing. That tick is a scheduled **read** and initiates nothing (principle 2); the
-stance is stated in `attention/tick.ts`. Outbound routes (§7.3) attach to a state,
-fire edge-triggered by item id, and carry a **whitelist**: titles and summaries pass,
-content bodies never.
+Two of their rules are short enough to state here, because every change is judged
+against them.
 
 **Graph rules are predicates in `@plotroom/core`, called by the store.** Never
 reimplement a rule at a call site — the canvas, the API, and agent tools must
@@ -175,299 +120,8 @@ Authorship is enforced twice on purpose: the predicate refuses, and the schema
 cannot represent an unattributed context edge (`author_kind NOT NULL` plus a
 CHECK that only provenance edges may be `system`).
 
-**Path claims** live in `claims` / `claim_waits` / `claim_policies`, with the
-write ledger in `path_writes` / `path_reads` (migration 11). The tables are
-`@plotroom/core`'s `ClaimState` at rest and nothing more: `ClaimStore` applies the
-`ClaimEffect` list and decides nothing, because a store that re-derived "is this
-path held" would be the second implementation principle 8 exists to prevent. Two
-CHECKs make an illegal state unrepresentable rather than merely refused — a holder
-with no session id, and a non-root claim with no lease, since only the operator's
-root claim is immortal. Rows are retired rather than deleted so a release and an
-expiry stay different events. `ClaimService` (`apps/server/src/claims/`) sweeps
-lapsed leases **before every decision**, publishes `claim` / `claim_wait` /
-`claim_policy` on the one event stream, and enforces the operator-only verbs by the
-request's actor rather than by the tool catalog's flag. Every runtime write passes
-`decideToolPermission` before it runs; a driver with no gate wired **denies**.
-
-**Spend attribution** lives in `spend_attributions` (migrations 12 and 22): one row per
-(charged session, spender, **cause**), replaced rather than accumulated _within_ a
-cause, because the accounting total is folded from the observation log and the same
-spend observed twice must be charged once. The cause is in the key because two writers
-share the table and mean different things by a number: an `accounting` row restates a
-spender's **cumulative** total, a `broadcast:<id>` row is one broadcast's **increment**
-(§6.5). Keyed on the pair alone, a second broadcast from one sender silently replaced
-the first, and either writer could overwrite the other with a number measuring
-something else. An induced charge never bills whoever the fold already bills — the
-recipient and its own ancestors — so every induced row is `descendant` and a
-recipient's turn reaches a workstream or fleet total once. `own` rows only for a
-workstream or fleet total, or a delegated dollar would be counted once per ancestor —
-but a **run or batch cap counts rows charged to** its sessions, both bases, because a
-cap that counted only `own` rows is one any session walks around by delegating. Attribution happens **whenever the accounting
-fold moves**, not at session end, because a fleet view that admitted a running
-session's cost only once it stopped would be wrong for exactly as long as work was in
-flight. Nothing ever zeroes these rows: "today's total" is a **window** over `at`
-taken at read time (UTC day), never a reset, and no timer is involved (principle 2).
-The data starts at the first delegation because attribution that starts later cannot
-answer what an earlier chain cost.
-
-**Budgets** live in `budgets` and `budget_notices` (migrations 20 and 21). Two scopes
-are rows — workstream and global — and the **run/batch scope deliberately is not**: a
-run's cap is what was accepted at its preview and already lives on the run
-(`runs.spend_cap_micros`, §4.1), and a second copy of a cap is a second source of
-truth about what the operator agreed to. `limit_micros` is NOT NULL and _removing_ a
-budget deletes the row, so "raise or remove" is two verbs rather than a nullable
-number that also means removed. Which caps bind a session, and which is tightest, is
-`@plotroom/core`'s `resolveEffectiveBudget` and nothing else's — the pre-run refusal,
-the session-facing read, and the mid-session enforcement all call it, so they cannot
-disagree (principle 8). Binding is **transitive**: a session is bound by every
-ancestor's run and batch caps as well as its own, because an ancestor's cap counts
-that ancestor's attributed total, which already includes what its chain delegated. A
-batch's cap counts every entry's attributed total for the same reason, and summing
-them double-counts nothing because entries of one batch are siblings, never each
-other's ancestors.
-`budget_notices` is rows for the same reason the broadcast rate window is: a restart
-between the near-cap warning and the cap must not warn the session twice, and "have I
-already told it?" cannot be answered from memory. The warning and the stop notice
-reach a session as an injection with `origin = 'budget-notice'` — PlotRoom answering,
-authoring nothing, rendered as the transcript's `feedback` entry sourced to `budget`
-(migration 21 widened that CHECK by rebuild).
-
-**Approvals, triage, and outbound routes** live in `approvals`, `pre_grants`,
-`attention_triage`, `notification_routes` and `notification_route_fires`
-(migration 23). An approval is a row because it **outlives the call it blocks**
-(§6.6), and it is matched by what it blocks rather than by whose it is: `settlesAsk`
-compares tool and target, so a target-less ask matches on the tool alone — the gate
-therefore matches by **call id** (unique per session and call, so a re-raise finds
-the row already waiting), the queue answers by **approval id**, and only a
-destruction ask is matched by target. A raised approval leaves the runtime call
-**blocked**, like a question: sending the refusal that accompanies a raise would
-settle the call before anybody was asked. Pre-grants have no expiry column, because
-one that lapsed on a clock would change what an agent may do with nobody behind it
-(principle 2), and are withdrawn rather than deleted. `attention_triage` is
-`@plotroom/core`'s `TriageLedger` at rest, keyed by the attention item's own stable
-id for **every** feed rather than for drift alone — durable because a snooze held in
-memory returns the moment the server does. A notification route attaches to a
-**state** and has no node column beside it (§7.3); what it has already sent is rows,
-so a restart cannot re-fire every open item, and a delivery failure is route health
-rather than an exception.
-
-**Plugin grants** live in `plugin_grants` (migration 25), and the only other thing about
-a plugin that is persisted is whether the operator **disabled** it
-(`plugin_disablements`, migration 28 — a row means disabled, an absence means enabled,
-and removing the plugin deletes the row). Nothing else: which plugins exist is the
-build's (in-box) or the operator's directory's, and health is a running worker's
-property, so a row for either would be a second source of truth about something
-observable. A disable is not in that category — it is a **decision**, and one held only
-in the registry came back undone at the next boot. Two states and an absence: a
-`granted` or `denied` row, and **no row means never-asked** — the state that raises
-through §6.6 the moment a plugin reaches for the permission, so removing a grant is
-deleting the row rather than writing a third state (the same "grant or remove" shape
-budgets use). No expiry column, because a grant lapsing on a clock would change what a
-plugin may do with nobody behind it (principle 2), which is also why the contract's
-`PermissionState` has no `expired` member. Every write to this table is the operator's
-(`POST /api/plugins/:id/grants`, or answering the §6.6 approval a raise produced) and
-there is **no agent tool for any plugin verb at all** — principle 1, the same reason
-there is none that raises a budget. The server-side wiring is
-`apps/server/src/plugins/`: one `PluginRegistry`, one worker per enabled plugin, every
-producer read and write action performed through `PluginHost.invoke`, and
-`plugins/raise.ts` holding the compile-time assertion that `PermissionRaise` stays
-assignable to `ApprovalAsk` — the server is the only package that can see both types,
-so enum drift on either side breaks the build.
-
-**Standing instructions** live in `standing_instructions` /
-`standing_instruction_opt_ins` and `proposals` (migration 26). A standing instruction is
-a **marker on a world object, never a tenth `ObjectKind`**, so the table names an object
-and holds no content of its own; `declared_by_kind` can only say `human` and
-`decided_by_kind` on a proposal likewise, because a store reached without the predicate
-must not be able to write the fact principle 1 exists to prevent. A partial unique index
-on a live `object_id` makes `already_standing` unrepresentable as well as refused. Markers
-retire and opt-ins opt out; nothing is deleted. **Availability is resolved at assembly,
-not fanned out into edges**: `RunStore.plan` prepends `resolveStandingInstructions`'s
-answer before the wired inputs (and `start()` reads that same plan), so a run's recorded
-assembled content already contains them (§15-1) — which is also why a standing input's
-`run_inputs.node_id` is null and why input ordinals are sequential over the whole
-assembly rather than copied from the edge. `proposals` is `ToolProposal` at rest with
-`decideProposal` as its only transition; a pending one reaches §7.1 through the approvals
-channel as the `standing-instruction` kind, and an **accepted retire** is performed by
-calling `retireStandingInstruction` as the human directly, because core deliberately has
-no apply helper for it.
-
-**Scoped runs and the queue** live in `run_batches` / `run_queue` (migrations 13, 14
-and 15). One batch is one gesture over a scope; one entry is one command, admitted
-rather than scheduled. Every entry carries `contract_hash` — the configuration plus
-every input's version and content, in assembly order — because **the preview is the
-contract**: at admission the preview is taken again, and a mismatch re-asks instead
-of running something else.
-
-Two rules qualify that, and both are decisions rather than implementation details.
-**The in-batch rule:** a subgraph was previewed as a chain, so an input produced by
-another command in the same batch is the contract _executing_, not drifting — those
-inputs and the `runnable` flip they cause are excluded from that entry's hash, and
-the entry waits rather than being admitted while its in-batch producer is still to
-run. A producer that _settled_ without producing is not a producer to wait for
-("not done" and "not finished yet" are different facts): the entry is settled with a
-reason naming it, unless the output arrived anyway, in which case the ordinary
-contract check re-asks. Drift from outside the batch re-asks exactly as before. **Confirming answers to the batch:** into a
-paused batch a confirmation is kept and the entry parked (resuming is still the
-operator's separate gesture); into an aborted or completed one it is refused.
-
-There is no timer anywhere in it: the queue drains from the session event stream,
-including for a session that never went through it, and once at boot after
-reconciling entries the last process left in flight — a boot-time drain admits work
-already initiated by a gesture, which is §4.1's "deciding _when_, never _whether_".
-A queue entry's state carries `interrupted` for the same reason the session and the
-run do (principle 11): a restart that reported those as `done` was reporting success
-for work that never happened.
-
-**Steering** lives in `session_questions`, `broadcasts` / `broadcast_recipients` /
-`broadcast_sends`, and `handoff_briefs` (migration 16). Every rule is
-`@plotroom/core`'s; these are what its planners produced. Three shapes are worth
-knowing: a question **outlives the call it blocks** (a surface that asked the runtime
-what was asked would have nothing to show once the call settled, and "unpicked
-options remain visible" needs the options remembered), the broadcast **rate window is
-rows** because a counter cannot answer "how many in the last hour" after a restart,
-and a broadcast's **one content object is world-scoped** even though
-`InjectionContent` says local — it is wired into sessions across workstreams, which
-§3.3 refuses for a local object.
-
-A **repository's identity is its configured source** (`sessions/world.ts`), so a
-worktree and the checkout it branched from are one repository — which is exactly what
-§6.5's "everyone in _this_ repository" is about, and it means two workspaces agree
-without a registry. Broadcast-induced spend is charged at a **stated grain**: the
-recipient's spend between delivery and the next time its accounting moved, once, with
-the baseline in a column so a restart between the two does not lose the charge.
-
-An **initiation does not always produce a run** (migration 17): a fork, a handoff, and
-a resume each spend a key and produce a session, so `run_initiations.command_id` is
-nullable. And a settled key names its **whole gesture** — its kind
-(migration 18) and its subject (migration 19): a run of command X and a fork of one of
-that command's sessions both name X, and a handoff named no brief at all, so a reused
-key wired one brief's content into another's session and marked it sent for ever. Every steering gesture **replays** a repeated key with what the first attempt
-produced — none of them refuse one — which is what makes the id-stable writes behind
-them load-bearing: `addContextEdge` returns an existing edge for a supplied id before
-any legality check, and `recordProvenance` is idempotent in the fact it states. And `sessions.runtime_mode` records **which fork branch ran** — native or
-seeded — because the pi adapter refuses to substitute one for the other, which is what
-makes the column trustworthy.
-
-**Commands and runs** live in `command_definitions` / `commands` /
-`command_parameter_bindings` / `command_outputs` and `runs` / `run_inputs` /
-`run_outputs` (migration 5). Four §3.5 rules are schema constraints rather
-than conventions, so no call site can get them wrong:
-
-- a `producing` definition cannot exist without an expected outcome, and an
-  `open` one cannot carry one;
-- a `proposed` parameter binding cannot carry a `confirmed_at`, so a derived
-  default is never readable as a confirmed value (`resolveParameters` refuses
-  to produce run configuration while one is outstanding);
-- a bound `command_outputs` row cannot be marked `broken_at` — post-bind the
-  command dependency has evaporated, so only a pre-bind placeholder breaks;
-- `runs.assembled_blob_id` and `runs.config_json` are `NOT NULL` (§15-1), and
-  `run_inputs.version_id` is a real foreign key, so a version a run consumed
-  cannot be deleted while the run exists (§15-3's interplay).
-
-**Sessions, observations, and workspaces** land in migration 7:
-`sessions` / `session_observations` / `session_transcript_publications` /
-`session_injections`, plus `run_submissions`, `run_initiations`, and
-`workspaces`. Four things about them are load-bearing:
-
-- the **observation log is the record** — PlotRoom's own `RuntimeObservation`
-  values, never vendor payloads (decision 0001) — and the `phase_json` and
-  accounting columns are a snapshot folded from it by `@plotroom/core`'s
-  reducer, recomputable at any time (`SessionStore.observationState`);
-- the end-state taxonomy is a CHECK, so `out-of-budget` and `interrupted` are
-  representable and distinct from `failed`, and `SessionStore.end` keeps the
-  **first** outcome (a doubled observation cannot rewrite one);
-- `run_initiations` holds a **client-supplied initiation key**, which is what
-  makes one gesture one run and one session across retries (principle 9); a
-  refused attempt releases the key;
-- `sessions.run_id` is `ON DELETE SET NULL`: run retention (§4.4) may reclaim a
-  run, and a session record is readable _always_ (§3.6), so the link goes and
-  the record stays.
-
-The transcript is content, not a table: it is projected from the log
-(`session-transcript.ts`) and versioned through `ObjectStore` when the
-checkpoint rule says to (`publishesVersion` — a turn never publishes).
-
-**The run preview** (§4.1) is `RunStore.plan`, and `start()` reads the same plan
-rather than a second description of it — a preview that could disagree with the
-run it previews is worse than no preview. Refusals are _collected_ there and
-thrown only by the run path, because the preview's job is to say what is
-missing. Cost estimates go through `estimateRunCost`, whose type cannot express
-a bare number: a basis, a range that is `null` when nothing has ever been
-priced, and a sentence. Estimates are priced per **definition**, matching
-retention's grain, and a run whose runtime reported no cost is no evidence about
-money. `runs.spend_cap_micros` records what the operator accepted; Phase 6
-enforces it.
-
-There is deliberately **no `latest` column anywhere**: `RunStore.resolve`
-orders by `runs.ordinal`, so `output@n` is the general address and `latest` is
-one query over it (§15-4). Publish (`command_outputs.published_at`, pre-run,
-on a placeholder) and promote (`ObjectStore.promote`, after the fact, on an
-object) stay two verbs; publishing a bound output is refused.
-
-**Retention policy defaults, decided.** Run history keeps the **last 20 runs
-per command definition**, plus every pinned run and everything it references,
-plus everything inside a **30-day window** — the same window as version
-compaction, so the two rules cannot disagree about how old "old" is
-(`DEFAULT_RUN_RETENTION_POLICY` in `@plotroom/core`). Retention never makes a
-live address stop answering: the run `latest` currently resolves to is not
-compactable at any age.
-
 **Stores take an injectable clock** (`ObjectStore(state, () => seconds)`).
 Retention, drift, and idempotency are untestable against a real clock.
-
-**Search** is an index-only FTS5 table populated on write, so inline and
-external content are equally searchable and archived sessions stay findable
-(§6.8).
-
-### Canvas notes
-
-xyflow is the base. The spec's harder canvas requirements are built **on top of** it, not by forking it:
-
-- **Rigid-body push** — custom drag handling (`onNodeDrag`) plus a collision/push solver over node extents. No physics simulation; an arrangement at rest stays put.
-- **Collapsing containers** — xyflow parent/child nodes; a collapsed workstream is one node and edges draw to its frame.
-- **Zoom-level semantics** — read the viewport zoom and switch node renderers by level (workstream card → inner nodes → full detail).
-- **Mid-drag refusal** — `isValidConnection` / connection-state hooks, so an illegal edge never looks legal.
-- Nodes stay DOM-based so plugin card renderers and keyboard accessibility (spec §11) work.
-
-### Session runtime notes
-
-The runtime boundary is decided (docs/decisions/0001-session-runtime-abstraction.md,
-including the amendment that makes **omp** adapter v1, embedded in a PlotRoom-owned
-Bun sidecar rather than spawned as a CLI).
-PlotRoom owns a `SessionRuntimeAdapter` interface in `@plotroom/core`
-(`core/src/sessions/`); adapters translate one runtime's surface into a
-timestamped `RuntimeObservation` stream plus start / resume / fork / inject /
-respond / stop. Adapter v1 is **omp** (multi-provider, native queued→delivered
-injection, near-native fork), embedded in a PlotRoom-owned Bun sidecar; the second
-adapter, proving the seam, is the **Claude Agent SDK**. ACP is tracked but is not
-the boundary.
-
-**Where the sidecar lives.** `apps/session-host` is that process — the only
-package in the repo that imports a vendor agent SDK — and
-`core/src/sessions/adapters/omp/` owns its lifecycle and its frame protocol
-while translating nothing, because the sidecar emits `RuntimeObservation`
-values it is typechecked against. It is landing in tracks (issue #73), so it is
-registered only when the operator selects it
-(`PLOTROOM_RUNTIME=omp-session-host`): its permission gate is issue #81, and
-until that lands `enforcesPermissions` is false and
-`checkPermissionEnforcement` refuses every run on it. The pi adapter is the
-default meanwhile and is retired in #83.
-
-Non-negotiables at this seam:
-
-- **Phases are derived in core** from observations (plus PlotRoom's own
-  approval/claim state and silence timeouts) — never agent-reported.
-- **Injection is a ledger**: `inject()` resolves on queue acceptance;
-  delivery is a separate observed event. The UI shows queued vs delivered.
-- **Session records store PlotRoom's observation log**, not vendor payloads,
-  so resume/fork/accounting survive vendor churn; fork-from-point is emulated
-  by transcript-prefix seeding when a runtime lacks native fork.
-- **Out-of-budget stops are initiated by PlotRoom** and recorded as their own
-  outcome, distinct from failure.
-- **Per-call permission gating is enforced, not advised** — approvals (§6.6) and
-  claims (§3.4) decide every tool call before it runs, and the gate's liveness is
-  asserted at boot rather than assumed from configuration (0001's amendment).
 
 ## Many agents work here at once
 
@@ -567,8 +221,12 @@ Worktrees live in the **parent directory** of this repo and are named `<repo-dir
 
 ```sh
 # branch feat/path-claims  ->  ../plotroom-feat-path-claims
-git worktree add ../plotroom-feat-path-claims -b feat/path-claims
+git fetch origin
+git worktree add ../plotroom-feat-path-claims -b feat/path-claims origin/main
 ```
+
+Branch off `origin/main`, never off the checkout you are standing in: the primary
+may be behind, and starting work must not require touching it.
 
 Layout:
 
@@ -625,8 +283,13 @@ the only record of work inside it is `CHANGELOG.md`.
   contradiction is recorded where work is tracked and fixed on its own. The PR is
   not blocked by it; a contradiction nobody wrote down is the actual failure.
 - `docs/decisions/` holds decision records in prose (ADRs) when a decision
-  deserves more than the tracker. `AGENTS.md` holds **standing conventions an
-  agent must follow** — not the decision archive.
+  deserves more than the tracker. `.omp/skills/` holds the subsystem notes — why
+  each area's schema and predicates are shaped as they are — read on demand rather
+  than loaded into every session. `.omp/RULES.md` is the handful of hard rules that
+  must stay in view across a long session, and it is a subset of this file, never a
+  second source of truth — a user-level `RULES.md` would shadow it rather than add to
+  it, which is the other reason the full statement of a rule belongs here. `AGENTS.md` holds **standing conventions an agent must
+  follow** — not the decision archive.
 
 ## Repository layout
 
@@ -634,6 +297,8 @@ the only record of work inside it is `CHANGELOG.md`.
 docs/product-spec.md   Product specification (north star, behavior only)
 docs/decisions/        Decision records (ADRs), when a decision deserves prose
 AGENTS.md              This file — canonical conventions
+.omp/RULES.md          The hard rules, re-attached near every turn
+.omp/skills/           Per-subsystem architecture notes, read on demand
 CHANGELOG.md           Completed work, one section per release
 CONTRIBUTING.md        How to contribute (git-level detail)
 ```
