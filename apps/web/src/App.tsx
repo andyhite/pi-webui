@@ -385,6 +385,25 @@ function Board() {
     });
   }
   const arrangementWriteQueue = arrangementWriteQueueRef.current;
+  // Durable placement, the last chance to send it (§5, §12): a page torn
+  // down for teardown (tab close, navigating away, mobile backgrounding)
+  // must not lose a drag still sitting inside the debounce window —
+  // `pagehide` fires reliably at exactly that moment (unlike `unload`, and
+  // unlike `visibilitychange` for a bfcache-eligible navigation). Honestly
+  // best-effort, not a guarantee: the underlying `fetch` calls
+  // (`HttpClient`) are not `keepalive`-flagged, so a request the browser is
+  // already tearing the page down around is not guaranteed to complete —
+  // this still gives a pending write its best remaining chance rather than
+  // none at all. Reads the ref directly (never the `arrangementWriteQueue`
+  // variable) so the listener never needs to be re-registered; the queue
+  // itself is created once and never changes after mount.
+  useEffect(() => {
+    function onPageHide(): void {
+      void arrangementWriteQueueRef.current?.flush();
+    }
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, []);
   // The run gesture's client-side guard (§4.1, principle 9 at the gesture
   // level): a command node id stays in this set for exactly as long as its
   // POST /api/runs is outstanding, so a double-click cannot mint a second
