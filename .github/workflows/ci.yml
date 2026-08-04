@@ -132,17 +132,64 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      # `--ignore-scripts`: nothing in this job touches SQLite, and installing
-      # with scripts fails outright on the Windows runner — `better-sqlite3` has
-      # no prebuild for the image's Node 22 and node-gyp cannot use the Visual
-      # Studio that is installed there. That is a real gap for the packaging lane
-      # (recorded on #79), not something this job can honestly paper over by
-      # dropping the platform: the session host's own graph needs no native build
-      # step at all, so it installs and compiles without one.
-      - run: pnpm install --frozen-lockfile --ignore-scripts
+      # A plain install, scripts and all. This used `--ignore-scripts` because a
+      # full install failed on the Windows runner (#183); nothing compiles on
+      # any platform now, so the flag would only be hiding whether that is
+      # still true.
+      - run: pnpm install --frozen-lockfile
 
       - name: Compile the session host, and run what it built
         run: pnpm compile
+
+  # A full `pnpm install --frozen-lockfile` **with scripts**, on Windows,
+  # followed by the SQLite suite that binding is for (#183).
+  #
+  # Windows is the only platform where this can regress, and it regressed
+  # silently: `better-sqlite3` carries a `binding.gyp` at its package root, so
+  # pnpm synthesises the default `install: node-gyp rebuild` for it even though
+  # it ships an N-API prebuild per platform and needs no compiler — and
+  # node-gyp 10.2.0 does not recognise the Visual Studio the runner image now
+  # ships ("unknown version \"undefined\" found at .../Visual Studio\\18"). The
+  # fix is `pnpm.neverBuiltDependencies`, and the thing that keeps it fixed is
+  # this job: without it, the next dependency that wants a compiler is found by
+  # whoever tries to build the Windows installer (#79), not by CI.
+  #
+  # It runs the `@plotroom/db` suite rather than merely loading the module,
+  # because "installs" and "the binding actually works, including the
+  # migration runner's pragma dance" are different claims and only the second
+  # one is worth a job.
+  windows-install:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install with scripts
+        run: pnpm install --frozen-lockfile
+
+      # Nothing here may compile: a green run that quietly built the addon
+      # would say the compiler was available, not that we stopped needing it.
+      - name: Refuse a compiled addon
+        shell: bash
+        run: |
+          if find node_modules/.pnpm/better-sqlite3*/node_modules/better-sqlite3/build -name '*.node' 2>/dev/null | grep -q .; then
+            echo "better-sqlite3 was compiled; the prebuild should have been used instead"
+            exit 1
+          fi
+          echo "no compiled addon: the shipped prebuild is what will load"
+
+      # Through turbo, not `pnpm --filter`: the suite imports `@plotroom/core`
+      # by its package exports, which resolve to `dist`, and only turbo's
+      # `test` task knows to build it first (`dependsOn: ["^build"]`).
+      - name: Exercise SQLite through @plotroom/db
+        run: pnpm exec turbo run test --filter @plotroom/db
 
   commits:
     runs-on: ubuntu-latest

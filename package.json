@@ -25,6 +25,11 @@
     "verify": "pnpm format:check && pnpm typecheck && pnpm typecheck:scripts && pnpm lint && pnpm lint:scripts && pnpm test && pnpm test:scripts",
     "prepare": "husky"
   },
+  "pnpm": {
+    "neverBuiltDependencies": [
+      "better-sqlite3"
+    ]
+  },
   "devDependencies": {
     "@commitlint/cli": "^19.6.0",
     "@commitlint/config-conventional": "^19.6.0",
