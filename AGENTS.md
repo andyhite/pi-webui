@@ -6,8 +6,7 @@ Canonical operating rules for any agent (or human) working in this repository. R
 
 **PlotRoom** — a context-authoring canvas for operating a fleet of AI agents. A single operator composes context (tickets, PRs, documents, files, notes, prior agent output) as a spatial node graph, wires that context into commands, and runs many agent sessions against it simultaneously.
 
-- **Work tracking:** **GitHub Issues + the PlotRoom project board** (https://github.com/users/andyhite/projects/1, on the `andyhite/plotroom` repo) — all development work is tracked there as issues moving through the workflow. Check the board before starting work; see "Work tracking — GitHub Projects" below for the rules. The spec wins when an issue and the spec disagree.
-- **Historical record:** the development plan that carried the rebuild through Phase 8 (with its per-epic landed notes — the best written account of _why_ things are shaped as they are) has been removed from the working tree and lives in **git history**: `git show d336340:docs/development-plan.md`. Issues #1–#41 are the closed historical record; their landed-note pointers resolve there.
+- **Historical record:** the development plan that carried the rebuild through Phase 8 (with its per-epic landed notes — the best written account of _why_ things are shaped as they are) has been removed from the working tree and lives in **git history**: `git show d336340:docs/development-plan.md`.
 - **Source of truth for behavior:** [`docs/product-spec.md`](docs/product-spec.md) ("North Star v1"). It describes _what_ the product does and never _how_. Treat its 12 governing principles and §15 ("What must exist in the first cut") as binding constraints, not suggestions.
 - **Status:** greenfield rebuild. The stack is decided (see "Stack" below); no application code exists yet.
 - **Explicit non-goals** are listed in spec §14. Do not implement workflow control flow, schedulers/triggers that start work, inbound webhooks, inferred relationships, multi-user, or silent truncation.
@@ -455,171 +454,32 @@ Non-negotiables at this seam:
   tool layer cannot enforce them, adapter order reverts to the Claude Agent
   SDK (see the decision record's risks).
 
-## Work tracking — GitHub Projects
+## Many agents work here at once
 
-All development work — features, bugs, follow-ups, decisions — is tracked as
-**GitHub Issues** on `andyhite/plotroom`, organized on the **PlotRoom project
-board**: https://github.com/users/andyhite/projects/1 (Projects v2, project
-number 1, owner `andyhite`). Agents drive it with the `gh` CLI; the active
-`gh` account must be one with repo access and the `project` scope (note: a
-`GH_TOKEN` env var overrides stored `gh` logins — use `env -u GH_TOKEN gh …`
-if the ambient token is the wrong account).
+Assume it. Several agents and the operator run against this repository at the
+same time, on different branches, in different worktrees, and none of them can
+see each other's context. Every rule in this section exists because of that.
 
-**Board Status columns (the workflow, in order):**
-
-| Status        | Meaning                                                                                       |
-| ------------- | --------------------------------------------------------------------------------------------- |
-| `Backlog`     | Captured, not committed to — open `decision` issues and §13 `directional` intentions included |
-| `To Do`       | Committed; next up. Ordered top-down by priority                                              |
-| `In Progress` | **Claimed** — someone (human or agent) is actively working it right now                       |
-| `Review`      | Implementation complete, awaiting independent review                                          |
-| `Done`        | Reviewed and merged to `main`                                                                 |
-
-Closed issues are the permanent Done record; the board tracks **open** work.
-
-### Many agents work here at once
-
-Assume it. Several agents (and the operator) run against this repository
-simultaneously, on different tickets, in different worktrees, and none of them
-can see each other's context. **The board is the only place that ownership is
-written down**, which is why keeping the ticket current is a rule rather than a
-courtesy: an item nobody moved to `In Progress` is an item two agents will pick
-up.
-
-- **`In Progress` means claimed — by somebody who is not you.** Never start work
-  on an item another session claimed, and never "help" with one. Its branch, its
-  worktree, and its issue comments belong to whoever claimed it. If the claim
-  comment names _your_ branch it is still yours — including a review stage 6 sent
-  back. If you believe somebody else's is stalled or abandoned, say so on the
-  issue and let the operator decide; taking it over silently means two agents
-  editing one branch. ("Claimed" here is a board convention and has nothing to do
-  with the path claims of §3.4.)
-- **Choosing your own next task: take the top of `To Do`.** Skip `In Progress`
-  entirely, and skip `decision` and `directional` items unconditionally (see
-  stage 2). Claim it — move it to `In Progress` and comment with your branch —
-  **before** the first edit, so the claim is visible to the next agent that
-  looks. The move is not atomic: re-read the item afterwards, and if two claims
-  exist the earlier comment wins and the later agent stands down. A subagent with
-  no `gh` access has its orchestrator claim for it and does not edit until that
-  is confirmed (see the **Orchestrators** paragraph at the end of the lifecycle).
-- **One issue, one branch, one worktree, one writer.** Two agents must never
+- **One change, one branch, one worktree, one writer.** Two agents must never
   hold the same branch or the same worktree.
 - **Another session's worktree is not yours to write in.** Expect several in the
-  parent directory — one per ticket in flight, which is `In Progress` _or_
-  `Review`, since a worktree lives until stage 8. Reading one is fine (reviewing
-  a branch you did not write means reading it); writing to one never is: no
-  edits, commits, `pnpm install`, builds, or `git worktree remove`, not even for
-  a branch that looks merged or abandoned — you cannot tell a landed branch from
-  one mid-rebase. To run the suite against somebody else's commit, check it out
+  parent directory. Reading one is fine — reviewing a branch you did not write
+  means reading it — but writing to one never is: no edits, commits,
+  `pnpm install`, builds, or `git worktree remove`, not even for a branch that
+  looks merged or abandoned, because you cannot tell a landed branch from one
+  mid-rebase. To run the suite against somebody else's commit, check it out
   detached in a tree of your own
   (`git worktree add --detach ../plotroom-review-<sha> <sha>`) and remove that
-  when you are done. Ownership comes from the ticket, not from who typed
-  `git worktree add`: an orchestrator creates the worktrees its subagents work
-  in, and those are the subagents' to write in.
+  when you are done.
 - **`main` moves under you.** Another agent may land while you are working, so
-  rebase onto `main` and re-run `pnpm verify` **immediately** before landing,
-  not once at the start (stage 7, including the lockfile protocol — the most
-  common collision).
-- **The board is how you report to other agents.** Anything you learned that
-  changes somebody else's work — a shared seam you had to touch, a bug you
-  found, a convention you had to invent — goes on an issue, because there is no
-  other channel between concurrent sessions.
+  rebase onto `main` and re-run `pnpm verify` **immediately** before landing, not
+  once at the start. The lockfile is the most common collision: take `main`'s,
+  rerun `pnpm install`, commit the result.
+- **Anything another agent needs to know goes where work is tracked**, not into
+  these files — a shared seam you had to touch, a bug you found, a convention you
+  had to invent. There is no other channel between concurrent sessions.
 
-**Labels:** `epic` (large multi-task efforts), `follow-up`, `bug`, `decision`,
-`directional`. Use task-list checkboxes in the issue body for a breakdown;
-sub-issues for real child work.
-
-### The ticket lifecycle — idea to delivery
-
-Every change moves through these stages, and **the issue is kept current at
-each one** — the board must always answer "what is happening right now"
-without asking anyone. An agent that works without updating the ticket is
-violating this file.
-
-**1. Capture (idea → issue, Status `Backlog`).**
-Anything worth doing gets an issue the moment it is known: a feature idea, a
-bug, a review's non-blocking findings, a deferral, an open decision.
-**Discovered work becomes an issue, not a detour** — finding a bug mid-task
-means filing it, not silently widening the current task (the board-shaped form
-of the old "deferred, honestly" convention). The body states what and _why_,
-links any evidence (failing output, review text, spec section), and carries
-the honest labels. No work exists only in someone's head or a chat log.
-
-**2. Triage (Backlog → `To Do`).**
-Promotion is a deliberate act — the operator's, or an agent's under an
-explicit directive — and includes ordering: `To Do` is priority-sorted
-top-down, and work is taken from the top. Two categories never self-promote:
-`decision` issues (they are answered, not implemented — see below) and
-`directional` issues (spec §13's recorded intentions, "pulled in deliberately,
-never by drift"; an agent choosing its next task skips them unconditionally).
-
-**3. Start (`To Do` → `In Progress`).**
-Before the first edit: check the board for what is **already** `In Progress`
-(that work is another agent's — see "Many agents work here at once"), then
-claim your own item by moving it to `In Progress`, create the worktree and
-topic branch (branch name references the issue where practical, e.g.
-`feat/42-session-delete`), and drop a one-line comment on the issue saying
-work has started and on what branch. Claiming first is what makes the claim
-visible to every other agent; an unclaimed item is one two agents start. One
-issue per active branch; an issue with no active worktree does not sit in
-`In Progress`.
-
-**4. Implement.**
-Small single-purpose Conventional Commits, each referencing the issue (`#N`
-in the body). Keep the ticket current as things happen, not retrospectively:
-comment when a meaningful decision is made, when a blocker appears (and who
-unblocks it), when scope genuinely changes (edit the body — the body is the
-current truth, comments are the history). Anything discovered that is not
-this ticket's scope goes back to stage 1 as its own issue and gets
-cross-linked. Behavior changes that contradict docs update the docs in the
-same commit.
-
-**5. Verify.**
-`pnpm verify` green, plus the e2e suite when the change touches surfaces it
-covers (`pnpm --filter @plotroom/web e2e`). Only then move the issue to
-`Review` with a comment summarizing: what landed on the branch, test evidence,
-known gaps/residual risks. Green verify alone never means done.
-
-**6. Review (`Review`).**
-Independent review — a person or a fresh-context reviewer agent that did not
-write the code — against the issue's own statement of intent, the spec
-sections it cites, and the cross-cutting rules (§15 invariants where schema is
-touched, no silent truncation, enforced-not-documented, one vocabulary).
-Findings are recorded **on the issue**: blocking findings send it back to
-`In Progress` (same implementer where possible) and the loop repeats;
-non-blocking findings become stage-1 issues. No blocking findings → proceed.
-
-**7. Land.**
-Rebase onto `main` at this point, not once at the start of the ticket — another
-agent may have landed since (lockfile protocol if `pnpm-lock.yaml` is involved:
-take main's, rerun `pnpm install`, commit the result), re-run verify, then
-fast-forward merge — `main` is ff-only, no merge commits. The landing
-commit/PR carries `Fixes #N` so the issue closes on push; **verify the issue
-actually closed** (auto-close can lag or miss — close manually with a landing
-comment naming the commit if so). Push.
-
-**8. Deliver (→ `Done`, close, clean up).**
-Done means all of: review passed, ff-merged to `main`, issue closed with the
-landing commit named, **worktree removed and topic branch deleted**. The board
-item shows `Done` (or is archived off the board — closed issues remain the
-permanent record either way). A ticket with a live worktree is not delivered.
-
-**Decision issues** follow a shorter path: `Backlog` until the operator
-decides; the decision lands as an AGENTS.md edit in the same PR that first
-needs it (the issue tracks the state, AGENTS.md remains the record of the
-answer); then the issue closes citing that commit.
-
-**Orchestrators** (fleet runs) own the board for their tracks: they create and
-move issues as part of spawn/merge duties, relay subagent findings onto the
-right issues, and link every track's issues in the final report. Subagents
-without `gh` access report status to the orchestrator, who updates the board —
-work the board never saw is work that did not follow this file.
-
-**History note:** the rebuild's development plan and batch reports were
-removed from the working tree so the tracker is the single source; issues
-#1–#41 are the closed historical record of the rebuild, and the deep per-epic
-landed notes remain readable in git history
-(`git show d336340:docs/development-plan.md`).
+**Work tracking lives outside this repository** (see "Documentation").
 
 ## Git rules
 
@@ -698,7 +558,7 @@ andyhite/
 Rules:
 
 - **Agents MUST do all work in a worktree and NEVER change the branch of the primary checkout.** No `git checkout`/`git switch` in the primary checkout, ever — another agent or the operator may be relying on it, and switching it breaks every concurrent session at once. Create a worktree for your branch and work there; if you find the primary checkout on anything other than `main`, report it rather than "fixing" it.
-- **A worktree you did not create belongs to another session.** Expect several to exist at once — one per ticket in flight, `In Progress` or `Review`, because a worktree lives until stage 8. Read one if your task is to review it; never write to one: no edits, commits, installs, builds, or `git worktree remove`, not even for a branch that looks merged or abandoned (you cannot tell a landed branch from one mid-rebase). To run something against another branch's commit, check it out detached in a tree of your own. Anything else you find wrong with it goes on the issue.
+- **A worktree you did not create belongs to another session.** Expect several to exist at once — one per change in flight, because a worktree lives until its branch lands. Read one if your task is to review it; never write to one: no edits, commits, installs, builds, or `git worktree remove`, not even for a branch that looks merged or abandoned (you cannot tell a landed branch from one mid-rebase). To run something against another branch's commit, check it out detached in a tree of your own. Anything else you find wrong with it is reported where work is tracked, not fixed in place.
 - Never create a worktree inside the repo directory.
 - One worktree per branch, and one agent per worktree; remove it when the branch lands: `git worktree remove ../plotroom-<branch>` then `git worktree prune`.
 - **Agents clean up after themselves — and only after themselves.** Once your work has merged to `main`, removing your worktree (and deleting the merged topic branch) is part of the task — not optional, not someone else's job. A task is not complete while its worktree still exists. The only worktree you remove is one you created, and not even that one if the operator or your orchestrator asked you to leave it in place.
@@ -706,25 +566,60 @@ Rules:
 
 ## Agent working agreement
 
-- **Assume other agents are working right now.** Their tickets are the board's `In Progress` items and their branches are the other worktrees; both are off limits (see "Many agents work here at once").
+- **Assume other agents are working right now.** Their branches are the other worktrees, and those are off limits (see "Many agents work here at once").
 - Work in a worktree on a topic branch, never directly on `main` and never by switching the primary checkout's branch (see "Worktrees").
 - Keep commits small and single-purpose; one logical change per commit.
 - Do not commit generated artifacts, secrets, or local machine paths.
-- Update `docs/` in the same commit as behavior changes that contradict it.
+- Never make a documentation edit a condition of merging unrelated work (see "Documentation").
 - Do not amend or rewrite commits that already exist on `main`.
-- When a decision is not covered by the spec or this file, ask rather than inventing a convention — then record the answer here.
+- When a decision is not covered by the spec or this file, ask rather than inventing a convention — then record the answer where work is tracked — or in `docs/decisions/` when it deserves prose — never in this file.
+
+## Verification and review
+
+- **`pnpm verify` green, plus `pnpm --filter @plotroom/web e2e` when the change
+  touches a surface that suite covers.** Green verify alone never means done:
+  it proves nothing broke, not that the thing you built works.
+- **Somebody who did not write the change reads it** before it lands — a person,
+  or an agent with fresh context.
+- Review judges the change against the spec sections it claims to implement and
+  against the cross-cutting rules: the four §15 invariants wherever schema is
+  touched, no silent truncation, rules **enforced rather than documented**, and
+  one vocabulary for one concept.
+
+## Documentation
+
+**Documentation is prose worth keeping; it is not a task tracker.** What is
+planned, claimed, under review or decided is tracked outside this repository, and
+the only record of work inside it is `CHANGELOG.md`.
+
+- **A documentation edit is never the price of merging something else.**
+  Documentation is its own change and its own commit, never smuggled into a PR
+  that happens to touch the area, and never deferred until something else needs
+  it. A rider like that is how an unrelated change ends up blocked on wording
+  nobody asked for.
+- **A behavior change that contradicts `docs/` does not carry the edit** — the
+  contradiction is recorded where work is tracked and fixed on its own. The PR is
+  not blocked by it; a contradiction nobody wrote down is the actual failure.
+- `docs/decisions/` holds decision records in prose (ADRs) when a decision
+  deserves more than the tracker. `AGENTS.md` holds **standing conventions an
+  agent must follow** — not the decision archive.
 
 ## Repository layout
 
 ```
 docs/product-spec.md   Product specification (north star, behavior only)
+docs/decisions/        Decision records (ADRs), when a decision deserves prose
 AGENTS.md              This file — canonical conventions
-CONTRIBUTING.md        How to contribute (workflow detail)
+CHANGELOG.md           Completed work, one section per release
+CONTRIBUTING.md        How to contribute (git-level detail)
 ```
 
-## Open decisions (not yet made)
+## Decisions
 
-Record answers here as they are decided; do not assume.
+Everything below this paragraph is an older in-file archive, written before
+decisions were tracked outside the repository (see "Documentation"); **#97
+relocates it into `docs/decisions/` and deletes it from this file**. Do not add to
+it.
 
 - Collection membership model (the `collection` kind has no members yet) — the
   only schema gap left in Phase 1's model: workstreams, nodes, edges, commands,

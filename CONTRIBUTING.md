@@ -3,10 +3,12 @@
 PlotRoom is a context-authoring canvas for operating a fleet of AI agents. Before contributing, read:
 
 1. [`docs/product-spec.md`](docs/product-spec.md) — what the product is and how it behaves.
-2. [`AGENTS.md`](AGENTS.md) — the canonical conventions (git rules, worktrees, commit format, work tracking). This document expands on them; `AGENTS.md` wins on any conflict.
-3. The **PlotRoom project board** (https://github.com/users/andyhite/projects/1) — all work is tracked as GitHub Issues on this repo; every change starts from an issue and moves through the ticket lifecycle (see "Work tracking — GitHub Projects" / "The ticket lifecycle" in `AGENTS.md`).
+2. [`AGENTS.md`](AGENTS.md) — the canonical conventions (git rules, worktrees, commit format). This document expands on them; `AGENTS.md` wins on any conflict.
 
-The project is a greenfield rebuild: docs only so far. The stack is decided — TypeScript, Electron + Hono server, SQLite via Drizzle, React + xyflow canvas, pnpm + Turborepo, Vitest + Playwright. See "Stack" and "Open decisions" in `AGENTS.md`.
+Work tracking lives outside this repository, and nothing about it is documented
+here. The only in-repo record of work is [`CHANGELOG.md`](CHANGELOG.md).
+
+The stack is decided — TypeScript, Electron + Hono server, SQLite via Drizzle, React + xyflow canvas, pnpm + Turborepo, Vitest + Playwright. See "Stack" in `AGENTS.md`, and `docs/decisions/` for the records behind it.
 
 ## Quick start
 
@@ -35,30 +37,27 @@ merge commits in a PR.
 
 ## Workflow
 
-The full ticket lifecycle (idea → delivery, incl. board-status obligations) is
-defined in `AGENTS.md` — this is the git-level view of the middle of it.
+This is the git-level view of making a change.
 
 **Several agents work here at once.** Expect other worktrees in the parent
-directory and other tickets in flight; `In Progress` on the board means claimed
-by somebody else, and a worktree you did not create is theirs. Never take an
-item another session claimed, and never _write_ to another worktree (reading one
-is fine — reviewing a branch you did not write means reading it). `AGENTS.md`'s
-"Many agents work here at once" is the rule, this is the reminder.
+directory. A worktree you did not create is another session's: never write to one
+(reading is fine — reviewing a branch you did not write means reading it).
+`AGENTS.md`'s "Many agents work here at once" is the rule, this is the reminder.
 
-1. **Issue first.** No branch without an issue. Take from the top of `To Do`, never from `In Progress`, and move yours to `In Progress` (with a comment naming your branch) **before** the first edit — that claim is the only thing stopping a second agent starting the same work.
-2. **Branch.** `<type>/<short-slug>`, referencing the issue where practical, e.g. `feat/42-session-delete`, in a worktree in the parent directory:
+1. **Branch.** `<type>/<short-slug>`, in a worktree in the parent directory:
    ```sh
-   git worktree add ../plotroom-feat-42-session-delete -b feat/42-session-delete
+   git worktree add ../plotroom-feat-session-delete -b feat/session-delete
    ```
-3. **Commit** in small, single-purpose Conventional Commits (see below), each referencing the issue (`#42`) in the body.
-4. **Verify** (`pnpm verify`, plus e2e when you touched covered surfaces), then move the issue to `Review`.
-5. **Rebase** onto `main` after review passes and immediately before landing — another agent may have landed meanwhile — and never merge `main` into your branch.
+2. **Commit** in small, single-purpose Conventional Commits (see below).
+3. **Verify** — `pnpm verify`, plus the e2e suite when you touched surfaces it covers.
+4. **Review.** Somebody who did not write the change reads it (see "Review expectations").
+5. **Rebase** onto `main` immediately before landing — another agent may have landed meanwhile — and never merge `main` into your branch.
    ```sh
    git fetch origin
    git rebase origin/main
    ```
-6. **Land** as a fast-forward or a squash with `Fixes #42` in the landing commit/PR body. No merge commits. Confirm the issue closed.
-7. **Clean up** the branch and its worktree — the ticket is not delivered while its worktree exists. Yours only: leave every other worktree alone.
+6. **Land** as a fast-forward or a squash. No merge commits.
+7. **Clean up** your branch and its worktree. Yours only: leave every other worktree alone.
 
 ## Commit messages
 
@@ -138,15 +137,17 @@ git worktree prune
 Never nest a worktree inside the repo. Keep the primary checkout on `main` —
 switching its branch breaks every concurrent session at once.
 
-`git worktree list` normally shows several: one per ticket in flight —
-`In Progress` or `Review`, since a worktree lives until the ticket is delivered.
-Create and remove your own; write to no other.
+`git worktree list` normally shows several: one per change in flight, because a
+worktree lives until its branch lands. Create and remove your own; write to no
+other.
 
 ## Changing the spec
 
 `docs/product-spec.md` describes behavior, never implementation. Amendments to its governing principles (§2) or non-goals (§14) are changes to the product's thesis — propose them in their own `docs:` commit with the reasoning, separate from any implementation.
 
-Any behavior change that contradicts the spec must update the spec in the same commit.
+A behavior change that contradicts the spec does not carry the spec edit: record
+the contradiction where work is tracked and fix it on its own, in its own `docs:`
+commit (`AGENTS.md` → "Documentation").
 
 ## Review expectations
 

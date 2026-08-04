@@ -384,10 +384,10 @@ export type SessionPhase =
 
 > For the operator to accept; do not apply until accepted. Replaces the
 > "Agent runtime(s) driving sessions, and the session/runtime abstraction
-> boundary" bullet under "Open decisions" and adds a paragraph to the
+> boundary" bullet under AGENTS.md's decision archive and adds a paragraph to the
 > persistence/architecture notes.
 
-Remove from **Open decisions**:
+Remove from AGENTS.md's decision archive:
 
 ```
 - Agent runtime(s) driving sessions, and the session/runtime abstraction boundary
