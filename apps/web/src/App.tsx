@@ -583,24 +583,41 @@ function Board() {
       // afterward; a refusal is surfaced (never silently dropped) and the
       // local copy is deliberately left in place so a retry on the next
       // load can still find it.
+      const liveNodeIds = new Set(graph.nodes.map((node) => node.id));
       void localPlacementStore.load().then(async (local) => {
-        const toMigrate = localPlacementsToMigrate(local, authoredCount);
+        const toMigrate = localPlacementsToMigrate(
+          local,
+          authoredCount,
+          liveNodeIds,
+        );
         if (!toMigrate) return;
         const entries = Object.entries(toMigrate).map(([nodeId, position]) => ({
           nodeId,
           position,
         }));
-        const result = await actions.setArrangement(entries);
-        if (!result.ok) {
+        try {
+          const result = await actions.setArrangement(entries);
+          if (!result.ok) {
+            log(
+              `refused: migrating ${entries.length} locally-stored position(s) to the server - ${result.refusal.message}`,
+            );
+            return;
+          }
+          window.localStorage.removeItem("plotroom.placements.v1");
           log(
-            `refused: migrating ${entries.length} locally-stored position(s) to the server - ${result.refusal.message}`,
+            `migrated ${entries.length} locally-stored position(s) to the server`,
           );
-          return;
+        } catch (err) {
+          // A *thrown* write (a network failure, a 5xx) must surface exactly
+          // like a refusal does, never vanish into an unhandled rejection —
+          // the local copy already stays in place either way, so the next
+          // load can still retry.
+          log(
+            `failed to migrate ${entries.length} locally-stored position(s) to the server: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
         }
-        window.localStorage.removeItem("plotroom.placements.v1");
-        log(
-          `migrated ${entries.length} locally-stored position(s) to the server`,
-        );
       });
     }
 
@@ -1037,17 +1054,40 @@ function Board() {
     // now-null positions into `placements` and bumps `arrangementEpoch`
     // itself — one path for "authored positions changed", never a second
     // one duplicated here.
-    void actions.resetArrangement().then((result) => {
-      if (!result.ok) {
-        log(`refused: reset arrangement - ${result.refusal.message}`);
-        return;
-      }
-      void graphDataSource.refresh?.().then(() => {
+    void actions
+      .resetArrangement()
+      .then((result) => {
+        if (!result.ok) {
+          log(`refused: reset arrangement - ${result.refusal.message}`);
+          return;
+        }
+        void graphDataSource
+          .refresh?.()
+          .then(() => {
+            log(
+              `reset arrangement: cleared ${result.value.arrangedNodesCleared} authored position(s); re-derived from graph structure`,
+            );
+          })
+          .catch((err) => {
+            // The server-side clear already succeeded; only the local
+            // re-read failed. Still surfaced — the operator's canvas may
+            // now disagree with the server until the next snapshot event.
+            log(
+              `reset arrangement: cleared ${result.value.arrangedNodesCleared} authored position(s) on the server, but re-reading the fresh snapshot failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          });
+      })
+      .catch((err) => {
+        // A *thrown* reset (network failure, a 5xx) must surface exactly
+        // like a refusal does, never vanish into an unhandled rejection.
         log(
-          `reset arrangement: cleared ${result.value.arrangedNodesCleared} authored position(s); re-derived from graph structure`,
+          `failed to reset arrangement: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
         );
       });
-    });
   }
 
   /**

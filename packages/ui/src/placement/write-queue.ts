@@ -91,12 +91,38 @@ export function createArrangementWriteQueue(
 
     const entries = Object.entries(batch);
     const [first] = entries;
-    const result =
-      entries.length === 1 && first
-        ? await writer.setNodePosition(first[0], first[1])
-        : await writer.setArrangement(
-            entries.map(([nodeId, position]) => ({ nodeId, position })),
-          );
+
+    let result: ArrangementWriteResult;
+    try {
+      result =
+        entries.length === 1 && first
+          ? await writer.setNodePosition(first[0], first[1])
+          : await writer.setArrangement(
+              entries.map(([nodeId, position]) => ({ nodeId, position })),
+            );
+    } catch (err) {
+      // A *thrown* write (a network failure, a 5xx, the server mid-restart)
+      // is exactly the loss this queue's own doc comment forbids: `pending`
+      // was already cleared above, so without this the batch is gone the
+      // moment this rejects, `onFailure` never runs, and the drag the
+      // operator just made vanishes with nothing to show for it (principles
+      // 10/12). Put the whole batch back as retry material — merged *under*
+      // whatever enqueued during the await, since a newer local value must
+      // win over a stale one this attempt already failed to send — and
+      // still tell the caller, exactly like a refusal does.
+      pending = { ...batch, ...pending };
+      options.onFailure(
+        {
+          ok: false,
+          refusal: {
+            reason: "write_failed",
+            message: err instanceof Error ? err.message : String(err),
+          },
+        },
+        batch,
+      );
+      return;
+    }
 
     if (!result.ok) options.onFailure(result, batch);
   }
