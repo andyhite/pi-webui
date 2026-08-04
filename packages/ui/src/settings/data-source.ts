@@ -126,13 +126,16 @@ export function createFixtureSettingsDataSource(
       return Promise.resolve(requireRow(key));
     },
     set(key: string, value: unknown): Promise<SettingRow> {
-      const current = requireRow(key);
+      // `ignoredReason` is dropped, matching the server: writing a legal value
+      // clears the refusal, and a row that came back both overridden *and*
+      // ignored would be a state the real surface cannot produce.
+      const { ignoredReason: _ignored, ...current } = requireRow(key);
       const next: SettingRow = { ...current, value, overridden: true };
       rows = new Map(rows).set(key, next);
       return Promise.resolve(next);
     },
     remove(key: string): Promise<SettingRow> {
-      const current = requireRow(key);
+      const { ignoredReason: _ignored, ...current } = requireRow(key);
       const next: SettingRow = {
         ...current,
         value: current.defaultValue,

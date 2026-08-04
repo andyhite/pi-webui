@@ -66,7 +66,23 @@ export function applyStoredSettings(
       continue;
     }
 
-    const value = JSON.parse(row.valueJson) as unknown;
+    // A row that is not JSON at all is the same kind of fact as one that is the
+    // wrong type, and it arrives the same way (an older build, or a hand edit).
+    // Parsed defensively so it is *ignored and reported* rather than thrown
+    // before any check runs — the difference between a setting nothing is
+    // running under and a product that will not start.
+    let value: unknown;
+    try {
+      value = JSON.parse(row.valueJson);
+    } catch {
+      ignored.push({
+        key: row.key,
+        reason:
+          "stored value is not readable JSON; running the default instead",
+      });
+      continue;
+    }
+
     const wrong = checkSettingValue(entry, value);
     if (wrong !== null) {
       ignored.push({

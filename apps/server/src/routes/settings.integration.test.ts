@@ -295,6 +295,34 @@ describe("settings (§11, Epic 8.3)", () => {
     ).toContain("finite number");
   });
 
+  it("ignores a row that is not readable JSON rather than failing to start", async () => {
+    const first = await boot();
+    const stateDir = first.stateDir;
+    await first.handle.close();
+
+    // A hand-edited store, which is the case the ignore exists for: unguarded,
+    // `JSON.parse` threw before any check ran and the product would not start.
+    const { openDatabase } = await import("@plotroom/db");
+    const state = openDatabase({ stateDir });
+    state.sqlite
+      .prepare(
+        "INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)",
+      )
+      .run("concurrencyLimit", "{not json", 0);
+    state.close();
+
+    const second = await boot({}, { stateDir });
+    expect(at(await second.ok("/fleet"), "concurrency.limit")).toBe(4);
+    expect(
+      String(
+        at(
+          await second.ok("/settings/concurrencyLimit"),
+          "setting.ignoredReason",
+        ),
+      ),
+    ).toContain("readable JSON");
+  });
+
   it("a persisted override survives a restart of the same state directory", async () => {
     const first = await boot();
     await first.ok("/settings/concurrencyLimit", {

@@ -148,8 +148,11 @@ export class SettingsService {
   remove(key: string, actor: Author): SettingReport {
     const entry = this.require(key);
 
-    this.#ignored.delete(key);
+    // Removed first, then the ignore cleared, for the same reason as `set`: a
+    // store that throws must not leave a read claiming the refused row is in
+    // effect — which for a remove would show the very value boot rejected.
     this.deps.store.remove(key);
+    this.#ignored.delete(key);
     const fallback = readPath(this.deps.defaults, entry.path);
     this.deps.liveAppliers[key]?.(fallback);
     this.publish(entry, actor);

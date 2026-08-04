@@ -281,7 +281,7 @@ export const INTERVAL_SECONDS_BOUND: NumericBound = {
  * rather than trusted. `apps/desktop/src/config.ts` states the same rule for its
  * own process, because Electron's main cannot import this package (the same
  * reason `DEFAULT_PLOTROOM_PORT` is duplicated there) — the two are kept in
- * step by hand, and that duplication is the only one of its kind.
+ * step by hand.
  */
 export const PORT_BOUND: NumericBound = {
   min: 1,
