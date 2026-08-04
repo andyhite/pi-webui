@@ -107,7 +107,14 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - run: pnpm install --frozen-lockfile
+      # `--ignore-scripts`: nothing in this job touches SQLite, and installing
+      # with scripts fails outright on the Windows runner — `better-sqlite3` has
+      # no prebuild for the image's Node 22 and node-gyp cannot use the Visual
+      # Studio that is installed there. That is a real gap for the packaging lane
+      # (recorded on #79), not something this job can honestly paper over by
+      # dropping the platform: the session host's own graph needs no native build
+      # step at all, so it installs and compiles without one.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Compile the session host, and run what it built
         run: pnpm compile
