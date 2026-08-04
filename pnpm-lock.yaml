@@ -87,6 +87,9 @@ importers:
       hono:
         specifier: ^4.12.33
         version: 4.12.33
+      ws:
+        specifier: ^8.21.1
+        version: 8.21.1
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -97,9 +100,6 @@ importers:
       tsx:
         specifier: ^4.23.5
         version: 4.23.5
-      ws:
-        specifier: ^8.21.1
-        version: 8.21.1
 
   apps/web:
     dependencies:
