@@ -105,16 +105,38 @@ export class SearchIndex {
   }
 
   /**
-   * Whether this entity already has a row — the backfill's own idempotency
-   * check (§6.8, Epic 8.2): a boot-time sweep over every session asks this
-   * first, so a session already indexed costs one indexed lookup rather than
-   * a full re-derivation and re-write every time the process starts.
+   * Whether this entity already has a row (§6.8, Epic 8.2).
+   *
+   * `search` is an FTS5 virtual table, so a `WHERE ref_kind = …` with no
+   * `MATCH` beside it is a **full scan** of the index — cheap for one
+   * question, and quadratic for a caller asking it once per row. A sweep over
+   * every session asks {@link indexedRefIds} instead, which is the same
+   * question asked once.
    */
   has(refKind: string, refId: string): boolean {
     const row = this.state.sqlite
       .prepare("SELECT 1 FROM search WHERE ref_kind = ? AND ref_id = ? LIMIT 1")
       .get(refKind, refId);
     return row !== undefined;
+  }
+
+  /**
+   * Every `refId` of one kind that already has a row — the boot backfill's
+   * idempotency check, asked once rather than per session.
+   *
+   * One scan of the index instead of `has` per row: the backfill is O(n) in
+   * sessions and O(1) in scans, where calling `has` in a loop was O(n) scans
+   * of an n-row index. The set is read fresh by each caller and never cached,
+   * because the only thing that could invalidate it is a write this same
+   * class made.
+   */
+  indexedRefIds(refKind: string): Set<string> {
+    const rows = this.state.sqlite
+      .prepare<unknown[], { refId: string }>(
+        "SELECT ref_id AS refId FROM search WHERE ref_kind = ?",
+      )
+      .all(refKind);
+    return new Set(rows.map((row) => row.refId));
   }
 
   /**

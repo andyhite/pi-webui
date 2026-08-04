@@ -110,3 +110,61 @@ describe("SearchIndex.query (route-independent grammar safety)", () => {
     ).not.toContain("sess_1");
   });
 });
+
+describe("SearchIndex.indexedRefIds (the backfill's one question)", () => {
+  let dir: string;
+  let state: PlotroomDatabase;
+  let index: SearchIndex;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "plotroom-search-refs-"));
+    state = openDatabase({ stateDir: dir });
+    index = new SearchIndex(state);
+  });
+
+  afterEach(() => {
+    state.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function entry(refKind: string, refId: string) {
+    index.index({
+      title: `title ${refId}`,
+      location: "somewhere",
+      body: "body",
+      kind: refKind,
+      refKind,
+      refId,
+    });
+  }
+
+  it("is empty for a kind nothing has been indexed under", () => {
+    expect(index.indexedRefIds("session")).toEqual(new Set());
+  });
+
+  it("agrees with `has` for every row, which is the property the backfill relies on", () => {
+    entry("session", "sess_1");
+    entry("session", "sess_2");
+    entry("note", "note_1");
+
+    const ids = index.indexedRefIds("session");
+    expect(ids).toEqual(new Set(["sess_1", "sess_2"]));
+    for (const id of ["sess_1", "sess_2"]) {
+      expect(index.has("session", id)).toBe(true);
+    }
+    // Kind-scoped, so a note never makes a session look already-covered.
+    expect(ids.has("note_1")).toBe(false);
+  });
+
+  it("drops a removed row, so a re-derivation is not skipped forever", () => {
+    entry("session", "sess_1");
+    index.remove("session", "sess_1");
+    expect(index.indexedRefIds("session")).toEqual(new Set());
+  });
+
+  it("reports one id per entity after a re-index, not one per write", () => {
+    entry("session", "sess_1");
+    entry("session", "sess_1");
+    expect(index.indexedRefIds("session")).toEqual(new Set(["sess_1"]));
+  });
+});

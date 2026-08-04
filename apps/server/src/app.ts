@@ -167,8 +167,8 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
 
   // Catch every session that existed before search indexing did up to the
   // index (§6.8, Epic 8.2). A read/derivation over records that already
-  // exist (principle 2), idempotent (`SearchIndex.has` skips whatever a
-  // previous boot already covered), and cheap enough to simply always run
+  // exist (principle 2), idempotent (whatever a previous boot already covered
+  // is read once and skipped), and cheap enough to simply always run
   // rather than gate behind a persisted "have I done this" flag — a second
   // thing to get out of sync with the first.
   const searchBackfill = backfillSearchIndex(stores);
