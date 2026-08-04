@@ -386,23 +386,69 @@ function Board() {
   }
   const arrangementWriteQueue = arrangementWriteQueueRef.current;
   // Durable placement, the last chance to send it (§5, §12): a page torn
-  // down for teardown (tab close, navigating away, mobile backgrounding)
-  // must not lose a drag still sitting inside the debounce window —
-  // `pagehide` fires reliably at exactly that moment (unlike `unload`, and
-  // unlike `visibilitychange` for a bfcache-eligible navigation). Honestly
-  // best-effort, not a guarantee: the underlying `fetch` calls
-  // (`HttpClient`) are not `keepalive`-flagged, so a request the browser is
-  // already tearing the page down around is not guaranteed to complete —
-  // this still gives a pending write its best remaining chance rather than
-  // none at all. Reads the ref directly (never the `arrangementWriteQueue`
-  // variable) so the listener never needs to be re-registered; the queue
+  // down for teardown (tab close, navigating away, a reload) must not lose
+  // a drag still sitting inside the debounce window. What is now actually
+  // guaranteed, not merely attempted: `flush({ keepalive: true })` asks the
+  // browser's own `fetch` `keepalive` mechanism (`transport/http.ts`) to
+  // let the request outlive the document that made it — the same guarantee
+  // `navigator.sendBeacon` gave before `fetch` grew the option, and unlike
+  // a plain `fetch`, which Chromium (and every other engine) aborts the
+  // instant the document is torn down. This closes exactly the gap a
+  // browser-level e2e leg caught: drag a node, reload immediately, and a
+  // plain (non-keepalive) flush lost the race against the navigation every
+  // time.
+  //
+  // Three listeners, one flush path (`flushForUnload`), because no single
+  // event fires reliably in every teardown case across engines — confirmed
+  // empirically, not assumed: instrumenting all three on a real reload
+  // showed only `beforeunload` firing in this project's own Chromium/
+  // Playwright combination for `page.reload()`, which is exactly the path
+  // `canvas-arrangement-durability.spec.ts`'s "drag, then reload
+  // immediately" leg exercises — `pagehide`/`visibilitychange` alone left
+  // that leg failing (the drag lost the race against the reload) even with
+  // `keepalive` wired, because neither listener ran at all. `beforeunload`
+  // fires for a same-tab reload/navigation; `pagehide` still fires for a
+  // tab close or a bfcache-eligible navigation in engines where
+  // `beforeunload` does not; `visibilitychange` (→ `hidden`) covers
+  // backgrounding/tab-switch that neither of the other two sees at all
+  // (mobile Safari in particular). All three are cheap to over-fire —
+  // `flush()` is a no-op once nothing is pending, so whichever fires first
+  // sends and the rest find nothing left to do.
+  //
+  // What is now actually guaranteed, not merely attempted: `flush({
+  // keepalive: true })` asks the browser's own `fetch` `keepalive`
+  // mechanism (`transport/http.ts`) to let the request outlive the
+  // document that made it — the same guarantee `navigator.sendBeacon` gave
+  // before `fetch` grew the option, and unlike a plain `fetch`, which every
+  // engine aborts the instant the document is torn down.
+  //
+  // What is still *not* guaranteed, honestly: `keepalive` has its own
+  // combined body-size budget (tens of KB across all in-flight keepalive
+  // requests, browser-dependent) — far above one arrangement batch, but a
+  // real ceiling nonetheless; a request already in flight when the
+  // renderer's own process is killed outright (not a page navigation, a
+  // hard process kill) has no document event to fire at all; and this is a
+  // browser/Electron-renderer mechanism, not a server-side acknowledgement
+  // this client waits for — the write is dispatched with the browser's best
+  // guarantee to deliver it, not confirmed delivered before the page is
+  // gone. Reads the ref directly (never the `arrangementWriteQueue`
+  // variable) so no listener ever needs to be re-registered; the queue
   // itself is created once and never changes after mount.
   useEffect(() => {
-    function onPageHide(): void {
-      void arrangementWriteQueueRef.current?.flush();
+    function flushForUnload(): void {
+      void arrangementWriteQueueRef.current?.flush({ keepalive: true });
     }
-    window.addEventListener("pagehide", onPageHide);
-    return () => window.removeEventListener("pagehide", onPageHide);
+    function onVisibilityChange(): void {
+      if (document.visibilityState === "hidden") flushForUnload();
+    }
+    window.addEventListener("beforeunload", flushForUnload);
+    window.addEventListener("pagehide", flushForUnload);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("beforeunload", flushForUnload);
+      window.removeEventListener("pagehide", flushForUnload);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, []);
   // The run gesture's client-side guard (§4.1, principle 9 at the gesture
   // level): a command node id stays in this set for exactly as long as its
