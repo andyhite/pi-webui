@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { systemMillisClock } from "@plotroom/core";
 import type { ServerConfig } from "../config.js";
 import type { Logger } from "../logging/logger.js";
+import { createOmpRuntime, OMP_ADAPTER_ID } from "./omp.js";
 import { createPiRuntime } from "./pi.js";
 import { RuntimeRegistry } from "./registry.js";
 import {
@@ -11,6 +12,7 @@ import {
   type RuntimeScript,
 } from "./scripted.js";
 
+export { createOmpRuntime, OMP_ADAPTER_ID } from "./omp.js";
 export { RuntimeRegistry } from "./registry.js";
 export type { RuntimeLaunch } from "./registry.js";
 export {
@@ -26,19 +28,27 @@ export type { RuntimeScript, ScriptedSubmission } from "./scripted.js";
 /**
  * Which runtimes this installation has (decision 0001).
  *
- * The pi coding agent is adapter v1 and is always available. The scripted
- * runtime is registered **only** when the operator selects it, which is what
- * keeps a client-supplied script from being a way to fake work in a real
- * installation: with `PLOTROOM_RUNTIME` unset there is no such adapter to name.
+ * The pi coding agent is adapter v1 and is always available. Two others are
+ * registered **only** when the operator selects them, for different reasons.
+ *
+ * The scripted runtime is opt-in because a client-supplied script would
+ * otherwise be a way to fake work in a real installation: with
+ * `PLOTROOM_RUNTIME` unset there is no such adapter to name.
+ *
+ * The session host (issue #73) is opt-in because it is not finished. Its
+ * permission gate is issue #81, so `OMP_CAPABILITIES.enforcesPermissions` is
+ * still false and `RuntimeRegistry.start` refuses to run work on it — loudly,
+ * at the gesture, which is the C6 rule doing its job rather than a gap to
+ * remember. Selecting it therefore boots a server that spawns nothing until
+ * that lands; the log below says so rather than leaving it to be discovered.
  */
 export function createRuntimeRegistry(
   config: ServerConfig,
   logger: Logger,
 ): RuntimeRegistry {
   const registry = new RuntimeRegistry();
-  const scripted = config.runtime.adapterId === SCRIPTED_ADAPTER_ID;
 
-  if (scripted) {
+  if (config.runtime.adapterId === SCRIPTED_ADAPTER_ID) {
     const defaultScript = readScript(config.runtime.scriptPath);
     registry.register(
       createScriptedRuntime({
@@ -50,6 +60,23 @@ export function createRuntimeRegistry(
     logger.info("scripted session runtime selected", {
       scriptPath: config.runtime.scriptPath,
     });
+    return registry;
+  }
+
+  if (config.runtime.adapterId === OMP_ADAPTER_ID) {
+    registry.register(
+      createOmpRuntime({
+        stateDir: config.stateDir,
+        program: config.runtime.sessionHostProgram,
+        bunProgram: config.runtime.sessionHostBun,
+        logger,
+      }),
+      { default: true },
+    );
+    logger.warn(
+      "session-host runtime selected, but its permission gate is not wired yet (issue #81): every run will be refused as permissions_advisory_only",
+      { program: config.runtime.sessionHostProgram },
+    );
     return registry;
   }
 

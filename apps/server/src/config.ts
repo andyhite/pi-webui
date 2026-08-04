@@ -94,6 +94,19 @@ export interface RuntimeConfig {
   readonly adapterId: string;
   /** The pi binary, for hosts that keep it somewhere other than `PATH`. */
   readonly piProgram: string;
+  /**
+   * The whole executable to run as the session host, when the operator has one
+   * — a `bun build --compile` binary in a packaged install (issue #92). Set, it
+   * is run alone; unset, the session host is this build's own entry, run by
+   * `sessionHostBun`.
+   */
+  readonly sessionHostProgram: string | null;
+  /**
+   * The Bun program that runs the bundled session-host entry. `apps/session-host`
+   * is the one package in the repo that needs Bun (issue #78 keeps the server on
+   * Node), so this is how a host with Bun somewhere other than `PATH` says where.
+   */
+  readonly sessionHostBun: string;
   /** A script file the scripted runtime replays when a launch supplies none. */
   readonly scriptPath: string | null;
 }
@@ -473,6 +486,14 @@ export function loadServerConfig(
         DEFAULT_RUNTIME_ADAPTER,
       piProgram:
         overrides.runtime?.piProgram ?? env.PLOTROOM_PI_PROGRAM ?? "pi",
+      sessionHostProgram:
+        overrides.runtime?.sessionHostProgram !== undefined
+          ? overrides.runtime.sessionHostProgram
+          : (env.PLOTROOM_SESSION_HOST ?? null),
+      sessionHostBun:
+        overrides.runtime?.sessionHostBun ??
+        env.PLOTROOM_SESSION_HOST_BUN ??
+        "bun",
       scriptPath:
         overrides.runtime?.scriptPath !== undefined
           ? overrides.runtime.scriptPath
