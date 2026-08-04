@@ -21,11 +21,15 @@ import { PINNED_TOOL_NAMES } from "./tools.js";
  * workspace git. Embedding the SDK changes the shape of that, not the stance —
  * `discoverAuthStorage()` reads the operator's own credential store *inside this
  * process*, so the session host holds provider tokens in memory. The server
- * still does not, and PlotRoom still injects nothing of its own. The
- * consequences are this file's to keep: tokens are never logged, never framed,
- * and never in an error message — which is why a startup failure is reported as
- * its own sentence rather than by forwarding a stack trace, and why a session
- * with no authenticated model says exactly that.
+ * still does not, and PlotRoom still injects nothing of its own. What that costs
+ * this file: nothing PlotRoom writes may carry a credential — not a frame, not a
+ * log line, not an error — which is why a startup failure is reported as its own
+ * sentence rather than by forwarding a stack trace, and why a session with no
+ * authenticated model says exactly that. One honest qualification: a vendor
+ * error's `message` is forwarded verbatim into a `fatal` frame and into a failed
+ * turn's observation, and that text is the SDK's, not ours. Narrowing it to a
+ * class and a code would cost the operator the only account of what went wrong,
+ * so it is forwarded knowingly rather than by omission.
  */
 
 /**

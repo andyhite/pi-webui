@@ -8,10 +8,14 @@ import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent";
 /**
  * The SDK's events → PlotRoom's observations.
  *
- * This is the **only** file in the product where vendor event names appear
+ * This is the only source file in the product where vendor event names appear
  * (issue #73): the sidecar writes `RuntimeObservation` values it is typechecked
  * against, so a vendor release that renames an event costs one mapping change
- * here and no session records anywhere.
+ * here and no session records anywhere. The tests beside it name those events
+ * too, and deliberately build their events as literals — so they would stay
+ * green against a renamed SDK, and what catches a rename is the spike suite that
+ * runs against the real thing on every pin bump (issue #83), never this file's
+ * unit tests.
  *
  * It maps and never interprets. Phases are derived in `@plotroom/core` from
  * these observations plus PlotRoom's own approval, claim and silence state
