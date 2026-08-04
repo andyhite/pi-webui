@@ -45,7 +45,9 @@ export const OMP_CAPABILITIES: RuntimeCapabilities = {
   // exclusive of the branched entry, which is not what `TranscriptPoint` means.
   // Until that is re-derived (issue #82) PlotRoom seeds from its own transcript,
   // which `planFork` already does for every runtime that cannot fork natively —
-  // so a fork works, and its `runtime_mode` says truthfully that it was seeded.
+  // so a fork stays expressible here, and its `runtime_mode` will say truthfully
+  // that it was seeded. Expressible, not yet reachable: nothing at all runs on
+  // this adapter until the gate below is wired, seeded forks included.
   fork: "none",
   // A steering message is consumed at the next turn boundary without a new
   // explicit turn — the §6.5 shape natively.
@@ -257,10 +259,16 @@ class SessionHostHandle implements RuntimeSessionHandle {
     this.#stopRequested = "user";
 
     if (mode === "graceful") {
-      // The sidecar aborts the turn and disposes the session, which is what
-      // flushes the SDK's own session file. A refused or unanswered stop is not
-      // an error worth surfacing — the close below is what guarantees the end.
-      await this.#send({ type: "stop", id: this.#nextId(), mode }).catch(
+      // Sent, not awaited. The sidecar aborts the turn and disposes the session,
+      // which is what flushes the runtime's own session file — so it is worth
+      // asking, and `close` below then gives it a bounded window to leave.
+      //
+      // Awaiting the acknowledgement would undo that bound: it settles only on a
+      // frame or on the stream's end, so a sidecar that is alive but silent — a
+      // foreign executable named by `PLOTROOM_SESSION_HOST`, or one wedged before
+      // it reads stdin — would hang this stop, and the request behind it, for
+      // ever. Nothing reads the answer anyway; the end is what the stream says.
+      void this.#send({ type: "stop", id: this.#nextId(), mode }).catch(
         () => undefined,
       );
     }
