@@ -1,4 +1,5 @@
 import type { RuntimeScript } from "../runtime/scripted.js";
+import { DEFAULT_SEARCH_LIMIT } from "@plotroom/db";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   at,
@@ -219,6 +220,50 @@ describe("search (§6.8)", () => {
     const res = await harness.call("/search?q=");
 
     expect(res.status).toBe(400);
+  });
+
+  it("says when hits were left out, and says the limit it applied (no silent truncation)", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness, {
+      lifecycle: "open",
+      name: "Fix the flaky login test",
+    });
+
+    // Two sessions of the same command: two hits for one word, which is the
+    // smallest arrangement in which a limit of one has something to hide.
+    for (let i = 0; i < 2; i += 1) {
+      const started = await run(harness, fixture.commandId, oneTurn);
+      await endedSession(harness, str(started, "session.id"));
+    }
+
+    const clamped = await harness.ok(
+      `/search?q=${encodeURIComponent("flaky")}&limit=1`,
+    );
+    expect(list(clamped, "hits")).toHaveLength(1);
+    expect(at(clamped, "limit")).toBe(1);
+    expect(at(clamped, "truncated")).toBe(true);
+
+    const complete = await harness.ok(
+      `/search?q=${encodeURIComponent("flaky")}&limit=5`,
+    );
+    expect(list(complete, "hits")).toHaveLength(2);
+    expect(at(complete, "limit")).toBe(5);
+    expect(at(complete, "truncated")).toBe(false);
+  });
+
+  it("reports the default limit when the caller named none, and does not claim truncation under it", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness, {
+      lifecycle: "open",
+      name: "Fix the flaky login test",
+    });
+    const started = await run(harness, fixture.commandId, oneTurn);
+    await endedSession(harness, str(started, "session.id"));
+
+    const found = await harness.ok(`/search?q=${encodeURIComponent("flaky")}`);
+
+    expect(at(found, "limit")).toBe(DEFAULT_SEARCH_LIMIT);
+    expect(at(found, "truncated")).toBe(false);
   });
 
   it("refuses a session actor (principle 1): a snippet of another session's transcript is not this session's to read", async () => {

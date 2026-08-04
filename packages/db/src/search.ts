@@ -35,6 +35,14 @@ export interface SearchOptions {
  * what somebody is searching for outranks one that merely mentions the word
  * once in a long transcript (§6.8: "ranked over title, location, and content").
  */
+/**
+ * How many hits a caller that names no limit gets. Exported because a caller
+ * that must report truncation has to know the limit it is actually under: a
+ * route asking for "the default, plus one" cannot spell that against a number
+ * only this module knows (no silent truncation, AGENTS.md).
+ */
+export const DEFAULT_SEARCH_LIMIT = 25;
+
 const TITLE_WEIGHT = 10.0;
 const LOCATION_WEIGHT = 4.0;
 const BODY_WEIGHT = 1.0;
@@ -120,7 +128,7 @@ export class SearchIndex {
     const match = toLiteralFtsQuery(rawQuery);
     if (match === null) return [];
 
-    const limit = options.limit ?? 25;
+    const limit = options.limit ?? DEFAULT_SEARCH_LIMIT;
     const kinds = options.kinds ?? [];
 
     const kindFilter =

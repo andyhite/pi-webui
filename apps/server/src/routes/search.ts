@@ -1,6 +1,14 @@
+import { DEFAULT_SEARCH_LIMIT } from "@plotroom/db";
 import { Hono } from "hono";
 import { badRequest, forbidden } from "../http/errors.js";
 import { actorOf, type ApiEnv, type ApiStores } from "./api.js";
+
+/**
+ * The most hits one request will answer with, however large a `limit` it asks
+ * for. A clamp rather than a refusal — but never a silent one: see
+ * `truncated` below.
+ */
+const MAX_SEARCH_LIMIT = 100;
 
 /**
  * FTS search (§6.8).
@@ -28,6 +36,17 @@ import { actorOf, type ApiEnv, type ApiStores } from "./api.js";
  * `OPERATOR_ONLY_ROUTES` entry already declares it operator-only
  * (`packages/core/src/sessions/tools/catalog.test.ts`); this is that
  * declaration enforced rather than merely documented (cross-cutting rule 3).
+ *
+ * Every answer says whether it is complete. `limit` is the bound actually
+ * applied — the caller's, clamped to `MAX_SEARCH_LIMIT`, or the index's own
+ * default when none was asked for — and `truncated` is true when the index
+ * held at least one more hit than that. Detected by asking for one hit past
+ * the limit and dropping it, so "there are more" is observed rather than
+ * inferred from `hits.length === limit`, which is also true of a query whose
+ * last hit is its last hit. A clamped result that said nothing about being
+ * clamped would be silent truncation, which this repository does not do
+ * (AGENTS.md) — an operator searching a fleet's transcripts has no other way
+ * to tell "nothing else matched" from "the rest was not shown".
  *
  * `q` is always literal text, never FTS5 query grammar. A hyphenated ticket
  * id (`PROJ-123`), a branch name (`feat/x-y`), an unbalanced quote, a stray
@@ -65,16 +84,22 @@ export function searchRoutes(stores: ApiStores): Hono<ApiEnv> {
     const limitParam = c.req.query("limit");
     const limit =
       limitParam !== undefined && Number.isFinite(Number(limitParam))
-        ? Math.max(1, Math.min(100, Number(limitParam)))
-        : undefined;
+        ? Math.max(1, Math.min(MAX_SEARCH_LIMIT, Number(limitParam)))
+        : DEFAULT_SEARCH_LIMIT;
 
-    const hits = stores.search.query(q, {
+    // One past the limit: the extra hit is never returned, and its existence
+    // is the only honest evidence that the answer is partial.
+    const found = stores.search.query(q, {
       ...(kinds ? { kinds } : {}),
-      ...(limit !== undefined ? { limit } : {}),
+      limit: limit + 1,
     });
+    const truncated = found.length > limit;
+    const hits = truncated ? found.slice(0, limit) : found;
 
     return c.json({
       query: q,
+      limit,
+      truncated,
       hits: hits.map((hit) => ({
         kind: hit.kind,
         refKind: hit.refKind,
