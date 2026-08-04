@@ -40,6 +40,31 @@ const LOCATION_WEIGHT = 4.0;
 const BODY_WEIGHT = 1.0;
 
 /**
+ * Converts operator-typed free text into a literal FTS5 phrase query, so a
+ * hyphenated ticket id (`PROJ-123`), a branch name (`feat/x-y`), or garbage
+ * punctuation a caller pastes in are always search text, never accidental
+ * FTS5 query grammar (the `-` NOT operator, column filters, unbalanced
+ * quotes, parens, or a `*` prefix). Splits on whitespace and double-quotes
+ * each resulting term, doubling any internal `"` so it round-trips as a
+ * literal character rather than closing the phrase early. Each term becomes
+ * its own FTS5 phrase; FTS5's default operator between phrases is AND, so a
+ * multi-word query keeps requiring every word rather than any one of them.
+ * Returns `null` when there is nothing left to search for (blank, or only
+ * whitespace a caller's own trim missed) — the sentinel for "no hits", never
+ * an error. There is deliberately no way through this function to reach raw
+ * FTS5 grammar (boolean operators, column filters, prefix search); an
+ * operator who needs that is a future opt-in, not today's default (no silent
+ * behavior surprises, per AGENTS.md).
+ */
+export function toLiteralFtsQuery(input: string): string | null {
+  const terms = input
+    .split(/\s+/)
+    .filter((term) => term.length > 0)
+    .map((term) => `"${term.replace(/"/g, '""')}"`);
+  return terms.length > 0 ? terms.join(" ") : null;
+}
+
+/**
  * Index-only FTS5 (spec §6.8). Content is tokenized on write regardless of
  * where its bytes live, so search works for inline and external content alike
  * and archived sessions stay findable rather than hidden — "archived" itself
@@ -84,7 +109,17 @@ export class SearchIndex {
     return row !== undefined;
   }
 
-  query(match: string, options: SearchOptions = {}): SearchHit[] {
+  /**
+   * `rawQuery` is the operator's free text, never FTS5 grammar (see
+   * `toLiteralFtsQuery`) — a hyphenated ticket id or a branch name is search
+   * text here, not a NOT-operator or a syntax error. A query that sanitizes
+   * to nothing (blank, or only whitespace a caller's own trim missed)
+   * returns no hits rather than asking SQLite to explain an empty MATCH.
+   */
+  query(rawQuery: string, options: SearchOptions = {}): SearchHit[] {
+    const match = toLiteralFtsQuery(rawQuery);
+    if (match === null) return [];
+
     const limit = options.limit ?? 25;
     const kinds = options.kinds ?? [];
 

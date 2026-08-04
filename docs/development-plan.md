@@ -2795,14 +2795,30 @@ typing a search box to know FTS5's grammar, so the client (`search/
 data-source.ts`) quotes every word of `q` as its own FTS5 phrase before
 sending it — adjacent quoted phrases still AND together exactly like bare
 terms would, and a hyphen or colon inside one is just a character again. This
-is a client-side mitigation, not a server fix (out of this track's file
-ownership); the underlying route still accepts raw FTS5 grammar from any
-other caller (a raw `curl`, a future consumer) and a future Track A pass may
-want to sanitize or reject query-grammar characters at the route itself.
+was a client-side mitigation, not a server fix (out of this track's file
+ownership) — the source-level fix landed separately (see the note below):
+the route's gate now sanitizes for every caller, and the client quoting is
+harmless belt-and-braces on top of it.
 Deferred, honestly: no command-palette entry point for Search (the dock rail
 button is keyboard-reachable already, so no new keybinding was needed or
 added); still only the `session` kind, matching the index's own current
 scope._
+
+_Closed at the source (fix/search-fts-grammar): `q` was forwarded verbatim
+into FTS5's `MATCH` expression, which is FTS5's own query grammar rather than
+plain text — a hyphenated ticket id or branch name changed what the query
+meant (a bare `-` is FTS5's NOT-operator), and quotes, parens, or an asterisk
+could raise a raw SQLite error the route surfaced as a 500 (verified against
+the real server). A Track B UI-side mitigation existed only in the search
+client; the route itself — the gate every caller (curl, the UI, an agent
+tool later) goes through — still accepted raw grammar from anyone else.
+Fixed at the source instead: `SearchIndex.query` (`packages/db/src/search.ts`)
+now runs every `q` through `toLiteralFtsQuery`, which splits on whitespace and
+double-quotes each term (escaping internal quotes) before it ever reaches
+SQLite, so the route only ever answers literal-text queries — a query that
+sanitizes to nothing returns no hits rather than an error. Raw FTS5 grammar
+(boolean operators, column filters, prefix search) has no way through this
+function; exposing it is a deliberate future opt-in, not today's default._
 
 ### Epic 8.3 — Settings and logs (`app`)
 

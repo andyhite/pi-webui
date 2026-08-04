@@ -28,6 +28,16 @@ import { actorOf, type ApiEnv, type ApiStores } from "./api.js";
  * `OPERATOR_ONLY_ROUTES` entry already declares it operator-only
  * (`packages/core/src/sessions/tools/catalog.test.ts`); this is that
  * declaration enforced rather than merely documented (cross-cutting rule 3).
+ *
+ * `q` is always literal text, never FTS5 query grammar. A hyphenated ticket
+ * id (`PROJ-123`), a branch name (`feat/x-y`), an unbalanced quote, a stray
+ * `*` or `(` — anything an operator or a future agent caller pastes in — is
+ * search text, not a NOT-operator, a column filter, or a syntax error that
+ * surfaces as a 500. `stores.search.query` sanitizes at the source
+ * (`toLiteralFtsQuery` in `@plotroom/db`) precisely because this route is the
+ * gate every caller goes through (curl, the UI, agents later): a caller that
+ * genuinely needs raw FTS5 grammar has no way to opt into it here — that
+ * would be a deliberate future addition to this route, not today's default.
  */
 export function searchRoutes(stores: ApiStores): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();

@@ -135,6 +135,85 @@ describe("search (§6.8)", () => {
     expect(at(hit, "archived")).toBe(true);
   });
 
+  it("finds a hyphenated ticket id (a term FTS5's own grammar reads as NOT) with sane hits, never a 500", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness, {
+      lifecycle: "open",
+      name: "Fix the flaky login test",
+    });
+
+    const subject = await harness.ok("/notes", {
+      method: "POST",
+      body: {
+        title: "OXY-2982",
+        body: "the login test fails intermittently",
+        workstreamId: fixture.workstream,
+      },
+    });
+    await harness.ok(`/workstreams/${fixture.workstream}`, {
+      method: "PATCH",
+      body: { subjectId: str(subject, "object.id") },
+    });
+
+    const started = await run(harness, fixture.commandId, oneTurn);
+    const sessionId = str(started, "session.id");
+    await endedSession(harness, sessionId);
+
+    const found = await harness.ok(
+      `/search?q=${encodeURIComponent("OXY-2982")}`,
+    );
+    const hits = list(found, "hits");
+    const hit = hits.find((one) => at(one, "refId") === sessionId);
+
+    expect(hit).toBeDefined();
+    expect(at(hit, "location")).toBe("OXY-2982");
+  });
+
+  it("treats an unbalanced quote as literal text (200, empty hits) rather than raising SQLite's 'unterminated string'", async () => {
+    const harness = await boot(repository());
+    const res = await harness.call(
+      `/search?q=${encodeURIComponent('"unterminated')}`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(list(res.body, "hits")).toEqual([]);
+  });
+
+  it("treats stray parens and asterisks as literal text (200, empty hits) rather than an FTS5 syntax error", async () => {
+    const harness = await boot(repository());
+
+    const parens = await harness.call(
+      `/search?q=${encodeURIComponent("foo(bar")}`,
+    );
+    expect(parens.status).toBe(200);
+    expect(list(parens.body, "hits")).toEqual([]);
+
+    const stars = await harness.call(
+      `/search?q=${encodeURIComponent("foo*bar*")}`,
+    );
+    expect(stars.status).toBe(200);
+    expect(list(stars.body, "hits")).toEqual([]);
+  });
+
+  it("matches a query containing literal quote characters as literal text rather than raising a syntax error", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness, {
+      lifecycle: "open",
+      name: 'Fix the "flaky" login test',
+    });
+
+    const started = await run(harness, fixture.commandId, oneTurn);
+    const sessionId = str(started, "session.id");
+    await endedSession(harness, sessionId);
+
+    const found = await harness.ok(
+      `/search?q=${encodeURIComponent('"flaky"')}`,
+    );
+    const hits = list(found, "hits");
+
+    expect(hits.map((hit) => at(hit, "refId"))).toContain(sessionId);
+  });
+
   it("refuses an empty query rather than asking SQLite to explain itself", async () => {
     const harness = await boot(repository());
     const res = await harness.call("/search?q=");
