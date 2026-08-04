@@ -1,9 +1,17 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { destroyEdge, destroyNode } from "../approvals/destruction.js";
 import { badRequest } from "../http/errors.js";
 import { validateJsonBody } from "../http/validate.js";
-import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
-import { announceRemoval, announceRestoration } from "./announce.js";
+import {
+  actorOf,
+  body,
+  destructionGate,
+  param,
+  type ApiEnv,
+  type ApiStores,
+} from "./api.js";
+import { announceRestoration } from "./announce.js";
 import { toEdge, toPlacedNode } from "./mappers.js";
 
 const placeBody = z.object({
@@ -124,13 +132,18 @@ export function graphRoutes(stores: ApiStores): Hono<ApiEnv> {
     return c.json({ nodes: moved });
   });
 
+  /**
+   * Take a node off the board (principle 10). Through the one destruction effect,
+   * so a session's gesture that never went through §6.6 is refused here as it is
+   * anywhere else, and the node and its wires go down in one transaction.
+   */
   app.delete("/nodes/:id", (c) => {
-    const author = actorOf(c);
-    const removal = graph.removeNode(param(c, "id"));
-
-    // The wires went down with it, so they are announced with it; a removal
-    // that changed nothing announces nothing.
-    announceRemoval(bus, author, removal);
+    const { removal } = destroyNode(
+      stores,
+      bus,
+      param(c, "id"),
+      destructionGate(c),
+    );
 
     return c.json({
       node: toPlacedNode(removal.node),
@@ -139,6 +152,12 @@ export function graphRoutes(stores: ApiStores): Hono<ApiEnv> {
     });
   });
 
+  /**
+   * Put it back (principle 10) — refused when its subject is deleted, because a
+   * node whose record the reads filter out is a card with nothing behind it, and
+   * an undo that produced one would return more than its own removal took. The
+   * subject's own restore is the gesture that brings the node back with it.
+   */
   app.post("/nodes/:id/restore", (c) => {
     const author = actorOf(c);
     const restoration = graph.restoreNode(param(c, "id"));
@@ -214,18 +233,12 @@ export function graphRoutes(stores: ApiStores): Hono<ApiEnv> {
 
   app.delete("/edges/:id", (c) => {
     const id = param(c, "id");
-    const author = actorOf(c);
-    // Was it still wired? Unwiring an already-unwired edge changes nothing,
-    // and announcing a deletion that did not happen would have subscribers
-    // undo state twice.
-    const wired = graph.edge(id).deletedAt === null;
-    const edge = toEdge(graph.removeEdge(id));
+    // Read before, so an id that names nothing is a 404 rather than a refusal,
+    // and read again after: a soft-removed edge is the same row.
+    graph.edge(id);
+    destroyEdge(stores, bus, id, destructionGate(c));
 
-    if (wired) {
-      bus.publish({ entity: "edge", verb: "deleted", edgeId: edge.id, author });
-    }
-
-    return c.json({ edge, restorable: true });
+    return c.json({ edge: toEdge(graph.edge(id)), restorable: true });
   });
 
   app.post("/edges/:id/restore", (c) => {

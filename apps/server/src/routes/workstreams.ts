@@ -3,7 +3,15 @@ import { z } from "zod";
 import { WORKSTREAM_STATUSES } from "@plotroom/core";
 import { validateJsonBody } from "../http/validate.js";
 import { notFound } from "../http/errors.js";
-import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
+import { destroyWorkstream } from "../approvals/destruction.js";
+import {
+  actorOf,
+  body,
+  destructionGate,
+  param,
+  type ApiEnv,
+  type ApiStores,
+} from "./api.js";
 import { toWorkstream } from "./mappers.js";
 
 const createBody = z.object({ subjectId: z.string().min(1).optional() });
@@ -32,6 +40,13 @@ const patchBody = z
 export function workstreamRoutes(stores: ApiStores): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
   const { workstreams, bus } = stores;
+
+  /** The row, or a 404 — never `undefined` passed on to something else. */
+  function read(id: string) {
+    const row = workstreams.get(id);
+    if (!row) throw notFound(`unknown workstream ${id}`);
+    return row;
+  }
 
   app.post("/workstreams", validateJsonBody(createBody), (c) => {
     const input = body<z.infer<typeof createBody>>(c);
@@ -118,22 +133,12 @@ export function workstreamRoutes(stores: ApiStores): Hono<ApiEnv> {
 
   app.delete("/workstreams/:id", (c) => {
     const id = param(c, "id");
-    const author = actorOf(c);
-    // Deleting an already-deleted workstream changes nothing; announcing it
-    // would have subscribers act on a change that did not happen.
-    const wasLive = workstreams.get(id)?.deletedAt === null;
-    const row = workstreams.delete(id, author);
+    // An id that names nothing is a 404 before anything else happens, and the
+    // row is read back afterwards: a soft delete leaves it exactly where it was.
+    read(id);
+    destroyWorkstream(stores, bus, id, destructionGate(c));
 
-    if (wasLive) {
-      bus.publish({
-        entity: "workstream",
-        verb: "deleted",
-        workstreamId: toWorkstream(row).id,
-        author,
-      });
-    }
-
-    return c.json({ workstream: toWorkstream(row), restorable: true });
+    return c.json({ workstream: toWorkstream(read(id)), restorable: true });
   });
 
   app.post("/workstreams/:id/restore", (c) => {

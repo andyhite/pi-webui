@@ -16,7 +16,20 @@ import {
  */
 export type Unsubscribe = () => void;
 
-export interface EventBus {
+/**
+ * Where a mutation puts its announcement.
+ *
+ * The bus is one of them. The other is the buffer `atomically` hands out
+ * (`atomic.ts`), which holds what happened until the transaction that made it
+ * happen has committed — so every announce helper takes this rather than the
+ * bus, and a write that rolled back cannot already have told every subscriber
+ * it landed.
+ */
+export interface EventSink {
+  publish(input: DomainEventInput): unknown;
+}
+
+export interface EventBus extends EventSink {
   publish(input: DomainEventInput): DomainEvent;
   subscribe(listener: (event: DomainEvent) => void): Unsubscribe;
   /** The sequence number that will be assigned to the next published event. */

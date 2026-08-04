@@ -1,6 +1,6 @@
 import type { Author } from "@plotroom/core";
 import type { NodeRemoval } from "@plotroom/db";
-import type { EventBus } from "../events/bus.js";
+import type { EventSink } from "../events/bus.js";
 import { toEdge, toPlacedNode } from "./mappers.js";
 
 /**
@@ -13,16 +13,20 @@ import { toEdge, toPlacedNode } from "./mappers.js";
  * then the node they hung off), putting back goes roots-first (the node, then
  * the edges that need it to exist). A renderer applying these in order never
  * sees an edge whose endpoint it does not have.
+ *
+ * The sink rather than the bus, because a cascade is one transaction: inside
+ * one, what happened is buffered and reaches subscribers only once the writes
+ * committed (`events/atomic.ts`).
  */
 export function announceRemoval(
-  bus: EventBus,
+  sink: EventSink,
   author: Author,
   removal: NodeRemoval,
 ): void {
   if (!removal.changed) return;
 
   for (const edge of removal.edges) {
-    bus.publish({
+    sink.publish({
       entity: "edge",
       verb: "deleted",
       edgeId: toEdge(edge).id,
@@ -30,7 +34,7 @@ export function announceRemoval(
     });
   }
 
-  bus.publish({
+  sink.publish({
     entity: "node",
     verb: "deleted",
     nodeId: toPlacedNode(removal.node).id,
@@ -39,13 +43,13 @@ export function announceRemoval(
 }
 
 export function announceRestoration(
-  bus: EventBus,
+  sink: EventSink,
   author: Author,
   removal: NodeRemoval,
 ): void {
   if (!removal.changed) return;
 
-  bus.publish({
+  sink.publish({
     entity: "node",
     verb: "created",
     node: toPlacedNode(removal.node),
@@ -53,7 +57,7 @@ export function announceRestoration(
   });
 
   for (const edge of removal.edges) {
-    bus.publish({
+    sink.publish({
       entity: "edge",
       verb: "created",
       edge: toEdge(edge),
