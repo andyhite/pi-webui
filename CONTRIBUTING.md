@@ -58,9 +58,11 @@ directory. A worktree you did not create is another session's: never write to on
 (reading is fine — reviewing a branch you did not write means reading it).
 `AGENTS.md`'s "Many agents work here at once" is the rule, this is the reminder.
 
-1. **Branch.** `<type>/<short-slug>`, in a worktree in the parent directory:
+1. **Branch.** `<type>/<short-slug>`, in a worktree in the parent directory, off
+   `origin/main` rather than off whatever the checkout you are standing in points at:
    ```sh
-   git worktree add ../plotroom-feat-session-delete -b feat/session-delete
+   git fetch origin
+   git worktree add ../plotroom-feat-session-delete -b feat/session-delete origin/main
    ```
 2. **Commit** in small, single-purpose Conventional Commits (see below).
 3. **Verify** — `pnpm verify`, plus the e2e suite when you touched surfaces it covers.
@@ -129,11 +131,18 @@ Bad: `updated stuff`, `WIP`, `Fix bug.`, `feat: Added new canvas feature.`
 - If a squash is used, the squashed subject must itself be a valid Conventional Commit — it becomes the permanent record.
 
 ```sh
-# fast-forward land, done from the primary checkout
-git switch main
-git pull --ff-only
-git merge --ff-only feat/context-edge-authors
+# land from the worktree that holds the work; the remote refuses a non-fast-forward
+git fetch origin
+git rebase origin/main
+git push origin HEAD:main
+
+# then bring the primary checkout forward without ever switching its branch
+git -C ../plotroom pull --ff-only
 ```
+
+Never `git switch` or `git checkout` in the primary checkout — another agent or the
+operator may be relying on it, and switching it breaks every concurrent session at
+once (`AGENTS.md` → "Worktrees").
 
 Force-push topic branches only, with `--force-with-lease`. Never rewrite commits already on `main`.
 
@@ -142,11 +151,23 @@ Force-push topic branches only, with `--force-with-lease`. Never rewrite commits
 Worktrees live beside the repo, named `plotroom-<branch-with-slashes-as-dashes>`:
 
 ```sh
-git worktree add ../plotroom-fix-drift-flags -b fix/drift-flags   # create
-git worktree list                                                  # inspect
-git worktree remove ../plotroom-fix-drift-flags                    # after landing
-git worktree prune
+# create, from the primary checkout or any worktree
+git fetch origin
+git worktree add ../plotroom-fix-drift-flags -b fix/drift-flags origin/main
+git worktree list
+
+# then, inside the new one — node_modules is not shared
+cd ../plotroom-fix-drift-flags && pnpm install
+
+# after landing, from anywhere except the worktree being removed
+git -C ~/plotroom worktree remove ../plotroom-fix-drift-flags
+git -C ~/plotroom worktree prune
 ```
+
+Branch from `origin/main`, not from the primary checkout's `main`, which may be
+behind — that way starting work never touches the primary checkout at all. Removing
+a worktree while standing in it deletes the shell's own directory and the next
+command fails, so run the last two from somewhere else.
 
 Never nest a worktree inside the repo. Keep the primary checkout on `main` —
 switching its branch breaks every concurrent session at once.
