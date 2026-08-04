@@ -475,50 +475,98 @@ if the ambient token is the wrong account).
 | `Review`      | Implementation complete, awaiting independent review                                          |
 | `Done`        | Reviewed and merged to `main`                                                                 |
 
-Closed issues are the permanent Done record; the board tracks **open** work
-(a finished item is closed with `Fixes #N` / `gh issue close`, and its board
-item moves to `Done` or is archived off the board).
+Closed issues are the permanent Done record; the board tracks **open** work.
 
-**Rules (binding, for humans and agents alike):**
+**Labels:** `epic` (large multi-task efforts), `follow-up`, `bug`, `decision`,
+`directional`. Use task-list checkboxes in the issue body for a breakdown;
+sub-issues for real child work.
 
-1. **Every unit of work has an issue** before its branch exists. Starting work
-   on something with no issue means creating the issue first (Status `To Do`
-   or `Backlog`, whichever is honest).
-2. **Move the issue as the work moves** — Status `In Progress` when you start,
-   `Review` when implementation is complete and `pnpm verify` is green, `Done`
-   only after review passes and the branch ff-merges to `main` (close the
-   issue then, ideally via `Fixes #N` in the landing commit/PR). An issue is
-   not done while its worktree still exists (same rule as the worktree
-   cleanup).
-3. **Reference the issue everywhere:** `#N` in the commit body or PR
-   description (`Fixes #N` on the landing change), and in the branch name
-   where practical (e.g. `feat/42-session-delete`).
-4. **Discovered work becomes an issue, not a detour.** A bug found mid-task, a
-   review's non-blocking findings, a deferral — each gets an issue (label
-   `bug` or `follow-up`) rather than silently expanding the current task's
-   scope. This is the board-shaped form of the old "deferred, honestly"
-   convention.
-5. **Decisions are issues too** (label `decision`, Status `Backlog` until
-   decided). Deciding one still requires recording the answer in AGENTS.md in
-   the same PR that lands it — the issue tracks the state; AGENTS.md remains
-   the record of the answer.
-6. **Labels:** `epic` (large multi-task efforts), `follow-up`, `bug`,
-   `decision`, `directional`. Use task-list checkboxes in the issue body for a
-   breakdown; sub-issues for real child work.
-7. **`directional`-labeled issues are never promoted out of `Backlog` without
-   an explicit operator decision** — they are spec §13's recorded intentions
-   ("pulled in deliberately, never by drift"), and the label is the guard now
-   that they share the Backlog with ordinary captured work. An agent choosing
-   its next task skips them unconditionally.
-8. **Orchestrators** (fleet runs): create/move issues for each track as part
-   of spawn/merge duties; a track's final report links its issues. Subagents
-   without `gh` access report status to the orchestrator, who updates the
-   board.
-9. The rebuild's development plan and batch reports were removed from the
-   working tree so the tracker is the single source; issues #1–#41 are the
-   closed historical record of the rebuild, and the deep per-epic landed notes
-   remain readable in git history
-   (`git show d336340:docs/development-plan.md`).
+### The ticket lifecycle — idea to delivery
+
+Every change moves through these stages, and **the issue is kept current at
+each one** — the board must always answer "what is happening right now"
+without asking anyone. An agent that works without updating the ticket is
+violating this file.
+
+**1. Capture (idea → issue, Status `Backlog`).**
+Anything worth doing gets an issue the moment it is known: a feature idea, a
+bug, a review's non-blocking findings, a deferral, an open decision.
+**Discovered work becomes an issue, not a detour** — finding a bug mid-task
+means filing it, not silently widening the current task (the board-shaped form
+of the old "deferred, honestly" convention). The body states what and _why_,
+links any evidence (failing output, review text, spec section), and carries
+the honest labels. No work exists only in someone's head or a chat log.
+
+**2. Triage (Backlog → `To Do`).**
+Promotion is a deliberate act — the operator's, or an agent's under an
+explicit directive — and includes ordering: `To Do` is priority-sorted
+top-down, and work is taken from the top. Two categories never self-promote:
+`decision` issues (they are answered, not implemented — see below) and
+`directional` issues (spec §13's recorded intentions, "pulled in deliberately,
+never by drift"; an agent choosing its next task skips them unconditionally).
+
+**3. Start (`To Do` → `In Progress`).**
+Before the first edit: move the issue to `In Progress`, create the worktree
+and topic branch (branch name references the issue where practical, e.g.
+`feat/42-session-delete`), and drop a one-line comment on the issue saying
+work has started and on what branch. One issue per active branch; an issue
+with no active worktree does not sit in `In Progress`.
+
+**4. Implement.**
+Small single-purpose Conventional Commits, each referencing the issue (`#N`
+in the body). Keep the ticket current as things happen, not retrospectively:
+comment when a meaningful decision is made, when a blocker appears (and who
+unblocks it), when scope genuinely changes (edit the body — the body is the
+current truth, comments are the history). Anything discovered that is not
+this ticket's scope goes back to stage 1 as its own issue and gets
+cross-linked. Behavior changes that contradict docs update the docs in the
+same commit.
+
+**5. Verify.**
+`pnpm verify` green, plus the e2e suite when the change touches surfaces it
+covers (`pnpm --filter @plotroom/web e2e`). Only then move the issue to
+`Review` with a comment summarizing: what landed on the branch, test evidence,
+known gaps/residual risks. Green verify alone never means done.
+
+**6. Review (`Review`).**
+Independent review — a person or a fresh-context reviewer agent that did not
+write the code — against the issue's own statement of intent, the spec
+sections it cites, and the cross-cutting rules (§15 invariants where schema is
+touched, no silent truncation, enforced-not-documented, one vocabulary).
+Findings are recorded **on the issue**: blocking findings send it back to
+`In Progress` (same implementer where possible) and the loop repeats;
+non-blocking findings become stage-1 issues. No blocking findings → proceed.
+
+**7. Land.**
+Rebase onto `main` (lockfile protocol if `pnpm-lock.yaml` is involved:
+take main's, rerun `pnpm install`, commit the result), re-run verify, then
+fast-forward merge — `main` is ff-only, no merge commits. The landing
+commit/PR carries `Fixes #N` so the issue closes on push; **verify the issue
+actually closed** (auto-close can lag or miss — close manually with a landing
+comment naming the commit if so). Push.
+
+**8. Deliver (→ `Done`, close, clean up).**
+Done means all of: review passed, ff-merged to `main`, issue closed with the
+landing commit named, **worktree removed and topic branch deleted**. The board
+item shows `Done` (or is archived off the board — closed issues remain the
+permanent record either way). A ticket with a live worktree is not delivered.
+
+**Decision issues** follow a shorter path: `Backlog` until the operator
+decides; the decision lands as an AGENTS.md edit in the same PR that first
+needs it (the issue tracks the state, AGENTS.md remains the record of the
+answer); then the issue closes citing that commit.
+
+**Orchestrators** (fleet runs) own the board for their tracks: they create and
+move issues as part of spawn/merge duties, relay subagent findings onto the
+right issues, and link every track's issues in the final report. Subagents
+without `gh` access report status to the orchestrator, who updates the board —
+work the board never saw is work that did not follow this file.
+
+**History note:** the rebuild's development plan and batch reports were
+removed from the working tree so the tracker is the single source; issues
+#1–#41 are the closed historical record of the rebuild, and the deep per-epic
+landed notes remain readable in git history
+(`git show d336340:docs/development-plan.md`).
 
 ## Git rules
 

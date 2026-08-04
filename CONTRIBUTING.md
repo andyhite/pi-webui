@@ -4,7 +4,7 @@ PlotRoom is a context-authoring canvas for operating a fleet of AI agents. Befor
 
 1. [`docs/product-spec.md`](docs/product-spec.md) — what the product is and how it behaves.
 2. [`AGENTS.md`](AGENTS.md) — the canonical conventions (git rules, worktrees, commit format, work tracking). This document expands on them; `AGENTS.md` wins on any conflict.
-3. The **PlotRoom project board** (https://github.com/users/andyhite/projects/1) — all work is tracked as GitHub Issues on this repo; every change starts from an issue (see "Work tracking — GitHub Projects" in `AGENTS.md`).
+3. The **PlotRoom project board** (https://github.com/users/andyhite/projects/1) — all work is tracked as GitHub Issues on this repo; every change starts from an issue and moves through the ticket lifecycle (see "Work tracking — GitHub Projects" / "The ticket lifecycle" in `AGENTS.md`).
 
 The project is a greenfield rebuild: docs only so far. The stack is decided — TypeScript, Electron + Hono server, SQLite via Drizzle, React + xyflow canvas, pnpm + Turborepo, Vitest + Playwright. See "Stack" and "Open decisions" in `AGENTS.md`.
 
@@ -35,23 +35,23 @@ merge commits in a PR.
 
 ## Workflow
 
-1. **Branch.** `<type>/<short-slug>` (optionally with a ticket id), e.g. `feat/context-edge-authors`.
+The full ticket lifecycle (idea → delivery, incl. board-status obligations) is
+defined in `AGENTS.md` — this is the git-level view of the middle of it:
+
+1. **Issue first.** No branch without an issue; move it to `In Progress` when you start.
+2. **Branch.** `<type>/<short-slug>`, referencing the issue where practical, e.g. `feat/42-session-delete`, in a worktree in the parent directory:
    ```sh
-   git switch -c feat/context-edge-authors
+   git worktree add ../plotroom-feat-42-session-delete -b feat/42-session-delete
    ```
-   Or use a worktree in the parent directory:
-   ```sh
-   git worktree add ../plotroom-feat-context-edge-authors -b feat/context-edge-authors
-   ```
-2. **Commit** in small, single-purpose Conventional Commits (see below).
-3. **Rebase** onto `main` before opening a PR — never merge `main` into your branch.
+3. **Commit** in small, single-purpose Conventional Commits (see below), each referencing the issue (`#42`) in the body.
+4. **Verify** (`pnpm verify`, plus e2e when you touched covered surfaces), then move the issue to `Review`.
+5. **Rebase** onto `main` after review passes — never merge `main` into your branch.
    ```sh
    git fetch origin
    git rebase origin/main
    ```
-4. **Open a PR** with a Conventional Commit title and a body that states what changed and why, plus which spec section it implements.
-5. **Land** as a fast-forward or a squash. No merge commits.
-6. **Clean up** the branch and its worktree.
+6. **Land** as a fast-forward or a squash with `Fixes #42` in the landing commit/PR body. No merge commits. Confirm the issue closed.
+7. **Clean up** the branch and its worktree — the ticket is not delivered while its worktree exists.
 
 ## Commit messages
 
