@@ -174,11 +174,11 @@ const OPERATOR_ONLY_ROUTES: readonly {
   },
   {
     path: "/api/approvals",
-    why: "\u00a76.6's approvals are the operator's. A session reading the queue of what other sessions are asking for is not a gesture the product mirrors, and the one thing a session needs to know \u2014 how its own blocked call was answered \u2014 reaches it as the tool result, not as a read.",
+    why: "\u00a76.6's approvals are the operator's. A session reading the queue of what other sessions are asking for is not a gesture the product mirrors, and the one thing a session needs to know \u2014 how its own blocked call was answered \u2014 reaches it as the tool result, not as a read. Tool-less **and** 403 for a session actor: the route enforces it (issue #119), because a declaration a session-attributed call could walk past was documentation rather than a rule.",
   },
   {
     path: "/api/approvals/:id",
-    why: "the same read, for one approval (\u00a76.6).",
+    why: "the same read, for one approval, and refused for a session actor the same way (\u00a76.6).",
   },
   {
     path: "/api/approvals/:id/answer",
@@ -186,7 +186,7 @@ const OPERATOR_ONLY_ROUTES: readonly {
   },
   {
     path: "/api/pre-grants",
-    why: '\u00a76.6\'s pre-grant is "a human decision about capability made in advance". A session declaring one is principle 1 in advance, and reading the standing decisions that bind it would only tell it which shapes of call to try.',
+    why: '\u00a76.6\'s pre-grant is "a human decision about capability made in advance". A session declaring one is principle 1 in advance, and reading the standing decisions that bind it would only tell it which shapes of call to try \u2014 so the read is refused for a session actor too (issue #119).',
   },
   {
     path: "/api/pre-grants/:id",
