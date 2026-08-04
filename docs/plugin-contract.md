@@ -43,20 +43,20 @@ A plugin compiles against the SDK alone. Nothing under `contract/` imports
 
 ## 2. The twelve contribution points (§10.1)
 
-| §10.1 contribution  | Type                            | Native counterpart it was reconciled against                                                      |
-| ------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------- |
-| concept producers   | `ConceptProducer`               | `ObjectStore` external-identity reconciliation (Epic 1.1); git reads (Epic 4.4)                   |
-| write actions       | `WriteAction`                   | write intents + `ToolWorldDeclaration` + `toolCallAsk` (Epics 5.4, 6.3)                           |
-| agent tools         | `AgentTool`                     | `AGENT_TOOL_CATALOG` / `AgentTool` (Epic 4.5)                                                     |
-| content renderers   | `ContentRenderer`               | `ObjectRenderings` + the version delta model (Epic 1.1)                                           |
-| card renderers      | `CardRenderer`                  | the canvas node renderers in `@plotroom/ui` (Epic 3.x)                                            |
-| panels              | `Panel`                         | the dock rail's panel registry (Epic 3.4)                                                         |
-| palette entries     | `PaletteEntry`                  | the command palette (Epics 3.4, 8.1)                                                              |
-| workspace kinds     | `WorkspaceKind`                 | `@plotroom/core`'s `workspaces/`: `kind`, `readiness`, `divergence`, `lifecycle` (Epic 4.4)       |
-| condition checks    | `ConditionCheck`                | the server's world-condition registry behind `checkProvenCompletion` (Epic 4.3)                   |
-| notification routes | `NotificationRoute`             | outbound routing (Epic 6.1)                                                                       |
-| command definitions | `CommandDefinitionContribution` | `CommandDefinition` (Epic 1.4)                                                                    |
-| themes              | `Theme`                         | none — the UI styling approach is still an open decision (AGENTS.md), so only the shape is frozen |
+| §10.1 contribution  | Type                            | Native counterpart it was reconciled against                                                                                                   |
+| ------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| concept producers   | `ConceptProducer`               | `ObjectStore` external-identity reconciliation (Epic 1.1); git reads (Epic 4.4)                                                                |
+| write actions       | `WriteAction`                   | write intents + `ToolWorldDeclaration` + `toolCallAsk` (Epics 5.4, 6.3)                                                                        |
+| agent tools         | `AgentTool`                     | `AGENT_TOOL_CATALOG` / `AgentTool` (Epic 4.5)                                                                                                  |
+| content renderers   | `ContentRenderer`               | `ObjectRenderings` + the version delta model (Epic 1.1)                                                                                        |
+| card renderers      | `CardRenderer`                  | the canvas node renderers in `@plotroom/ui` (Epic 3.x)                                                                                         |
+| panels              | `Panel`                         | the dock rail's panel registry (Epic 3.4)                                                                                                      |
+| palette entries     | `PaletteEntry`                  | the command palette (Epics 3.4, 8.1)                                                                                                           |
+| workspace kinds     | `WorkspaceKind`                 | `@plotroom/core`'s `workspaces/`: `kind`, `readiness`, `divergence`, `lifecycle` (Epic 4.4)                                                    |
+| condition checks    | `ConditionCheck`                | the server's world-condition registry behind `checkProvenCompletion` (Epic 4.3)                                                                |
+| notification routes | `NotificationRoute`             | outbound routing (Epic 6.1)                                                                                                                    |
+| command definitions | `CommandDefinitionContribution` | `CommandDefinition` (Epic 1.4)                                                                                                                 |
+| themes              | `Theme`                         | none yet — the styling approach is decided (docs/decisions/0002), and `Theme.tokens` becomes the toolkit's CSS custom properties when it lands |
 
 Three shapes carry the weight:
 
