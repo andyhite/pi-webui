@@ -71,6 +71,24 @@ import {
  *   arrives, exactly as a real session continues within its budget (§3.5).
  * - `session-ended` closes the stream. A script that omits it leaves the session
  *   in flight, which is how interruption-on-restart is exercised (principle 11).
+ * - Request ids are the runtime's. An `ask`, `call`, or `effect` step's request is
+ *   identified by the session that raised it and a count that only goes up, so
+ *   two sessions cannot raise one id (which is how a blocked call is found:
+ *   `QuestionStore#forRequest` looks a question up by request id, across
+ *   sessions). Two steps that declare the same `asRequest` name are the same
+ *   call **re-raised**, which is what a real runtime does when it retries a
+ *   denied one; the name is scoped to the session either way. A `request-raised`
+ *   observation a script declares verbatim keeps exactly the id it names, and
+ *   answers for its own uniqueness.
+ *
+ * ```jsonc
+ * // Denied, then asked again as the same call — settled from the answer
+ * // PlotRoom already has, never asked twice (§6.6).
+ * { "call": { "toolName": "shell", "input": { "command": "one" },
+ *             "asRequest": "retry" } },
+ * { "call": { "toolName": "shell", "input": { "command": "one" },
+ *             "asRequest": "retry" } }
+ * ```
  * - `delay` pauses the act for real wall-clock milliseconds, capped at
  *   {@link SCRIPTED_MAX_DELAY_MS} and refused above it. Only this runtime has
  *   one: pacing is a property of the double, not of PlotRoom, and nothing
@@ -245,12 +263,27 @@ const scriptedObservation = z.discriminatedUnion("kind", [
   }),
 ]);
 
+/**
+ * A **re-raise**: this step's request is the same request as another step's.
+ *
+ * A real runtime that has a call denied retries it, and PlotRoom must settle the
+ * retry from the answer it already has rather than asking again (§6.6 — the gate
+ * matches by call id). Naming one lets a script declare that, which is otherwise
+ * inexpressible: every request the runtime mints on its own is unique, on purpose.
+ *
+ * Omitting it is the normal case. The value is scoped to the session that raises
+ * it, so two sessions naming one string still raise two different requests — a
+ * script must not be able to make one session's answer settle another's call.
+ */
+const reRaisedAs = z.object({ asRequest: z.string().min(1).optional() });
+
 const effect = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("write-file"),
     /** Relative to the workspace root; an absolute path is refused. */
     path: z.string().min(1),
     content: z.string(),
+    asRequest: reRaisedAs.shape.asRequest,
   }),
 ]);
 
@@ -269,6 +302,7 @@ export type ScriptedEffect = z.infer<typeof effect>;
 const question = z.object({
   text: z.string().min(1),
   options: z.array(z.string().min(1)).min(1),
+  asRequest: reRaisedAs.shape.asRequest,
 });
 
 export type ScriptedQuestion = z.infer<typeof question>;
@@ -293,6 +327,7 @@ const gatedCall = z.object({
   /** Any name the adapter does not declare, which is what makes it unbounded. */
   toolName: z.string().min(1),
   input: z.unknown().optional(),
+  asRequest: reRaisedAs.shape.asRequest,
 });
 
 export type ScriptedGatedCall = z.infer<typeof gatedCall>;
@@ -410,18 +445,24 @@ export interface ScriptedRuntimeOptions {
   readonly defaultScript?: RuntimeScript;
 }
 
+/**
+ * Sessions opened by this process, so a ref names one runtime session and no
+ * other. Deliberately not per adapter: a test that boots two servers has two
+ * adapters, and two live sessions answering to `scripted-1` are two sessions a
+ * request id derived from the ref could not tell apart.
+ */
+let sessionsOpened = 0;
+
 export function createScriptedRuntime(
   options: ScriptedRuntimeOptions,
 ): ScriptedRuntimeAdapter {
-  let started = 0;
-
   const open = (
     script: RuntimeScript,
     config: RuntimeStartConfig,
   ): RuntimeSessionHandle => {
-    started += 1;
+    sessionsOpened += 1;
     return new ScriptedSessionHandle(
-      `scripted-${started}`,
+      `scripted-${sessionsOpened}`,
       script,
       config,
       options.now,
@@ -483,6 +524,18 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
    * and a promise nobody will resolve is a hung process, not a refusal.
    */
   readonly #pending = new Map<RuntimeRequestId, (o: RequestOutcome) => void>();
+  /**
+   * Requests raised so far, ever — the counter never goes back down.
+   *
+   * A request id must identify one call and nothing else: PlotRoom finds the
+   * question standing for a blocked call by request id
+   * (`QuestionStore#forRequest`, across sessions), so a shared id means one
+   * session's answer settles another session's call. An id counted from how many
+   * requests are *outstanding* repeated itself as soon as one was settled, and
+   * one counted per session repeated itself in every other session — hence the
+   * ref is in the id too.
+   */
+  #requestsRaised = 0;
   /**
    * Acts play one at a time, in order. A delayed act would otherwise interleave
    * with the act an injection triggers, and a script's meaning would depend on
@@ -672,8 +725,7 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
    * A stop settles it as a denial, so nothing hangs forever.
    */
   #requestPermission(declared: ScriptedEffect): Promise<RequestOutcome> {
-    const requestId =
-      `req-${this.#pending.size + 1}-${this.#actIndex}` as RuntimeRequestId;
+    const requestId = this.#requestIdFor("req", declared.asRequest);
 
     return new Promise<RequestOutcome>((resolve) => {
       this.#pending.set(requestId, resolve);
@@ -697,8 +749,7 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
    * nobody replied fast enough (§6.6, principle 2).
    */
   #requestTool(declared: ScriptedGatedCall): Promise<RequestOutcome> {
-    const requestId =
-      `call-${this.#pending.size + 1}-${this.#actIndex}` as RuntimeRequestId;
+    const requestId = this.#requestIdFor("call", declared.asRequest);
 
     return new Promise<RequestOutcome>((resolve) => {
       this.#pending.set(requestId, resolve);
@@ -724,8 +775,7 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
    * nothing hangs past the session's own end.
    */
   #requestQuestion(declared: ScriptedQuestion): Promise<RequestOutcome> {
-    const requestId =
-      `ask-${this.#pending.size + 1}-${this.#actIndex}` as RuntimeRequestId;
+    const requestId = this.#requestIdFor("ask", declared.asRequest);
 
     return new Promise<RequestOutcome>((resolve) => {
       this.#pending.set(requestId, resolve);
@@ -740,6 +790,29 @@ class ScriptedSessionHandle implements RuntimeSessionHandle {
         at: this.#now(),
       });
     });
+  }
+
+  /**
+   * The id this request is raised under: its kind, this session's own ref, and a
+   * count that only goes up. Unique across every session in the process, and
+   * stable enough to read in a failing test's output.
+   *
+   * A step that declared `asRequest` is raised under that name instead — a
+   * re-raise of the same call — still scoped to this session, so the name is a
+   * script's way of saying "the same call again" and never a way of naming
+   * another session's call.
+   */
+  #requestIdFor(
+    kind: "req" | "call" | "ask",
+    declared: string | undefined,
+  ): RuntimeRequestId {
+    if (declared !== undefined) {
+      // `as-` keeps a declared name out of the minted ids' space: a script that
+      // named "2" must not be able to collide with the second minted request.
+      return `${kind}-${this.ref}-as-${declared}` as RuntimeRequestId;
+    }
+    this.#requestsRaised += 1;
+    return `${kind}-${this.ref}-${this.#requestsRaised}` as RuntimeRequestId;
   }
 
   #applyEffect(declared: ScriptedEffect): void {

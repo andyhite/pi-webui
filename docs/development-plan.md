@@ -553,6 +553,26 @@ server — pi's adapter is unit tested in `core` and its permission gate is
 spike-verified against pi 0.83.0, but the end-to-end spine proof is the scripted
 runtime._
 
+_**Fixed after the fact (found by Epic 8.5's steering e2e): the scripted runtime
+minted colliding request ids.** An `ask`, `call`, or `effect` step took its id
+from how many requests were outstanding plus the act index
+(`ask-${pending.size + 1}-${actIndex}`), which repeated across independently
+started sessions and again within one session as soon as a request was settled.
+A request id is how PlotRoom finds the question standing for a blocked call
+(`QuestionStore#forRequest` looks it up across sessions), so a shared id meant
+one session's answer could settle another session's call. The id is now the
+step's kind, the session's own ref, and a count that only goes up, and the ref
+itself is unique per process rather than per adapter. A `request-raised`
+observation a script declares verbatim still carries exactly the id it names.
+
+One thing the collision was carrying had to become explicit: §6.6's re-raise (a
+runtime retrying a denied call, settled from the answer PlotRoom already has
+rather than asked again) was expressed in a test by _relying_ on two calls
+numbering the same. A step now declares it — `asRequest: "retried"` on an `ask`,
+`call`, or `effect` names one request two steps share — and the name is scoped to
+the session, so a script still cannot make one session's answer settle another's
+call. Omitting it is the normal case and nothing else in the repository names one._
+
 _Landed (Batch 2, stage 2 — the preview). `RunStore.plan` is the one description
 of what a run would be: ordered inputs, the assembled bytes, the configuration,
 and every refusal **collected rather than thrown**. `start()` reads that same

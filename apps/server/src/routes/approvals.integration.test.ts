@@ -397,18 +397,30 @@ describe("the call an approval blocks (§6.6)", () => {
   it("settles a re-raise of a denied call instead of wedging on it", async () => {
     const harness = await boot(repository());
 
-    // Two gated calls in one act. The scripted runtime numbers a request from
-    // the pending set, which is empty again once the first is settled, so the
-    // second call arrives under **the same call id** — which is precisely the
-    // re-raise a real runtime performs when it retries.
+    // Two gated calls in one act, declared as **the same request** (`asRequest`)
+    // — which is precisely the re-raise a real runtime performs when it retries
+    // a denied call. Declared rather than incidental: the runtime mints an id no
+    // other request can have, so a re-raise is something a script says.
     const twice: RuntimeScript = {
       acts: [
         {
           on: "start",
           steps: [
             { observation: { kind: "turn-started", turn: 1 } },
-            { call: { toolName: "shell", input: { command: "one" } } },
-            { call: { toolName: "shell", input: { command: "two" } } },
+            {
+              call: {
+                toolName: "shell",
+                input: { command: "one" },
+                asRequest: "retried",
+              },
+            },
+            {
+              call: {
+                toolName: "shell",
+                input: { command: "two" },
+                asRequest: "retried",
+              },
+            },
             {
               observation: {
                 kind: "turn-ended",

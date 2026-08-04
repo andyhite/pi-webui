@@ -2,7 +2,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { INHERIT_APP_TOOLS, type RuntimeObservation } from "@plotroom/core";
+import {
+  INHERIT_APP_TOOLS,
+  type RuntimeObservation,
+  type RuntimeRequestId,
+  type RuntimeSessionHandle,
+  type RuntimeStartConfig,
+} from "@plotroom/core";
 import {
   createScriptedRuntime,
   runtimeScriptSchema,
@@ -28,9 +34,8 @@ afterEach(() => {
   rmSync(workspacePath, { recursive: true, force: true });
 });
 
-function start(script: RuntimeScript) {
-  const adapter = createScriptedRuntime({ now: () => Date.now() });
-  return adapter.startWithScript(script, {
+function config(): RuntimeStartConfig {
+  return {
     prompt: "do the thing",
     launch: {
       model: "fixture-model",
@@ -38,7 +43,22 @@ function start(script: RuntimeScript) {
       toolPermissions: INHERIT_APP_TOOLS,
     },
     workspacePath,
-  });
+  };
+}
+
+function start(script: RuntimeScript) {
+  const adapter = createScriptedRuntime({ now: () => Date.now() });
+  return adapter.startWithScript(script, config());
+}
+
+/** The id of the next request this session raises and waits on. */
+async function nextRequestId(
+  handle: RuntimeSessionHandle,
+): Promise<RuntimeRequestId> {
+  for await (const observation of handle.observations()) {
+    if (observation.kind === "request-raised") return observation.requestId;
+  }
+  throw new Error("the session ended without raising a request");
 }
 
 /** Read the stream, stamping when each observation actually arrived. */
@@ -152,6 +172,84 @@ describe("a scripted delay paces the stream (Epic 4.1's test double)", () => {
       rest.push(observation.kind);
     }
     expect(rest).toEqual(["session-ended"]);
+  });
+});
+
+describe("a raised request is identified uniquely (§6.4, §6.6)", () => {
+  const asks: RuntimeScript = {
+    acts: [
+      {
+        on: "start",
+        steps: [{ ask: { text: "ship it?", options: ["yes", "no"] } }],
+      },
+    ],
+  };
+
+  it("never mints an id another session could mint", async () => {
+    const adapter = createScriptedRuntime({ now: () => Date.now() });
+    const one = await adapter.startWithScript(asks, config());
+    const two = await adapter.startWithScript(asks, config());
+
+    // A question is found by its request id across sessions
+    // (`QuestionStore#forRequest`), which is what makes answering settle *that*
+    // blocked call. Two sessions sharing one id means one session's answer
+    // settles the other's call.
+    expect(await nextRequestId(one)).not.toBe(await nextRequestId(two));
+
+    // The same holds for two adapters in one process, which is what a test that
+    // boots two servers has.
+    const three = await start(asks);
+    const four = await start(asks);
+    expect(await nextRequestId(three)).not.toBe(await nextRequestId(four));
+  });
+
+  it("never reuses the id of a request it has already settled", async () => {
+    const handle = await start({
+      acts: [
+        {
+          on: "start",
+          steps: [
+            { ask: { text: "ship it?", options: ["yes", "no"] } },
+            { ask: { text: "and deploy it?", options: ["yes", "no"] } },
+          ],
+        },
+      ],
+    });
+
+    const first = await nextRequestId(handle);
+    await handle.respond(first, { kind: "answer", value: "yes" });
+
+    // The act carries on and asks again. An id derived from how many requests
+    // are *outstanding* would be the settled one over again, and the second
+    // question would be found as the first.
+    expect(await nextRequestId(handle)).not.toBe(first);
+  });
+
+  it("raises a declared re-raise as one call, still scoped to its session", async () => {
+    const retries: RuntimeScript = {
+      acts: [
+        {
+          on: "start",
+          steps: [
+            { ask: { text: "ship it?", options: ["yes"], asRequest: "again" } },
+            { ask: { text: "ship it?", options: ["yes"], asRequest: "again" } },
+          ],
+        },
+      ],
+    };
+
+    const handle = await start(retries);
+    const first = await nextRequestId(handle);
+    await handle.respond(first, { kind: "answer", value: "yes" });
+
+    // The same call asked again, which is what a runtime retrying a denied one
+    // does: PlotRoom settles it from the answer it already has (§6.6).
+    expect(await nextRequestId(handle)).toBe(first);
+
+    // But a name is a name within one session only — a script must not be able to
+    // make one session's answer settle another session's call.
+    const other = await start(retries);
+    expect(await nextRequestId(other)).not.toBe(first);
   });
 });
 
