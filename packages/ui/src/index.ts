@@ -91,3 +91,6 @@ export * from "./plugins/health-data-source.js";
 export * from "./plugins/lifecycle-actions.js";
 export * from "./plugins/HealthPanel.js";
 export * from "./plugins/PluginPanelView.js";
+export * from "./search/types.js";
+export * from "./search/data-source.js";
+export * from "./search/SearchPanel.js";
