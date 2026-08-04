@@ -15,6 +15,8 @@ import type {
   SessionRuntimeAdapter,
   TranscriptPoint,
 } from "../../runtime.js";
+import { ObservationQueue } from "../observation-queue.js";
+import { composeSeededPrompt } from "../seeded-prompt.js";
 import { createPiObservationMapper } from "./observations.js";
 import { encodeRequestOutcome } from "./permission-gate.js";
 import {
@@ -114,26 +116,8 @@ export function buildPiArgs(options: PiLaunchOptions): readonly string[] {
   return args;
 }
 
-/**
- * A fork seeded from PlotRoom's own transcript (§6.3). The inheritance is
- * labelled: a seeded fork is not a native one, and pretending otherwise is the
- * fidelity risk decision 0001 names.
- */
-export function composeSeededPrompt(config: RuntimeStartConfig): string {
-  if (!config.seedTranscript) return config.prompt;
-  return [
-    "# Inherited transcript",
-    "",
-    "This session was forked from an earlier one. What follows is the",
-    "conversation up to the fork point, as PlotRoom recorded it.",
-    "",
-    config.seedTranscript,
-    "",
-    "# Continue from here",
-    "",
-    config.prompt,
-  ].join("\n");
-}
+/** Seeding a fork is not pi-specific; the composer is shared (§6.3). */
+export { composeSeededPrompt };
 
 export function createPiAdapter(
   options: PiAdapterOptions,
@@ -569,46 +553,4 @@ function readForkMessages(data: unknown): readonly ForkMessage[] {
       message !== null &&
       typeof (message as ForkMessage).entryId === "string",
   );
-}
-
-/** A minimal push queue, so observations stream without a dependency. */
-class ObservationQueue implements AsyncIterable<RuntimeObservation> {
-  #buffer: RuntimeObservation[] = [];
-  #waiting: ((value: IteratorResult<RuntimeObservation>) => void) | null = null;
-  #done = false;
-
-  push(observation: RuntimeObservation): void {
-    if (this.#done) return;
-    const waiting = this.#waiting;
-    if (waiting) {
-      this.#waiting = null;
-      waiting({ value: observation, done: false });
-      return;
-    }
-    this.#buffer.push(observation);
-  }
-
-  end(): void {
-    this.#done = true;
-    const waiting = this.#waiting;
-    if (waiting) {
-      this.#waiting = null;
-      waiting({ value: undefined, done: true });
-    }
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<RuntimeObservation> {
-    return {
-      next: (): Promise<IteratorResult<RuntimeObservation>> => {
-        const next = this.#buffer.shift();
-        if (next) return Promise.resolve({ value: next, done: false });
-        if (this.#done) {
-          return Promise.resolve({ value: undefined, done: true });
-        }
-        return new Promise((resolve) => {
-          this.#waiting = resolve;
-        });
-      },
-    };
-  }
 }

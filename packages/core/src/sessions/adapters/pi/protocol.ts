@@ -8,23 +8,10 @@
  */
 
 /**
- * pi documents strict JSONL with LF as the only record delimiter, and warns
- * that Node's `readline` is not protocol-compliant because it also splits on
- * U+2028/U+2029 — which are legal inside JSON strings. So framing is ours.
+ * Framing is shared with every other stdio adapter — one implementation, so a
+ * fix to it cannot reach one runtime and not the other.
  */
-export function splitJsonLines(buffer: string): {
-  readonly lines: readonly string[];
-  readonly rest: string;
-} {
-  const parts = buffer.split("\n");
-  const rest = parts.pop() ?? "";
-  return {
-    lines: parts
-      .map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line))
-      .filter((line) => line.trim().length > 0),
-    rest,
-  };
-}
+export { splitJsonLines } from "../jsonl.js";
 
 export interface PiUsage {
   readonly input: number;

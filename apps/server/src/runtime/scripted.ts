@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import {
+  ObservationQueue,
   SESSION_EFFORTS,
   type EpochMillis,
   type InjectedInput,
@@ -860,46 +861,4 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms).unref();
   });
-}
-
-/** A minimal push queue, so observations stream without a dependency. */
-class ObservationQueue implements AsyncIterable<RuntimeObservation> {
-  #buffer: RuntimeObservation[] = [];
-  #waiting: ((value: IteratorResult<RuntimeObservation>) => void) | null = null;
-  #done = false;
-
-  push(observation: RuntimeObservation): void {
-    if (this.#done) return;
-    const waiting = this.#waiting;
-    if (waiting) {
-      this.#waiting = null;
-      waiting({ value: observation, done: false });
-      return;
-    }
-    this.#buffer.push(observation);
-  }
-
-  end(): void {
-    this.#done = true;
-    const waiting = this.#waiting;
-    if (waiting) {
-      this.#waiting = null;
-      waiting({ value: undefined, done: true });
-    }
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<RuntimeObservation> {
-    return {
-      next: (): Promise<IteratorResult<RuntimeObservation>> => {
-        const next = this.#buffer.shift();
-        if (next) return Promise.resolve({ value: next, done: false });
-        if (this.#done) {
-          return Promise.resolve({ value: undefined, done: true });
-        }
-        return new Promise((resolve) => {
-          this.#waiting = resolve;
-        });
-      },
-    };
-  }
 }
