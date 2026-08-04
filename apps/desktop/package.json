@@ -5,18 +5,25 @@
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node scripts/copy-static-assets.mjs",
     "start": "electron .",
     "typecheck": "tsc -b",
     "lint": "eslint src",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "deploy:server": "node scripts/stage-resources.mjs",
+    "package": "node scripts/stage-resources.mjs && electron-builder build --config electron-builder.yml",
+    "package:linux": "node scripts/stage-resources.mjs && electron-builder build --linux --config electron-builder.yml"
   },
+  "description": "PlotRoom desktop shell (Electron main process)",
+  "author": "PlotRoom",
+  "homepage": "https://github.com/plotroom/plotroom",
   "dependencies": {
     "@plotroom/server": "workspace:*",
-    "electron": "^43.0.0",
     "electron-updater": "^6.8.9"
   },
   "devDependencies": {
-    "@types/node": "^26.1.2"
+    "@types/node": "^26.1.2",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.15.3"
   }
 }
