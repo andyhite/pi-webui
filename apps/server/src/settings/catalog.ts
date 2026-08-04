@@ -113,19 +113,18 @@ export const SETTINGS_CATALOG: readonly SettingDefinition[] = [
     humanOnly: true,
   },
   // --------------------------------------------------------------- storage
-  {
-    key: "stateDir",
-    group: "Storage",
-    label: "State directory",
-    description: "Where plotroom.db and blobs/ live (§12).",
-    type: "string",
-    path: ["stateDir"],
-    envVar: "PLOTROOM_STATE_DIR",
-    appliesWithoutRestart: false,
-    restartReason:
-      "the database file at the current path is already open; changing this takes effect on the next start",
-    humanOnly: true,
-  },
+  //
+  // `stateDir` is deliberately **not** a setting. The override for every other
+  // key here lives inside the very store `stateDir` locates (`plotroom.db`,
+  // inside `PLOTROOM_STATE_DIR`) — a stored value cannot relocate the store
+  // that holds it, the way a note cannot tell you which drawer it is in from
+  // inside a different drawer. Persisting one anyway would either be read from
+  // the store at the *old* path (so it could never actually move anything) or,
+  // worse, read the override before locating the store by it — a chicken-and-
+  // egg §12 has no answer for. It stays env/flag only (`PLOTROOM_STATE_DIR`),
+  // exactly as §12's "stored together, backupable, movable" already assumes:
+  // moving the store is an operator act on the directory itself, never a
+  // write through the app that is supposed to already know where it is.
   // ----------------------------------------------------------- application
   {
     key: "staticDir",

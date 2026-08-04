@@ -118,6 +118,17 @@ describe("settings (§11, Epic 8.3)", () => {
     expect(read.status).toBe(403);
   });
 
+  it("has no stateDir entry: a stored value cannot relocate the store that holds it (§12)", async () => {
+    const harness = await boot();
+
+    const found = await harness.ok("/settings");
+    const keys = list(found, "settings").map((entry) => at(entry, "key"));
+    expect(keys).not.toContain("stateDir");
+
+    const read = await harness.call("/settings/stateDir");
+    expect(read.status).toBe(404);
+  });
+
   it("refuses an unknown key with a 404, and a malformed value with a 400", async () => {
     const harness = await boot();
 

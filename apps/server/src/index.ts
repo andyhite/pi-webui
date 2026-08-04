@@ -25,15 +25,13 @@ import { applyStoredSettings } from "./settings/boot.js";
 export const SERVER_NAME = "plotroom-server";
 
 export function startServer(config = loadServerConfig()) {
-  const bindPolicy = checkBindPolicy({
-    host: config.host,
-    allowNonLoopbackBind: config.allowNonLoopbackBind,
-    credential: config.credential,
-  });
-  if (!bindPolicy.ok) {
-    throw new Error(bindPolicy.reason);
-  }
-
+  // `stateDir` itself is never a stored setting (§12, `settings/catalog.ts`'s
+  // own note): the override for every other key lives *inside* the store this
+  // path locates, so the store must already be open, at this path, before
+  // anything can ask it what else was overridden. Opened before the bind
+  // check for the same reason — `checkBindPolicy` needs the *effective*
+  // host/allowNonLoopbackBind/credential, which do not exist until the store
+  // that might override them has been read.
   const db = openDatabase({ stateDir: config.stateDir });
   const bus = createEventBus();
 
@@ -44,6 +42,24 @@ export function startServer(config = loadServerConfig()) {
   // default still applies, exactly as §11 requires.
   const settingsStore = new SettingsStore(db);
   const effectiveConfig = applyStoredSettings(config, settingsStore.list());
+
+  // The bind check reads the *effective* values — a stored `host`,
+  // `allowNonLoopbackBind`, or `credential` override is exactly as visible
+  // here as it is to the rest of the app (§12): a boot that bound non-loopback
+  // because of a persisted credential this check never saw would be the
+  // two-part opt-in silently answering to a value nobody checked.
+  const bindPolicy = checkBindPolicy({
+    host: effectiveConfig.host,
+    allowNonLoopbackBind: effectiveConfig.allowNonLoopbackBind,
+    credential: effectiveConfig.credential,
+  });
+  if (!bindPolicy.ok) {
+    // Refused before a socket ever opens, but the store above is already
+    // open; close it rather than leaving a WAL file behind for a boot that
+    // never actually started.
+    db.close();
+    throw new Error(bindPolicy.reason);
+  }
 
   // A bounded, queryable structured-log sink (§8, Epic 8.3's fill of Epic 2.1's
   // deferred "persisted structured-log sink" — in-process rather than
@@ -121,16 +137,19 @@ export function startServer(config = loadServerConfig()) {
 
   const server = serve({
     fetch: app.fetch,
-    port: config.port,
-    hostname: config.host,
+    port: effectiveConfig.port,
+    hostname: effectiveConfig.host,
   });
   injectWebSocket(server);
 
   logger.info("server started", {
-    host: config.host,
-    port: config.port,
+    host: effectiveConfig.host,
+    port: effectiveConfig.port,
+    // Never from `effectiveConfig`: stateDir cannot be a stored override
+    // (see the note above `openDatabase`), so `config.stateDir` is the only
+    // value this ever was or could be.
     stateDir: config.stateDir,
-    nonLoopback: config.allowNonLoopbackBind,
+    nonLoopback: effectiveConfig.allowNonLoopbackBind,
   });
 
   return {
