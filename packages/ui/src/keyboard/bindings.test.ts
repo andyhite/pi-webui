@@ -380,7 +380,27 @@ describe("overlay rendering helpers", () => {
     expect(formatChord({ key: "Escape" }, false)).toBe("Escape");
   });
 
-  it("prefers an explicit keysLabel so nine chords read as a range", () => {
+  it("names the space bar, whose own key is a blank — a row rendered as nothing is an undocumented binding", () => {
+    expect(formatChord({ key: " " }, false)).toBe("Space");
+    expect(formatChord({ key: " " }, true)).toBe("Space");
+    expect(
+      bindingKeysLabel(
+        documented({ chords: [{ key: "Enter" }, { key: " " }] }),
+        false,
+      ),
+    ).toBe("Enter / Space");
+  });
+
+  it("shows every chord that fires a binding, so a second real key is never hidden behind the first", () => {
+    expect(
+      bindingKeysLabel(
+        dispatched({ chords: [{ key: "Escape" }, { key: "k", mod: true }] }),
+        false,
+      ),
+    ).toBe("Escape / Ctrl+K");
+  });
+
+  it("prefers an explicit keysLabel, which abbreviates the whole chord list rather than naming part of it", () => {
     expect(
       bindingKeysLabel(
         dispatched({

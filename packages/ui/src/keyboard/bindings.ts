@@ -146,17 +146,36 @@ function isMacPlatform(): boolean {
   return /mac/i.test(platform ?? "");
 }
 
+/**
+ * Keys whose `KeyboardEvent.key` is not readable as itself. The space bar's
+ * key is a literal `" "`, which the overlay would otherwise print as a blank
+ * — a binding rendered as nothing is an undocumented binding (§11).
+ */
+const KEY_DISPLAY_NAMES: Readonly<Record<string, string>> = { " ": "Space" };
+
 /** Formats one chord for the overlay: `Mod+K` renders as `⌘K` / `Ctrl+K`. */
 export function formatChord(chord: KeyChord, mac = isMacPlatform()): string {
   const parts: string[] = [];
   if (chord.mod) parts.push(mac ? "⌘" : "Ctrl");
   if (chord.alt) parts.push(mac ? "⌥" : "Alt");
   if (chord.shift) parts.push("Shift");
-  parts.push(chord.key.length === 1 ? chord.key.toUpperCase() : chord.key);
+  const named = KEY_DISPLAY_NAMES[chord.key];
+  parts.push(
+    named ?? (chord.key.length === 1 ? chord.key.toUpperCase() : chord.key),
+  );
   return parts.join(mac ? "" : "+") || chord.key;
 }
 
-/** What the overlay shows for a binding: its own label, or its chords. */
+/**
+ * What the overlay shows for a binding: every chord that fires it, or the
+ * binding's own `keysLabel`.
+ *
+ * A `keysLabel` is an **abbreviation of the whole chord list**, never a subset
+ * of it — "1–9" for nine digits, "↓ / ↑" for two arrows. A label naming one of
+ * two real chords would hide the other, which is the same failure as an
+ * unlisted binding: the overlay would be telling the operator about less than
+ * what the keyboard actually does.
+ */
 export function bindingKeysLabel(
   binding: KeyBinding,
   mac = isMacPlatform(),

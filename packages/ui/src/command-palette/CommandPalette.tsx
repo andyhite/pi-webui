@@ -99,7 +99,6 @@ export function CommandPalette({
         kind: "dispatched",
         id: "command-palette-close",
         chords: [{ key: "Escape" }, { key: "k", mod: true }],
-        keysLabel: "Escape",
         label: "close the command palette",
         description: "closes the palette and returns focus where it was",
         scope: "dialog",

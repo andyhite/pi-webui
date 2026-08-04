@@ -96,7 +96,6 @@ export function PaletteRail({ entries, onActivateEntry }: PaletteRailProps) {
         kind: "dispatched",
         id: "palette-rail-place",
         chords: [{ key: "Enter" }, { key: " " }],
-        keysLabel: "Enter",
         label: "place the focused palette row on the canvas",
         description: `the keyboard's version of dragging it out (§5) — ${NOT_WIRED_REASON} when the host wired no placement`,
         scope: "list",

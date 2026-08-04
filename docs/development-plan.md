@@ -2713,8 +2713,13 @@ enforces from the other side. A declaration may name its **surface**
 (`dialog:command-palette`), which is what lets every dialog bind Escape and every list
 bind the arrows while all of them stay registered, and therefore documented, at once.
 Keys this codebase does not implement are `documented` bindings naming who does
-(xyflow's Backspace delete, its arrow-key nudge) — listed honestly rather than claimed
-or omitted.
+(xyflow's Backspace delete, its arrow-key nudge, and the **space bar**, which is live on a
+focused node through xyflow's `elementSelectionKeys` and doubles as its
+`panActivationKeyCode`) — listed honestly rather than claimed or omitted. A key the
+library under us implements is still a key the operator presses, so it is documented
+without being taken over: Enter remains what moves the route. For the same reason a
+`keysLabel` may only abbreviate a binding's whole chord list ("1–9", "↓ / ↑"), never name
+one of two real chords — a hidden second key is the same failure as an unlisted binding.
 
 Verbs are declared **once** (`keyboard/verbs.ts`) and become both a binding and a
 command palette row from that one definition, each row showing its own key, so the

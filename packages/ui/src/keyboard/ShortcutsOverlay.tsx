@@ -50,7 +50,6 @@ export function ShortcutsOverlay({ open, onClose }: ShortcutsOverlayProps) {
         kind: "dispatched",
         id: "shortcuts-overlay-close",
         chords: [{ key: "Escape" }, { key: "?" }],
-        keysLabel: "Escape",
         label: "close the shortcuts overlay",
         description: "closes this list and returns focus where it was",
         scope: "dialog",
