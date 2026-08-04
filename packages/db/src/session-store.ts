@@ -1,4 +1,13 @@
-import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  sql,
+} from "drizzle-orm";
 import {
   classifyEnd,
   deriveSessionStatus,
@@ -275,6 +284,59 @@ export class SessionStore {
       .select()
       .from(sessions)
       .where(and(isNull(sessions.endKind), isNull(sessions.deletedAt)))
+      .all()
+      .map((row) => toStoredSession(row));
+  }
+
+  /* ---------------------------------------------------------- delete (§3.6) */
+
+  /**
+   * Delete a session record. Soft, because deletion is recoverable for authored
+   * state — including when an agent did the deleting (principle 10).
+   *
+   * Nothing below the record moves: the observation log, the publications, the
+   * injections, and the transcript object stay exactly where they are. The log is
+   * the record (decision 0001), so a restore that lost it would put back a
+   * session in name only — and the transcript is content someone else may have
+   * wired, which a session's deletion does not get to take away.
+   *
+   * **A live session must be stopped before this is called**, and the caller is
+   * the one that can do it: stopping reaches a runtime handle, which is not a
+   * store's to touch. `apps/server/src/approvals/destruction.ts` is where the two
+   * halves of that gesture are joined, so both the operator's DELETE and an
+   * approved session's ask produce the same stop.
+   */
+  delete(sessionId: string): StoredSession {
+    const row = this.row(sessionId);
+    if (row.deletedAt !== null) return toStoredSession(row);
+
+    this.state.db
+      .update(sessions)
+      .set({ deletedAt: this.now() })
+      .where(eq(sessions.id, sessionId))
+      .run();
+
+    return this.get(sessionId);
+  }
+
+  restore(sessionId: string): StoredSession {
+    this.row(sessionId);
+
+    this.state.db
+      .update(sessions)
+      .set({ deletedAt: null })
+      .where(eq(sessions.id, sessionId))
+      .run();
+
+    return this.get(sessionId);
+  }
+
+  /** What the undo verb can put back (principle 10). */
+  deleted(): StoredSession[] {
+    return this.state.db
+      .select()
+      .from(sessions)
+      .where(isNotNull(sessions.deletedAt))
       .all()
       .map((row) => toStoredSession(row));
   }

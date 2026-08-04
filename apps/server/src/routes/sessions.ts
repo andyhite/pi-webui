@@ -11,10 +11,12 @@ import {
   type SessionId,
   type VersionId,
 } from "@plotroom/core";
+import { destroySession } from "../approvals/destruction.js";
 import type { ClaimService } from "../claims/service.js";
 import { validateJsonBody } from "../http/validate.js";
 import type { RunService } from "../runs/service.js";
 import { reindexSessionSearch } from "../search/session-index.js";
+import { announceRestoration } from "./announce.js";
 import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
 
 /**
@@ -221,6 +223,81 @@ export function sessionRoutes(
     });
 
     return c.json({ published });
+  });
+
+  /**
+   * Delete a session record (§3.6) — the operator's own gesture; a session's
+   * reaches this route only after the §6.6 approval it raises is answered
+   * (`destructionGuard`), and lands on the same effect either way.
+   *
+   * A live session is stopped first and the response says so, because §3.6's
+   * "deletable, always" includes one that is running, and a record whose runtime
+   * outlived it would be a session nobody can see.
+   */
+  app.delete("/sessions/:id", async (c) => {
+    const id = param(c, "id");
+    const author = actorOf(c);
+    const outcome = await destroySession(
+      stores,
+      stores.bus,
+      id,
+      author,
+      async (sessionId) => {
+        await service.stopSession({
+          sessionId,
+          mode: "graceful",
+          cause: "user",
+        });
+      },
+    );
+    const stored = stores.sessions.get(id);
+
+    return c.json({
+      session: stored.session,
+      end:
+        stored.session.end === null ? null : endStateFacts(stored.session.end),
+      /** Whether this gesture stopped a live session on its way (§6.7). */
+      stopped: outcome.stopped,
+      restorable: true,
+    });
+  });
+
+  /** Undo one (principle 10): the record, its node, and the wires it had. */
+  app.post("/sessions/:id/restore", (c) => {
+    const id = param(c, "id");
+    const author = actorOf(c);
+    const wasDeleted =
+      stores.sessions.get(id).session.deletion.deletedAt !== null;
+    const stored = stores.sessions.restore(id);
+
+    if (wasDeleted) {
+      stores.bus.publish({
+        entity: "session",
+        verb: "updated",
+        session: stored.session,
+        status: stores.sessions.status(id, {
+          now: systemMillisClock(),
+          waitingOnClaim: claims.isWaitingOnClaim(id),
+        }),
+        author,
+      });
+    }
+
+    // Roots before leaves: the record is back before anything referring to it is.
+    const node = stores.graph.findNodeFor("session", id);
+    if (node) {
+      announceRestoration(
+        stores.bus,
+        author,
+        stores.graph.restoreNode(node.id),
+      );
+    }
+
+    return c.json({
+      session: stored.session,
+      end:
+        stored.session.end === null ? null : endStateFacts(stored.session.end),
+    });
   });
 
   return app;

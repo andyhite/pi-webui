@@ -32,7 +32,7 @@ import { badRequest, notFound, refused } from "../http/errors.js";
 import type { Logger } from "../logging/logger.js";
 import type { ApiStores } from "../routes/api.js";
 import type { SessionHub } from "../sessions/hub.js";
-import { performDestruction } from "./destruction.js";
+import { performDestruction, type LiveSessionStop } from "./destruction.js";
 
 /**
  * Approvals as a service (§6.6, Epic 6.3's server half).
@@ -66,6 +66,13 @@ export interface ApprovalServiceDeps {
   readonly bus: EventBus;
   readonly logger: Logger;
   readonly hub: SessionHub;
+  /**
+   * Stopping a live session before an approved deletion removes its record
+   * (§3.6). Injected as one verb rather than as the run service, because that
+   * service is constructed after this one — and because the stop a deletion
+   * performs must be the same stop §6.7 already owns.
+   */
+  readonly stopSession: LiveSessionStop;
   /** Answering a claim approval settles the wait it stands for (§3.4). */
   readonly claims?: ClaimApprovalAnswerer;
   /**
@@ -195,7 +202,7 @@ export class ApprovalService {
     const saved = stores.approvals.answer(answered.value);
     this.publish(saved, "updated");
 
-    const executed = this.applyAnswer(saved);
+    const executed = await this.applyAnswer(saved);
     const settled = await this.settle(saved);
 
     return { approval: saved, settled, executed };
@@ -451,7 +458,7 @@ export class ApprovalService {
    * What an approval authorizes, once it is answered. Only an approve-once does
    * anything: a denial is feedback, and feedback changes no state (§6.6).
    */
-  private applyAnswer(approval: Approval): boolean {
+  private async applyAnswer(approval: Approval): Promise<boolean> {
     if (approval.answer?.decision !== "approve-once") {
       if (approval.kind === "claim" && approval.answer !== null) {
         this.answerClaimWait(approval, "deny");
@@ -475,15 +482,18 @@ export class ApprovalService {
 
     // Attributed to the session that asked, not to the operator who agreed: the
     // operator authorized the gesture, the agent made it (§15-2, principle 1).
-    const outcome = performDestruction(
+    const outcome = await performDestruction(
       this.deps.stores,
       this.deps.bus,
       target.kind as never,
       target.id,
       sessionAuthor(approval.sessionId),
-      // Stated, not inferred: this branch is reached only for an `approve-once`
-      // answer, which is exactly what `checkDeletion` is asking about.
-      { approved: true },
+      {
+        // Stated, not inferred: this branch is reached only for an `approve-once`
+        // answer, which is exactly what `checkDeletion` is asking about.
+        approved: true,
+        stopSession: this.deps.stopSession,
+      },
     );
     return outcome.changed;
   }

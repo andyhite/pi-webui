@@ -95,6 +95,13 @@ export const DESTRUCTION_TARGET_KINDS = [
   "edge",
   "command",
   "command-definition",
+  /**
+   * A session record (§3.6). It is authored state in the sense that matters here:
+   * the transcript, the observation log, and the provenance of everything the
+   * session authored are things nobody can recreate — and unlike a stop, deleting
+   * the record takes it off the arrangement.
+   */
+  "session",
 ] as const;
 
 export type DestructionTargetKind = (typeof DESTRUCTION_TARGET_KINDS)[number];
@@ -1152,6 +1159,35 @@ const sessionTools: readonly AgentTool[] = [
       targetResolution:
         "the session named by the id, and nothing else. The actor is recorded on the end state, so a peer ending an open session is attributable (§3.6).",
     },
+  }),
+  mutate({
+    name: "session_delete",
+    summary:
+      "Remove a session record. A live one is stopped first, and the response says so. Recoverable (principle 10).",
+    gesture: "delete a session card",
+    method: "DELETE",
+    endpoint: "/api/sessions/:id",
+    input: { id: ID },
+    // §3.6 says a session record is "deletable, always", which includes a live
+    // one — so this stops it rather than refusing, and the stop is announced.
+    // The lineage check still applies for `session_stop`'s reason: a session must
+    // not take work in its own chain off the board to escape a gate.
+    requires: {
+      reflexivity: "target-session",
+      approval: "always",
+      destroys: "session",
+      targetResolution:
+        "the session named by the id, and nothing else — deleting one record reaches exactly one session, and never its delegated children.",
+    },
+  }),
+  mutate({
+    name: "session_restore",
+    summary:
+      "Restore a removed session record, with the node and wires its removal took.",
+    gesture: "undo a session deletion",
+    method: "POST",
+    endpoint: "/api/sessions/:id/restore",
+    input: { id: ID },
   }),
   mutate({
     name: "session_checkpoint",

@@ -43,6 +43,9 @@ describe("the destruction class is catalog metadata", () => {
       "edge_delete",
       "node_delete",
       "object_delete",
+      // A session record is authored state too (§3.6): the transcript, the log,
+      // and the provenance of everything it authored cannot be recreated.
+      "session_delete",
       "workstream_delete",
     ]);
   });

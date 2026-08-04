@@ -224,6 +224,14 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     bus,
     logger,
     hub,
+    // An approved session deletion stops the session first (§3.6), through the
+    // run service's own stop so there is one way work ends (§6.7). Deliberately a
+    // forward reference: the run service is constructed below, because the gate it
+    // runs behind is built from this service — and the closure is not called until
+    // a request is answered, long after both exist.
+    stopSession: async (sessionId) => {
+      await runs.stopSession({ sessionId, mode: "graceful", cause: "user" });
+    },
     claims,
     proposals: {
       isPending: (proposalId) =>

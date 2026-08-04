@@ -750,6 +750,28 @@ Record answers here as they are decided; do not assume.
 
 Decided (recorded as they were made):
 
+- **Deleting a session record stops the session first, and cascades no further than
+  its node** (issue #42, §3.6). §3.6 says a session is "readable, resumable, forkable,
+  deletable, always" and that "there is no distinction between a live session and a
+  stored one", so a **live** session is deletable too — and it is stopped in the same
+  gesture, through §6.7's own stop verb, because a soft-deleted record whose runtime is
+  still running is exactly the invisible session the product exists to prevent. The stop
+  is therefore the ordinary `stopped` end state with its ordinary event, and the response
+  says `stopped: true` — announced, never a silent side effect; a restore gives back a
+  stopped session, readable and resumable like any other. Refusing while live and naming
+  the stop verb was rejected for making "always" false for exactly the sessions an
+  operator most wants gone. What goes with the record is **its graph node and that node's
+  wires, and nothing else**: the transcript object is separately authored content someone
+  may have wired elsewhere, the observation log _is_ the record (decision 0001) so a
+  restore that lost it would put back a session in name only, and every delegated child is
+  its own record with its own provenance — one gesture destroying an unnamed subtree is not
+  a recoverable gesture in any useful sense (principle 10). `session_delete` is
+  destruction-class (`destroys: "session"`, the seventh kind), so a session asking for one
+  raises §6.6's approval through the guard that already exists and needs no new channel,
+  while `session_restore` is an ordinary verb like every other `_restore`. No migration:
+  `sessions.deleted_at` has been there since migration 7, and there is deliberately no
+  purge policy behind it (nothing in the spec says a deleted record expires).
+
 - **A pending proposal reaches §7.1 as its own `ApprovalKind`, `standing-instruction`**
   (Epic 7.4). `ATTENTION_FEEDS` is closed at six, so a proposal is surfaced through the
   approvals channel §6.6 already owns — but as a **fifth kind**, added by the documented

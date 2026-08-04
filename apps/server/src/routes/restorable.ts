@@ -21,7 +21,7 @@ import {
  */
 export function restorableRoutes(stores: ApiStores): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
-  const { objects, graph, workstreams, commands } = stores;
+  const { objects, graph, workstreams, commands, sessions } = stores;
 
   app.get("/restorable", (c) =>
     c.json({
@@ -37,6 +37,15 @@ export function restorableRoutes(stores: ApiStores): Hono<ApiEnv> {
       commandDefinitions: commands
         .deletedDefinitions()
         .map((row) => toDefinition(row)),
+      // A deleted session record is restorable like anything else authored
+      // (§3.6, principle 10) — and the end state travels with it, so the list
+      // says what would come back rather than only that something would.
+      sessions: sessions.deleted().map((stored) => ({
+        id: stored.session.id,
+        workstreamId: stored.session.workstreamId,
+        deletedAt: stored.session.deletion.deletedAt,
+        end: stored.session.end,
+      })),
     }),
   );
 

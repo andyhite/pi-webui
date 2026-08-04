@@ -62,6 +62,12 @@ beforeEach(() => {
     bus,
     logger,
     hub: new SessionHub(),
+    // Nothing here answers a session-deletion approval, so this fixture's stop is
+    // a refusal to be called rather than a silent no-op: a test that started
+    // deleting sessions through this service would say so.
+    stopSession: () => {
+      throw new Error("this fixture stops no sessions");
+    },
     claims,
   });
 

@@ -102,6 +102,88 @@ describe("session records", () => {
   });
 });
 
+/**
+ * A session record is deletable, always — and recoverable, because deletion is
+ * recoverable for authored state (§3.6, principle 10).
+ */
+describe("deleting a session record", () => {
+  it("soft-deletes, and the record stays readable", () => {
+    const { session } = startSession();
+
+    const deleted = sessions.delete(session.id);
+
+    expect(deleted.session.deletion.deletedAt).toBe(clock.now());
+    // §3.6's "readable ... always" is not qualified by deletion.
+    expect(sessions.get(session.id).session.id).toBe(session.id);
+  });
+
+  it("leaves the observation log — the record itself — alone", () => {
+    const { session } = startSession();
+    sessions.appendObservation(session.id, {
+      kind: "turn-started",
+      at: millis(),
+      turn: 1,
+    });
+
+    sessions.delete(session.id);
+
+    // Decision 0001: the log *is* the record, so a restore that lost it would
+    // put back a session in name only.
+    expect(sessions.observationRecords(session.id)).toHaveLength(1);
+  });
+
+  it("drops out of the default list and comes back on request", () => {
+    const { session } = startSession();
+    sessions.delete(session.id);
+
+    expect(sessions.list().map((s) => s.session.id)).toEqual([]);
+    expect(
+      sessions.list({ includeDeleted: true }).map((s) => s.session.id),
+    ).toEqual([session.id]);
+  });
+
+  it("keeps the first deletion's time when deleted twice", () => {
+    const { session } = startSession();
+    const first = sessions.delete(session.id).session.deletion.deletedAt;
+
+    clock.advance(60);
+    expect(sessions.delete(session.id).session.deletion.deletedAt).toBe(first);
+  });
+
+  it("restores, and lists what the undo verb can put back", () => {
+    const live = startSession().session;
+    const gone = startSession({
+      runtime: { adapterId: "scripted", ref: "native-2" },
+    }).session;
+    sessions.delete(gone.id);
+
+    expect(sessions.deleted().map((s) => s.session.id)).toEqual([gone.id]);
+
+    const restored = sessions.restore(gone.id);
+    expect(restored.session.deletion.deletedAt).toBeNull();
+    expect(sessions.deleted()).toEqual([]);
+    expect(
+      sessions
+        .list()
+        .map((s) => s.session.id)
+        .sort(),
+    ).toEqual([live.id, gone.id].sort());
+  });
+
+  it("is not what `inFlight` reports, so a restart interrupts nothing deleted", () => {
+    const { session } = startSession();
+    sessions.delete(session.id);
+
+    // Principle 11 reports in-flight work as interrupted at boot; a deleted
+    // record is not work in flight.
+    expect(sessions.inFlight()).toEqual([]);
+  });
+
+  it("refuses to delete a session it has never seen", () => {
+    expect(() => sessions.delete("sess-nope")).toThrowError();
+  });
+});
+
 describe("the observation log", () => {
   it("derives the phase from what was observed, never from a report", () => {
     const { session } = startSession();

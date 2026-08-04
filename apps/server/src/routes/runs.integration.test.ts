@@ -1398,6 +1398,108 @@ describe("end states are distinct (§3.6, principle 11)", () => {
     expect(at(read, "endedBy")).toEqual({ kind: "human" });
   });
 
+  it("deletes a live session by stopping it first, and puts it back", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness);
+    const started = await run(harness, fixture.commandId, neverEnds);
+    const sessionId = str(started, "session.id");
+
+    const deleted = await harness.ok(`/sessions/${sessionId}`, {
+      method: "DELETE",
+    });
+
+    // §3.6: "deletable, always" — including while live. The stop is part of the
+    // gesture and the response says so, because a soft-deleted record whose
+    // runtime kept running is a session nobody can see.
+    expect(at(deleted, "stopped")).toBe(true);
+    expect(at(deleted, "session.end.kind")).toBe("stopped");
+    expect(at(deleted, "restorable")).toBe(true);
+    expect(harness.handle.hub.ids()).not.toContain(sessionId);
+
+    // Off the list, still readable, and offered by the undo verb's own list.
+    expect(
+      list(await harness.ok("/sessions"), "sessions").map((each) =>
+        at(each, "session.id"),
+      ),
+    ).not.toContain(sessionId);
+    expect(at(await harness.ok(`/sessions/${sessionId}`), "session.id")).toBe(
+      sessionId,
+    );
+    expect(
+      list(await harness.ok("/restorable"), "sessions").map((each) =>
+        at(each, "id"),
+      ),
+    ).toEqual([sessionId]);
+
+    const restored = await harness.ok(`/sessions/${sessionId}/restore`, {
+      method: "POST",
+    });
+
+    // What comes back is a stopped session — readable, resumable, forkable.
+    expect(at(restored, "session.deletion.deletedAt")).toBeNull();
+    expect(at(restored, "end.resumable")).toBe(true);
+    expect(list(await harness.ok("/restorable"), "sessions")).toHaveLength(0);
+  });
+
+  it("stops nothing when the session it deletes has already ended", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness, { lifecycle: "open" });
+    const started = await run(harness, fixture.commandId, neverEnds);
+    const sessionId = str(started, "session.id");
+    await harness.ok(`/sessions/${sessionId}/end`, {
+      method: "POST",
+      body: {},
+    });
+
+    const deleted = await harness.ok(`/sessions/${sessionId}`, {
+      method: "DELETE",
+    });
+
+    expect(at(deleted, "stopped")).toBe(false);
+    // The outcome it ended with is the outcome it keeps: deleting a record is
+    // not a second end state (§3.6's taxonomy is closed).
+    expect(at(deleted, "session.end.kind")).toBe("ended-by-user");
+  });
+
+  it("routes a session's own delete through §6.6 rather than performing it", async () => {
+    const harness = await boot(repository());
+    const first = await command(harness);
+    const asker = await run(harness, first.commandId, neverEnds);
+    const second = await command(harness);
+    const target = await run(harness, second.commandId, neverEnds);
+    const targetId = str(target, "session.id");
+
+    const raised = await harness.call(`/sessions/${targetId}`, {
+      method: "DELETE",
+      actor: `session:${str(asker, "session.id")}`,
+    });
+
+    // 202: accepted and waiting on a person. Nothing was deleted and nothing
+    // was stopped — a destructive gesture an agent asked for is the operator's
+    // to answer (§6.6, principle 10).
+    expect(raised.status).toBe(202);
+    expect(at(raised.body, "executed")).toBe(false);
+    expect(at(raised.body, "approval.ask.target")).toEqual({
+      kind: "session",
+      id: targetId,
+    });
+    expect(
+      at(await harness.ok(`/sessions/${targetId}`), "session.end"),
+    ).toBeNull();
+
+    const answered = await harness.ok(
+      `/approvals/${str(raised.body, "approval.id")}/answer`,
+      { method: "POST", body: { decision: "approve-once" } },
+    );
+
+    // Approved, the same effect runs — stop included — and it is attributed to
+    // the session that asked, not to the operator who agreed (§15-2).
+    expect(at(answered, "executed")).toBe(true);
+    const read = await harness.ok(`/sessions/${targetId}`);
+    expect(at(read, "session.end.kind")).toBe("stopped");
+    expect(at(read, "session.deletion.deletedAt")).not.toBeNull();
+  });
+
   it("interrupts a live session at a graceful shutdown rather than orphaning it", async () => {
     const repositoryPath = gitRepository();
     const stateDir = mkdtempSync(join(tmpdir(), "plotroom-shutdown-"));
