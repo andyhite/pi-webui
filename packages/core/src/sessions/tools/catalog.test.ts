@@ -252,6 +252,22 @@ const OPERATOR_ONLY_ROUTES: readonly {
     path: "/api/arrangement",
     why: "the same as a single position, in bulk (§5) — one drag of a selection is one gesture, and it is the operator's.",
   },
+  {
+    path: "/api/logs",
+    why: "the structured log is the operator's operational record (§8), the same posture /api/log-level already takes for both its verbs; a session's own reasoning needs its budget and its settings, not the process's log.",
+  },
+  {
+    path: "/api/search",
+    why: "§6.8's search is the operator's browse/find surface over sessions and archives; no session-facing gesture reads it, so there is no tool to mirror.",
+  },
+  {
+    path: "/api/settings",
+    why: "every catalog entry in this batch is humanOnly (§11, principle 1: bind address, credential, concurrency, runtime/workspace defaults) — a session's list read is already filtered to nothing by the route itself, so there is nothing left for a tool to expose.",
+  },
+  {
+    path: "/api/settings/:key",
+    why: "same reasoning, per key: a humanOnly setting's own read is refused by actor before this line, matching the write's refusal.",
+  },
 ];
 
 describe("the mounted routes", () => {
