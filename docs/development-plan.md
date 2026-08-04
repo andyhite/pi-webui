@@ -495,7 +495,7 @@ the predicate's own reason and never reaches the live graph. Canvas state
 - [x] First runtime adapter (one concrete agent runtime end-to-end) — _two adapters are wired behind one registry; see the landed note for what is proven end to end and what is not_
 - [x] Phase derivation from observation: thinking, responding, tool-running, compacting, waiting-\* , stopped, failed, idle (§3.6; principle 7 — derived, never agent-reported)
 - [x] Per-session accounting: turns, elapsed, tokens, cost, last-activity, context-window meter with thresholds (§3.6)
-- [ ] Session records: live = stored; readable, resumable, forkable, deletable, always (§3.6) — _stored and readable now (records, observation log, transcript, accounting, end states, all over `/api`); resume, fork, and delete have no endpoint yet (Epic 5.4 owns resume/fork; the delete verb waits with §6.6 approvals)_
+- [ ] Session records: live = stored; readable, resumable, forkable, deletable, always (§3.6) — _stored, readable, resumable, and forkable: records, observation log, transcript, accounting, and end states over `/api`, plus `POST /api/sessions/:id/resume` and `/fork` (landed with Epic 5.4, `routes/continuation.ts`; this note previously predated them). The one remaining verb is **delete** — no endpoint exists, deliberately held for §6.6 approval-gated destruction; named follow-up F1 below._
 
 ### Epic 4.2 — Context assembly and the run (`runs`)
 
@@ -2953,6 +2953,41 @@ honest but sparse until more call sites are tagged._
 - [x] Invariant regression suite: the four §15 invariants, reflexivity refusal, no-silent-truncation, one-gesture-one-thing — _`apps/server/src/invariants.integration.test.ts` hardened from six exercised invariants into 25 asserted ones, plus `packages/db/src/invariants.schema.test.ts` as the schema census. The bar the suite is written to is **assert, not exercise**: every group attempts the violating write through each surface that can reach the row (the API with a bad actor, the store bypassing the API, raw SQL bypassing both), compares the record byte for byte with what the preview promised rather than merely finding it non-empty, and pushes retention to its edge (most aggressive policy expressible, clock a year on) so what survives, survives by the rule. Verified by mutation: weakening `isInSameChain` to one hop, dropping `isRunCompactable`'s `addressedByLatest` guard, dropping `compactVersions`' run-referenced clause, truncating the assembled blob in `RunStore.start`, and defaulting an unparseable actor to `human` each turn the suite red (1–5 named failures apiece). No real invariant violation was found. The census exists because scenario tests can only reach the tables a scenario touches: it asks the migrated schema about itself — NOT NULL on both halves of §15-1, the §15-3 foreign keys, the five refusals `edges`' CHECKs make unrepresentable, retention metadata on every version, and a census proving `objects.latest_version_id` is the **only** latest-shaped column anywhere (§15-4). Also closed here, test-only: `packages/core/src/sessions/tools/catalog.test.ts` did not scan `app.put`, so `PUT /api/settings/:key` was invisible to the vocabulary check in both directions — the scanner now reads a verb set wider than `HttpMethod` and asserts that route is found._
 
 ---
+
+## Post-ship follow-ups (named at the W24–26 final gate)
+
+The unchecked boxes above and the residual gaps the final batch's reviews recorded, each
+named so nothing is silently open:
+
+- **F1 — session delete verb** (Epic 4.1's last unchecked clause): held for §6.6
+  approval-gated destruction; recoverability (principle 10) is the interim answer.
+- **F2 — plugin distribution "from a configured source"** (Epic 7.1/10.2): recorded
+  deferral — fetch, verification, and an update path that cannot silently widen
+  permissions are three decisions a freeze should not invent.
+- **F3 — integration change deltas** (Epic 7.2): version-bump/drift landed; per-kind
+  "what's new" deltas are the recorded deferral.
+- **F4 — macOS/Windows installers and the cloud-VM tunnel leg** (Epic 8.4): configured,
+  honestly unverified in a Linux-only environment; verify on real hosts. Code signing
+  and the update-feed target are recorded open decisions in AGENTS.md.
+- **F5 — desktop credential at rest** (Epic 8.4 review): stored plaintext in
+  `desktop-config.json`, stated in `docs/deployment.md`; adopt Electron `safeStorage`.
+- **F6 — contained-node drag persistence** (Epic 3.2/8.5 reviews): a child node inside a
+  container is visually draggable but its own drag is not persisted (top-level drags,
+  including rigid-body displacement, are); either persist parent-relative positions or
+  make children non-draggable. Within-container rigid-body push remains the older
+  recorded deferral beside it.
+- **F7 — small reviewed non-blockers, UI**: settings panel's WS-refresh captures a stale
+  query filter; search/logs panel reads lack `.catch` surfacing; canvas overlay lists a
+  `Delete` chord xyflow's default `deleteKeyCode` does not implement; the Space overlay
+  row's "toggle" wording is Shift-qualified in xyflow's actual behavior.
+- **F8 — small reviewed non-blockers, server**: `SearchIndex.has` is a table scan (boot
+  backfill O(n²) at desktop scale — fine, stated); crash-interrupted sessions keep a
+  slightly stale indexed transcript body until their next boundary; `GET /api/search`
+  returns no truncation marker at the 100-hit clamp; raising the concurrency limit does
+  not drain already-parked queue entries until the next session event.
+- **F9 — scripted-runtime ref durability**: request-id uniqueness is process-scoped; an
+  interrupted session's persisted, never-answered question could collide with a new
+  process's ids in principle (test-only runtime, fresh state dirs in practice).
 
 ## Phase 9 — Directional (§13) — not scheduled
 
