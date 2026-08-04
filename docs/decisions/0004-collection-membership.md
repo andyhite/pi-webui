@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-04
+- **Issues:** #52 (decision), #95 (implementation), #85 (the prerequisite defect)
 - **Deciders:** operator
 
 ## Context
