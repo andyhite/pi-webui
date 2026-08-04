@@ -445,6 +445,16 @@ function BoxNodeView({ data, id, selected }: NodeProps<BoxNode>) {
 function ContainerNodeView({ data }: NodeProps<ContainerNode>) {
   // Collapsed: one card (identity only). Expanded: a frame around its
   // children, drawn behind them via xyflow's parent/child z-ordering.
+  //
+  // Edges into a collapsed container draw to its frame (spec §5, §3.3):
+  // `remapEdgesForCollapse` (`containers/collapse.ts`) already retargets a
+  // remapped edge's endpoint to the container's own id, but xyflow can only
+  // resolve that edge's on-screen position against a real `<Handle>` on the
+  // node it names — without one, `getEdgePosition` finds nothing and the
+  // edge never renders at all (silently: it never reaches the DOM). A
+  // container can land on either end of a remapped edge (the inner node it
+  // stood in for could have been either), so it carries both handles,
+  // exactly like `BoxNodeView`'s.
   return (
     <div
       style={{
@@ -455,10 +465,12 @@ function ContainerNodeView({ data }: NodeProps<ContainerNode>) {
         padding: "4px 8px",
       }}
     >
+      <Handle type="target" position={Position.Left} />
       <button type="button" onClick={data.onToggle}>
         {data.collapsed ? "expand" : "collapse"}
       </button>{" "}
       {data.label}
+      <Handle type="source" position={Position.Right} />
     </div>
   );
 }

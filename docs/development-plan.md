@@ -348,6 +348,17 @@ action bar; off-screen markers clustered by compass sector. Deferred:
 attention-marker coordinates for container children; within-container
 rigid-body push._
 
+_Regression, found and fixed in the arrangement-server-adoption batch:
+"edges into a collapsed container draw to its frame" was checked above but
+did not render — `remapEdgesForCollapse` correctly retargeted a collapsed
+edge's endpoint to the container's id, but `ContainerNodeView`
+(`packages/ui/src/canvas/PlotCanvas.tsx`) carried no `<Handle>` elements (only
+`BoxNodeView`'s did), so xyflow's `getEdgePosition` resolved nothing and the
+edge silently never reached the DOM. Fixed by giving the container both
+handles, exactly like a box node's; proven at the render level (DOM presence
+through collapse and back through expand, never inferred from the claim) by
+`apps/web/e2e/arrangement-container-collapse.spec.ts`._
+
 ### Epic 3.3 — Authoring gestures (`canvas`) — _done (mechanics)_
 
 - [x] Edge drag with mid-drag refusal via `isValidConnection` over the core legality predicate (§3.7, §5)
