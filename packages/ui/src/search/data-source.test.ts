@@ -18,7 +18,9 @@ describe("createApiSearchDataSource", () => {
     const result = await source.search({ q: "   " });
 
     expect(get).not.toHaveBeenCalled();
-    expect(result).toEqual({ query: "", hits: [] });
+    // Nothing was asked for, so nothing was withheld — and no bound was
+    // applied to invent a number for.
+    expect(result).toEqual({ query: "", hits: [], limit: 0, truncated: false });
   });
 
   it("quotes the query as an FTS5 phrase (never a bare MATCH grammar term) and returns the response untouched, in the server's own order", async () => {
@@ -47,6 +49,52 @@ describe("createApiSearchDataSource", () => {
     expect(get).toHaveBeenCalledTimes(1);
     expect(result.hits).toHaveLength(1);
     expect(result.hits[0]?.archived).toBe(false);
+  });
+
+  // What this defends is that the client does not **reshape** the completeness
+  // report: it maps `query` by hand, so an edit that mapped the rest of the
+  // response field by field is one keystroke from dropping these two. It is
+  // what it is — the current client spreads the whole response, so it would
+  // stay green at runtime if the type change were reverted, and would fail only
+  // under `tsc`. The empty-query case above is the one that fails either way.
+  it("keeps the server's own completeness report intact — the panel cannot infer it", async () => {
+    const hit = {
+      kind: "session",
+      refKind: "session",
+      refId: "sess_1",
+      title: "session sess_1",
+      location: "workstream-oxy-2982",
+      snippet: "...",
+      rank: 0.9,
+      archived: false,
+    };
+    const get = vi.fn(async () => ({
+      query: "migrate",
+      // One hit at a limit of one: `hits.length === limit` says nothing about
+      // whether more matched, which is exactly why `truncated` is reported.
+      limit: 1,
+      truncated: true,
+      hits: [hit],
+    }));
+    const source = createApiSearchDataSource({ http: fakeHttp(get) });
+
+    const result = await source.search({ q: "migrate" });
+
+    expect(result.truncated).toBe(true);
+    expect(result.limit).toBe(1);
+
+    const complete = createApiSearchDataSource({
+      http: fakeHttp(async () => ({
+        query: "migrate",
+        limit: 25,
+        truncated: false,
+        hits: [hit],
+      })),
+    });
+    expect(await complete.search({ q: "migrate" })).toMatchObject({
+      limit: 25,
+      truncated: false,
+    });
   });
 
   it("quotes a hyphenated word instead of letting FTS5 read it as NOT — the crash a raw ticket id or branch name used to cause", async () => {
@@ -112,13 +160,16 @@ describe("createApiSearchDataSource", () => {
 
 describe("createFixtureSearchDataSource", () => {
   it("returns exactly the result registered for that query", async () => {
-    const source = createFixtureSearchDataSource(
-      new Map([["migrate", { query: "migrate", hits: [] }]]),
-    );
-    expect(await source.search({ q: "migrate" })).toEqual({
+    const registered = {
       query: "migrate",
       hits: [],
-    });
+      limit: 25,
+      truncated: true,
+    };
+    const source = createFixtureSearchDataSource(
+      new Map([["migrate", registered]]),
+    );
+    expect(await source.search({ q: "migrate" })).toEqual(registered);
   });
 
   it("returns no hits for an unregistered query rather than throwing", async () => {
@@ -126,6 +177,8 @@ describe("createFixtureSearchDataSource", () => {
     expect(await source.search({ q: "anything" })).toEqual({
       query: "anything",
       hits: [],
+      limit: 0,
+      truncated: false,
     });
   });
 });

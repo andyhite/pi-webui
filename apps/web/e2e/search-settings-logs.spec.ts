@@ -10,6 +10,10 @@
  *       reported as archived, never hidden. Selecting it navigates through
  *       the one selection-as-route primitive: the address itself names the
  *       session afterward, over `GET /api/search` (operator-only).
+ *       Its answer is also **bounded, and says so**: 26 findable sessions
+ *       against the server's default bound of 25 render 25 rows plus a marker
+ *       naming the bound, announced in the live region too, while a
+ *       single-hit answer claims nothing of the kind.
  *   (b) **Settings (§11).** Writing a live-applying setting (`PUT
  *       /api/settings/:key`) is reflected on the server immediately and
  *       renders honestly as "applies without a restart"; "remove override"
@@ -98,6 +102,83 @@ async function putSetting(
   }
 }
 
+/**
+ * A session that starts, ends, and does nothing in between. The search index
+ * is written at session start (`apps/server/src/runs/service.ts`), so a fixture
+ * that only needs to be *findable* has no reason to replay a fail-then-pass
+ * loop — which would also have 26 sessions writing the same path in one
+ * workspace, contending for the same claim. It **ends** rather than idling
+ * because this file runs one worker against one server: 26 sessions left
+ * running would hold concurrency slots for every test after this one, and the
+ * next test that started a run would fail for a reason that had nothing to do
+ * with it.
+ */
+const FINDABLE_THEN_DONE_SCRIPT = {
+  acts: [
+    {
+      on: "start",
+      steps: [
+        {
+          observation: {
+            kind: "session-ended",
+            reason: { kind: "completed" },
+          },
+        },
+      ],
+    },
+  ],
+};
+
+/**
+ * One more session in `workstreamId`, findable by its command definition's
+ * name — which is what the index records as the session's title
+ * (`apps/server/src/search/session-index.ts`), so the search term enters
+ * through `seedSearchableCommand`, never through here.
+ */
+async function seedFindableSession(
+  base: string,
+  workstreamId: string,
+  commandId: string,
+  initiationKey: string,
+): Promise<void> {
+  const run = await apiPost<{ session: { id: string } | null }>(
+    base,
+    "/api/runs",
+    {
+      commandId,
+      initiationKey,
+      runtime: { script: FINDABLE_THEN_DONE_SCRIPT },
+    },
+  );
+  if (run.session === null) {
+    throw new Error(
+      `run ${initiationKey} was queued rather than started, so it indexed nothing`,
+    );
+  }
+}
+
+/** A command in its own workstream whose definition name carries `term`. */
+async function seedSearchableCommand(
+  base: string,
+  term: string,
+): Promise<{ readonly workstreamId: string; readonly commandId: string }> {
+  const definitionId = await createDefinition(base, `${term} fixture`);
+  const workstream = await apiPost<{ workstream: { id: string } }>(
+    base,
+    "/api/workstreams",
+    {},
+  );
+  const command = await apiPost<{ command: { id: string } }>(
+    base,
+    "/api/commands",
+    { definitionId, workstreamId: workstream.workstream.id },
+  );
+  return {
+    workstreamId: workstream.workstream.id,
+    commandId: command.command.id,
+  };
+}
+
 test.describe("search, settings, and logs", () => {
   test("a hit is findable, then still findable and honestly archived, and selecting it is the one navigation primitive", async ({
     page,
@@ -161,6 +242,85 @@ test.describe("search, settings, and logs", () => {
     await expect
       .poll(() => page.evaluate(() => window.location.search))
       .toContain(sessionId);
+  });
+
+  test("a bounded answer says so and names the bound; a complete one claims nothing", async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    const base = requireServer().baseUrl;
+    const many = `trunc${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`;
+    const one = `single${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`;
+
+    const manyCommand = await seedSearchableCommand(base, many);
+    // One past the server's default bound of 25 (`DEFAULT_SEARCH_LIMIT`), so
+    // `truncated` comes from an extra hit the index really held — never from
+    // `hits.length === limit`, which is equally true of a complete answer.
+    for (let n = 0; n < 26; n += 1) {
+      await seedFindableSession(
+        base,
+        manyCommand.workstreamId,
+        manyCommand.commandId,
+        `trunc-e2e-${many}-${n}`,
+      );
+    }
+    const oneCommand = await seedSearchableCommand(base, one);
+    await seedFindableSession(
+      base,
+      oneCommand.workstreamId,
+      oneCommand.commandId,
+      `trunc-e2e-${one}`,
+    );
+
+    // Wait on the API's own answer, not the panel's: indexing happens at
+    // session start, and a slow index must not read as a UI failure. The bound
+    // it reports is also what the panel is expected to name, so it is read
+    // here rather than written down again — `DEFAULT_SEARCH_LIMIT` lives in
+    // `@plotroom/db` and this test holds no copy of it either.
+    let bound = 0;
+    await expect
+      .poll(
+        async () => {
+          const answer = await apiGet<{
+            truncated: boolean;
+            limit: number;
+          }>(base, `/api/search?q=${many}`);
+          bound = answer.limit;
+          return answer.truncated;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+
+    await page.goto(`${base}/`);
+    await expect(page.getByTestId("attention-header-count")).toBeVisible();
+    await page.getByRole("button", { name: "Search", exact: true }).click();
+    const searchInput = page.getByTestId("search-panel-input");
+    const results = page.getByTestId("search-panel-results");
+
+    await searchInput.fill(many);
+    await expect(results.getByTestId("search-result")).toHaveCount(bound, {
+      timeout: 15_000,
+    });
+    // A full page of rows drawn as if it were all of them is the server's
+    // honesty thrown away one layer later (§6.8).
+    await expect(page.getByTestId("search-truncation-marker")).toContainText(
+      `showing the first ${bound} matches`,
+    );
+    await expect(page.getByTestId("search-panel-live-region")).toContainText(
+      "more matched than are shown",
+    );
+
+    // And a complete answer claims nothing: the marker is a statement about
+    // this answer, not furniture.
+    await searchInput.fill(one);
+    await expect(results.getByTestId("search-result")).toHaveCount(1, {
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId("search-truncation-marker")).toHaveCount(0);
+    await expect(page.getByTestId("search-panel-live-region")).toContainText(
+      "1 result",
+    );
   });
 
   test("a live-applying setting writes through immediately, and 'remove override' is its own verb", async ({

@@ -752,10 +752,19 @@ export const FIXTURE_PLUGIN_HEALTH: readonly PluginHealthEntry[] = [
 ];
 
 /**
- * The Search panel's fixture (§6.8, §11) for offline/dev mode: a query and
- * its ranked hits, one of them archived — reported as archived rather than
- * hidden, exactly as §6.8 requires. `LIVE` mode queries the real thing
+ * The Search panel's fixture (§6.8, §11) for offline/dev mode. Two queries,
+ * because the panel has two answers to render and a fixture that covered one
+ * would make the other unreachable offline: "migrate" is **complete** and
+ * carries an archived hit — reported as archived rather than hidden, exactly
+ * as §6.8 requires — and "session" is **partial**, so the truncation marker is
+ * a shape dev mode shows too rather than one only a live index with more than
+ * a page of hits ever produces. `LIVE` mode queries the real thing
  * (`createApiSearchDataSource`, over `GET /api/search`).
+ *
+ * `limit` matches the hit count on the partial entry deliberately: the server
+ * only reports `truncated` after withholding a hit, so an authored fixture
+ * whose `limit` disagreed with its rows would have the marker name a number
+ * that is not on screen.
  */
 export const FIXTURE_SEARCH_RESULTS: ReadonlyMap<string, SearchResult> =
   new Map([
@@ -785,6 +794,28 @@ export const FIXTURE_SEARCH_RESULTS: ReadonlyMap<string, SearchResult> =
             archived: true,
           },
         ],
+        limit: 25,
+        truncated: false,
+      },
+    ],
+    [
+      "session",
+      {
+        query: "session",
+        hits: [
+          {
+            kind: "session",
+            refKind: "session",
+            refId: "session-running",
+            title: "session session-running",
+            location: "workstream-oxy-2982",
+            snippet: "...still migrating the schema...",
+            rank: 0.88,
+            archived: false,
+          },
+        ],
+        limit: 1,
+        truncated: true,
       },
     ],
   ]);

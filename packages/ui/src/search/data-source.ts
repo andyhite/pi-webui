@@ -49,7 +49,15 @@ export function createApiSearchDataSource(
     search(query: SearchQuery): Promise<SearchResult> {
       const q = query.q.trim();
       if (q.length === 0) {
-        return Promise.resolve({ query: q, hits: [] });
+        // No request was made, so no bound was applied: nothing was asked for
+        // and nothing was withheld. `limit: 0` states that rather than
+        // guessing at the server's default, which lives in `@plotroom/db`.
+        return Promise.resolve({
+          query: q,
+          hits: [],
+          limit: 0,
+          truncated: false,
+        });
       }
       const params = new URLSearchParams();
       params.set("q", toFts5MatchQuery(q));
@@ -73,7 +81,14 @@ export function createFixtureSearchDataSource(
   return {
     search(query: SearchQuery): Promise<SearchResult> {
       const q = query.q.trim();
-      return Promise.resolve(resultsByQuery.get(q) ?? { query: q, hits: [] });
+      return Promise.resolve(
+        resultsByQuery.get(q) ?? {
+          query: q,
+          hits: [],
+          limit: 0,
+          truncated: false,
+        },
+      );
     },
   };
 }

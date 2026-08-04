@@ -27,6 +27,26 @@ export interface SearchHit {
 export interface SearchResult {
   readonly query: string;
   readonly hits: readonly SearchHit[];
+  /**
+   * The bound the server applied to *this* answer — the caller's, clamped, or
+   * the index's own default when none was asked for. Rendered rather than
+   * assumed: the default lives in `@plotroom/db`, and a renderer holding a copy
+   * of it would be a second source of truth for the same number.
+   *
+   * A data source that answered without a request (an empty query, an
+   * unregistered fixture) applied no bound and reports `0`. Nothing renders it:
+   * `limit` is only ever read beside a `truncated` that is true, and those
+   * answers are complete by construction.
+   */
+  readonly limit: number;
+  /**
+   * True when the index held at least one more hit than `limit`. Observed by
+   * the server (which asks for one hit past the bound), and not inferrable
+   * here: `hits.length === limit` is also true of a query whose last hit is
+   * its last. A result that did not carry this could only be rendered as if
+   * it were complete — the silent truncation §6.8 and AGENTS.md refuse.
+   */
+  readonly truncated: boolean;
 }
 
 export interface SearchQuery {

@@ -21,6 +21,13 @@
  * primitive; whether that resolves to anything visible is the canvas's own
  * concern; nothing here holds an off-canvas special case.
  *
+ * Results are also **bounded**, and the bound is stated: when the server
+ * reports the answer partial, the panel says so and names the limit it was
+ * cut at. An operator searching a fleet's transcripts has no other way to
+ * tell "nothing else matched" from "the rest was not shown", and a surface
+ * that renders 25 rows as if they were all of them is silently truncating
+ * on the server's behalf (§6.8, AGENTS.md).
+ *
  * A read that *fails* is reported rather than swallowed, for the same reason
  * an archived hit is: the rows go (they answered an earlier query and would
  * otherwise read as answers to this one) and the failure is said, in the panel
@@ -45,20 +52,35 @@ export interface SearchPanelProps {
   readonly onSelectNode: (nodeId: string) => void;
 }
 
+/**
+ * The two fields the server reports about completeness are one fact here: a
+ * `truncated` flag with no bound beside it is a marker that cannot say
+ * anything useful, and a bound without the flag says nothing at all.
+ */
+interface Truncation {
+  readonly limit: number;
+}
+
 function summarize(
   hits: readonly SearchHit[],
   query: string,
   error: string | null,
+  truncation: Truncation | null,
 ): string {
   if (error) return `search failed: ${error}`;
   if (query.trim().length === 0) return "";
   if (hits.length === 0) return `no results for "${query}"`;
-  return `${hits.length} result${hits.length === 1 ? "" : "s"} for "${query}"`;
+  const count = `${hits.length} result${hits.length === 1 ? "" : "s"} for "${query}"`;
+  // Said, not only drawn (§11): "25 results" and "the first 25 of more" are
+  // different answers, and an operator who only hears the first one has been
+  // told the search was complete.
+  return truncation ? `${count}, and more matched than are shown` : count;
 }
 
 export function SearchPanel({ dataSource, onSelectNode }: SearchPanelProps) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<readonly SearchHit[]>([]);
+  const [truncation, setTruncation] = useState<Truncation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const requestIdRef = useRef(0);
@@ -72,6 +94,7 @@ export function SearchPanel({ dataSource, onSelectNode }: SearchPanelProps) {
       // no longer being asked.
       requestIdRef.current += 1;
       setHits([]);
+      setTruncation(null);
       setError(null);
       setActiveIndex(0);
       return;
@@ -85,6 +108,7 @@ export function SearchPanel({ dataSource, onSelectNode }: SearchPanelProps) {
           if (requestIdRef.current !== requestId) return;
           setError(null);
           setHits(result.hits);
+          setTruncation(result.truncated ? { limit: result.limit } : null);
           setActiveIndex(0);
         })
         // A failed read left the previous query's hits on screen, silently,
@@ -94,6 +118,7 @@ export function SearchPanel({ dataSource, onSelectNode }: SearchPanelProps) {
         .catch((err: unknown) => {
           if (requestIdRef.current !== requestId) return;
           setHits([]);
+          setTruncation(null);
           setActiveIndex(0);
           setError(err instanceof Error ? err.message : String(err));
         });
@@ -217,8 +242,18 @@ export function SearchPanel({ dataSource, onSelectNode }: SearchPanelProps) {
           );
         })}
       </ul>
+      {/* Where the operator runs out of rows, because that is where the
+          question arises. Outside the listbox: a non-option child of
+          `role="listbox"` is not a row, and the marker is not a hit. */}
+      {truncation ? (
+        <div data-testid="search-truncation-marker">
+          showing the first {truncation.limit}{" "}
+          {truncation.limit === 1 ? "match" : "matches"} — more matched than are
+          shown here; narrow the query to see them
+        </div>
+      ) : null}
       <LiveRegion
-        message={summarize(hits, query, error)}
+        message={summarize(hits, query, error, truncation)}
         label="search results summary"
         testId="search-panel-live-region"
       />
