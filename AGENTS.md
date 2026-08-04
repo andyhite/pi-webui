@@ -569,6 +569,15 @@ Record answers here as they are decided; do not assume.
   `document`. Neither invents a membership schema, deliberately.
 - Styling approach for the UI package
 - Versioning and release process
+- **Update-feed hosting, channel strategy, and code-signing posture** (Epic 8.4).
+  `electron-updater` is wired (`apps/desktop/src/updater.ts`) behind principle 2's
+  consent rule, but `electron-builder.yml`'s `publish` is deliberately unset:
+  which host serves update metadata (GitHub Releases, a generic HTTP server, S3,
+  …), whether there are stable/beta channels, and macOS notarization/Windows
+  Authenticode signing all need an operator/publisher decision (and, for signing,
+  certificates and accounts) this batch had neither the authority nor the
+  environment to make. Without a publish target, a check fails gracefully
+  (logged, not thrown) rather than crashing — see `docs/deployment.md`.
 
 Decided (recorded as they were made):
 

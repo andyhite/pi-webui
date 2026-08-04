@@ -409,7 +409,7 @@ run the renderer in._
 - [x] **Single-origin rule:** the browser talks to exactly one origin — page, WS, and API on the same port; the client connects to same-origin paths (`/ws`) with no hardcoded host or port anywhere. In dev, the dev server serves the page and proxies WS/API to the server so dev is single-origin too. This is what makes local and tunnelled access identical (§12)
 - [x] Port/instance selection knob (one setting drives server port, dev port, state dir); dev HMR follows the browser's port with an override for asymmetric tunnels
 - [x] Electron main: spawn-or-attach to server (electron-builder vs forge packaging tooling still not chosen — the operator's call per AGENTS.md's open decisions, deliberately not made here)
-- [ ] Remote-backend connect/remember/switch (§12) — deferred to Phase 8, as the epic allows
+- [x] Remote-backend connect/remember/switch (§12) — landed in Phase 8 (Epic 8.4), as the epic allowed: `apps/desktop`'s `connectToActiveBackend` decides local spawn-or-attach vs a remembered remote backend once at launch; a desktop-owned backend-picker window (never `apps/web`/`packages/ui`) lists, tests, remembers, and switches backends. See `docs/deployment.md`.
 
 _Landed: `createHttpClient` (fetch wrapper, now parsing the server's
 `ApiErrorBody` onto `HttpError.code`/`.reason`/`.isRefusal`) and
@@ -2891,10 +2891,10 @@ honest but sparse until more call sites are tagged._
 
 ### Epic 8.4 — Packaging and deployment (`desktop`, `server`)
 
-- [ ] Desktop installers per platform; updater per the packaging decision (§12)
-- [ ] Local binding by default; tunnelled remote access posture; remote-backend semantics (workspaces/diffs are the backend's machine) (§12)
-- [ ] Documented tunnel workflow: forward the page's loopback port only (`ssh -N -L <port>:127.0.0.1:<port>`), verified end-to-end against a cloud VM — including the desktop app attaching to the tunnelled backend
-- [ ] Backup/move verification for the portable store; reset/cleanup UX finalized (§12)
+- [x] Desktop installers per platform; updater per the packaging decision (§12) — _electron-builder + electron-updater, per AGENTS.md's decision. Linux (AppImage, deb) built and verified in this environment; macOS/Windows configured only (`apps/desktop/electron-builder.yml`) — no macOS host, no `wine`, to build or verify them here. Updater wired behind principle 2 (check is a scheduled read; download and install both need operator consent, gated on a persisted setting); no publish/update-feed target is configured, deliberately (AGENTS.md's open decisions) — see `docs/deployment.md`._
+- [x] Local binding by default; tunnelled remote access posture; remote-backend semantics (workspaces/diffs are the backend's machine) (§12) — _server-side bind/credential enforcement (Epic 2.1) verified unchanged from a packaged app's perspective; desktop connect/remember/switch between backends landed (`apps/desktop/src/backend-connect.ts`, `desktop-config.ts`, `backend-picker-*`), with credential injection at the main-process network layer (never taught to the renderer) verified against real `/api/*` and `/ws` traffic. See `docs/deployment.md`._
+- [x] Documented tunnel workflow: forward the page's loopback port only (`ssh -N -L <port>:127.0.0.1:<port>`), verified end-to-end against a cloud VM — including the desktop app attaching to the tunnelled backend — _documented; **verified via a self-tunnel on this machine, not a cloud VM** (none available in this environment). The desktop app's remote-backend connect path was verified directly against two local server instances (the same credential-injection/health-check code a tunnelled connection uses), not layered on top of a live SSH tunnel in the same run — `docs/deployment.md` states exactly what was and was not exercised together, honestly short of the cloud-VM leg._
+- [x] Backup/move verification for the portable store; reset/cleanup UX finalized (§12) — _state-directory inventory (`GET /api/maintenance/state`) verified accurate from a packaged server; reset is already plan/confirm/execute server-side (Epic 2.3), unchanged. No operator-facing UI over those endpoints exists yet — reported as a cross-track need (`packages/ui`/`apps/web`, naturally Epic 8.3) rather than built outside this batch's file ownership._
 
 ### Epic 8.5 — E2E hardening (`ci`)
 
