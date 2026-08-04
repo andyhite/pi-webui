@@ -12,6 +12,13 @@ export interface CommandPaletteItem {
   readonly kind: "navigate" | "verb";
   /** Navigate items only: the node the selection-as-route primitive moves to. */
   readonly nodeId?: string;
+  /**
+   * The keyboard binding for this row, when one exists (§11) — supplied by
+   * `commandPaletteItemsFromVerbs` from the *same* verb definition the
+   * binding registry gets its binding from, so the palette and the shortcuts
+   * overlay can never disagree about which key runs a verb.
+   */
+  readonly keys?: string;
 }
 
 /** Case-insensitive substring match over the label; empty query matches all. */
