@@ -19,6 +19,18 @@ export function approvalItemId(approvalId: string): string {
   return `approval:${approvalId}`;
 }
 
+/**
+ * The failure of an approved effect is its **own** item, for the reason a health
+ * alert's id names its reading as well as its subject: it is a second fact about
+ * one approval, and the two are never in the queue at once. Under the ask's id a
+ * mute of "may I delete this?" would also hide "you approved it and it did not
+ * happen", and an outbound route (§7.3) — which folds edge-triggered by id — would
+ * have already fired for the question and never send the failure at all.
+ */
+export function approvalEffectFailureItemId(approvalId: string): string {
+  return `approval:${approvalId}:effect-failed`;
+}
+
 export { driftItemKey };
 
 /**

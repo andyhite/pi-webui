@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { humanAuthor } from "../author.js";
 import type { NodeId, ObjectId, SessionId, WorkstreamId } from "../ids.js";
-import { raiseApproval } from "../sessions/approvals/approval.js";
-import { approvalAttention } from "../sessions/approvals/approval.js";
+import {
+  answerApproval,
+  approvalAttention,
+  raiseApproval,
+  recordApprovalEffectFailure,
+} from "../sessions/approvals/approval.js";
 import { destructionAsk } from "../sessions/approvals/ask.js";
 import type { ApprovalId } from "../sessions/approvals/ids.js";
 import { raiseQuestion } from "../sessions/questions.js";
@@ -172,6 +176,42 @@ describe("the attention derivation", () => {
       deriveAttention(sources(), { now: 9_000_000, triage: ledger }),
     );
     expect(items.some((item) => item.id === "approval:appr-1")).toBe(false);
+  });
+
+  it("gives a failed effect its own id and state, so a mute of the ask cannot hide it", () => {
+    const answered = answerApproval(approval, {
+      decision: "approve-once",
+      by: humanAuthor,
+      at: 1100,
+    });
+    if (!answered.ok) throw new Error("fixture approval was refused");
+    const recorded = recordApprovalEffectFailure(answered.value, {
+      message: "the runtime would not stop the session",
+      at: 1200,
+    });
+    if (!recorded.ok) throw new Error("fixture failure was refused");
+    const attention = approvalAttention(recorded.value);
+    if (attention === null) throw new Error("a failed effect must still show");
+
+    // Muted as a question, and the failure is a different fact: §7.3's outbound
+    // routes fold edge-triggered by id, so under one id the operator would never be
+    // told the destruction they agreed to did not happen.
+    const ledger = applyTriage(EMPTY_TRIAGE, "approval:appr-1", "mute", {
+      at: 1500,
+      by: humanAuthor,
+    });
+    const derived = deriveAttention(
+      sources({ approvals: [{ attention, target }] }),
+      { now: 9_000_000, triage: ledger },
+    );
+    const row = derived.find(
+      (entry) => entry.item.id === "approval:appr-1:effect-failed",
+    );
+    expect(row).toBeDefined();
+    expect(row?.item.summary).toContain("could not be carried out");
+    expect(row?.item.raisedAt).toBe(1200);
+    // It blocks nobody and asks for no decision: the answer was given.
+    expect(row?.states).toEqual(["failed", "anything"]);
   });
 
   it("hides a snoozed item, then returns it with snoozeUntil back to null", () => {

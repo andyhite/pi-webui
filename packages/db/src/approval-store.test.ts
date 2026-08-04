@@ -11,6 +11,7 @@ import {
   newApprovalId,
   newPreGrantId,
   raiseApproval,
+  recordApprovalEffectFailure,
   sessionAuthor,
   toolCallAsk,
   type Approval,
@@ -146,6 +147,65 @@ describe("approvals", () => {
       at: clock.now() + 10,
     });
     expect(store.pending()).toEqual([]);
+  });
+
+  it("keeps a failed effect at rest, where a restart cannot lose it", () => {
+    const approved = answerApproval(raise(), {
+      decision: "approve-once",
+      by: humanAuthor,
+      at: clock.now() + 10,
+    });
+    if (!approved.ok) throw new Error(approved.refusal.message);
+    const saved = store.answer(approved.value);
+
+    const recorded = recordApprovalEffectFailure(saved, {
+      message: "the runtime would not stop the session",
+      at: clock.now() + 20,
+    });
+    if (!recorded.ok) throw new Error(recorded.refusal.message);
+    store.recordEffectFailure(recorded.value);
+
+    // Answered, so it is not what is still being asked — and not history either.
+    expect(store.pending()).toEqual([]);
+    expect(store.effectFailures().map((row) => row.id)).toEqual([saved.id]);
+    expect(store.get(saved.id).effectFailure).toEqual({
+      message: "the runtime would not stop the session",
+      at: clock.now() + 20,
+    });
+
+    // Reopened from the same directory: the whole reason this is a column.
+    state.close();
+    const reopened = openDatabase({ stateDir: dir });
+    try {
+      expect(
+        new ApprovalStore(reopened, clock.now).get(saved.id).effectFailure
+          ?.message,
+      ).toBe("the runtime would not stop the session");
+    } finally {
+      reopened.close();
+      state = openDatabase({ stateDir: dir });
+    }
+  });
+
+  it("cannot represent a failed effect nobody authorized, or half of one", () => {
+    const raised = raise();
+
+    // Unanswered: core refuses it, and so does the schema — the second one is what
+    // holds when a future call site reaches the table without the predicate.
+    expect(() =>
+      state.sqlite
+        .prepare(
+          "UPDATE approvals SET effect_failure_message = ?, effect_failed_at = ? WHERE id = ?",
+        )
+        .run("it broke", 500, raised.id),
+    ).toThrow(/CHECK constraint failed/);
+
+    // Half a failure: a time with nothing said, or a message at no time.
+    expect(() =>
+      state.sqlite
+        .prepare("UPDATE approvals SET effect_failed_at = ? WHERE id = ?")
+        .run(500, raised.id),
+    ).toThrow(/CHECK constraint failed/);
   });
 });
 

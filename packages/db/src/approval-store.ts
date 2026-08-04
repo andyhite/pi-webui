@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, or } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, or } from "drizzle-orm";
 import {
   systemClock,
   type Approval,
@@ -82,6 +82,27 @@ export class ApprovalStore {
     return this.get(approval.id);
   }
 
+  /**
+   * Persist the failed-effect record core produced (§6.6).
+   *
+   * A write of its own rather than part of `answer()`: the answer is what the
+   * operator decided and the failure is what happened afterwards, and one
+   * statement writing both would make a store that could not represent the
+   * ordinary case — answered, effect applied, nothing failed.
+   */
+  recordEffectFailure(approval: Approval): Approval {
+    const row = toApprovalRow(approval);
+    this.state.db
+      .update(approvals)
+      .set({
+        effectFailureMessage: row.effectFailureMessage,
+        effectFailedAt: row.effectFailedAt,
+      })
+      .where(eq(approvals.id, approval.id))
+      .run();
+    return this.get(approval.id);
+  }
+
   get(approvalId: string): Approval {
     const found = this.find(approvalId);
     if (!found) throw new EntityNotFound("approval", approvalId);
@@ -133,6 +154,27 @@ export class ApprovalStore {
             ),
       )
       .orderBy(asc(approvals.raisedAt))
+      .all()
+      .map(toApproval);
+  }
+
+  /**
+   * Answered, and the effect never happened (§7.1). Not part of `pending()`,
+   * because these are answered and that list is what is still being asked; the
+   * queue joins the two, and the two are what §7.1 has to show — a question, and a
+   * decision that did not take effect.
+   */
+  effectFailures(sessionId?: string): readonly Approval[] {
+    const failed = isNotNull(approvals.effectFailedAt);
+    return this.state.db
+      .select()
+      .from(approvals)
+      .where(
+        sessionId === undefined
+          ? failed
+          : and(eq(approvals.sessionId, sessionId), failed),
+      )
+      .orderBy(asc(approvals.effectFailedAt))
       .all()
       .map(toApproval);
   }
@@ -229,6 +271,8 @@ function toApprovalRow(approval: Approval): ApprovalRow {
     answerReason: approval.answer?.reason ?? null,
     answerByKind: approval.answer === null ? null : "human",
     answeredAt: approval.answer?.at ?? null,
+    effectFailureMessage: approval.effectFailure?.message ?? null,
+    effectFailedAt: approval.effectFailure?.at ?? null,
   };
 }
 
@@ -256,6 +300,10 @@ function toApproval(row: ApprovalRow): Approval {
       row.piercedJson === null
         ? null
         : (JSON.parse(row.piercedJson) as PiercedPreGrant),
+    effectFailure:
+      row.effectFailureMessage === null || row.effectFailedAt === null
+        ? null
+        : { message: row.effectFailureMessage, at: row.effectFailedAt },
   };
 }
 

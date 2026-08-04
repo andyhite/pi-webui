@@ -10,6 +10,7 @@ import {
 } from "../sessions/triage.js";
 import type { HealthAlert } from "./health.js";
 import {
+  approvalEffectFailureItemId,
   approvalItemId,
   broadcastItemId,
   completionItemId,
@@ -185,9 +186,18 @@ export function attentionItems(
 
 function approvalRow(source: ApprovalAttentionSource): DerivedAttentionItem {
   const attention = source.attention;
+  // Two facts, two rows, never both at once: an approval that is still asking, and
+  // one whose authorized effect failed. They differ in id (so triage and §7.3's
+  // edge-trigger treat them separately) and in state — a failure blocks nobody and
+  // asks for no decision, it reports that the operator's own gesture did not
+  // happen. The rank is the same: an agreed destruction that did not occur is not
+  // less urgent than one still being asked about.
+  const failed = attention.effectFailure !== null;
   return {
     item: {
-      id: approvalItemId(attention.approvalId),
+      id: failed
+        ? approvalEffectFailureItemId(attention.approvalId)
+        : approvalItemId(attention.approvalId),
       feed: "approval",
       target: source.target,
       rank: ATTENTION_RANKS.approval,
@@ -202,7 +212,9 @@ function approvalRow(source: ApprovalAttentionSource): DerivedAttentionItem {
       raisedAt: attention.raisedAt,
       snoozeUntil: null,
     },
-    states: ["blocked", "wants-decision", "anything"],
+    states: failed
+      ? ["failed", "anything"]
+      : ["blocked", "wants-decision", "anything"],
   };
 }
 

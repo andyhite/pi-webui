@@ -1313,12 +1313,23 @@ export const approvals = sqliteTable(
     answerReason: text("answer_reason"),
     answerByKind: text("answer_by_kind", { enum: ["human"] }),
     answeredAt: integer("answered_at"),
+    /**
+     * Why the effect this approval authorized did not happen (migration 32). The
+     * answer stays final and this is recorded beside it, because a destruction that
+     * failed after the operator agreed is unfinished rather than undecided — and a
+     * failure kept only in memory comes back from a restart invisible.
+     */
+    effectFailureMessage: text("effect_failure_message"),
+    effectFailedAt: integer("effect_failed_at"),
   },
   (table) => [
     index("approvals_session_idx").on(table.sessionId, table.raisedAt),
     uniqueIndex("approvals_call_idx")
       .on(table.sessionId, table.callId)
       .where(sql`${table.callId} IS NOT NULL`),
+    index("approvals_effect_failed_idx")
+      .on(table.effectFailedAt)
+      .where(sql`${table.effectFailedAt} IS NOT NULL`),
   ],
 );
 

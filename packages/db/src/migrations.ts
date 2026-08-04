@@ -2027,4 +2027,45 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    // 32, not 31: the track map (#112) gives migration 31 to `track:collections`
+    // for collection membership, and two lanes appending the same id collides in a
+    // way nothing downstream can reconcile. The runner applies the set of ids it has
+    // not applied yet rather than everything above a high-water mark
+    // (`applyMigrations` in `client.ts`), so 31 arriving after this one has shipped
+    // still applies.
+    id: 32,
+    name: "approval_effect_failure",
+    sql: `
+      -- An approved effect that was attempted and did not happen (§6.6).
+      --
+      -- An approval is a decision **and** an effect the decision authorizes, and
+      -- until now only the decision was recorded. So a destruction whose effect threw
+      -- left a row that reads answered-and-done, a blocked call nobody ever settled,
+      -- and nothing in §7.1 — the operator's own gesture undone with no surface
+      -- saying so. These two columns are what makes that fact exist: \`answer\` stays
+      -- final (a second answer would rewrite what a human decided, principle 9) and
+      -- the failure is recorded beside it.
+      --
+      -- Rows rather than a log line for the reason \`budget_notices\` is rows: a
+      -- restart must not lose it. A failure held only in memory comes back invisible,
+      -- which is the same hole from the other side.
+      ALTER TABLE approvals ADD COLUMN effect_failure_message TEXT;
+
+      -- The pair is consistent, and a failed effect cannot exist without the answer
+      -- that authorized it — unrepresentable rather than merely refused, which is why
+      -- the CHECK rides on the second column (a column-level CHECK is evaluated per
+      -- row, so it may name the columns added before it).
+      ALTER TABLE approvals ADD COLUMN effect_failed_at INTEGER
+        CHECK (
+          (effect_failed_at IS NULL) = (effect_failure_message IS NULL) AND
+          (effect_failed_at IS NULL OR answered_at IS NOT NULL)
+        );
+
+      -- The queue's own lookup (§7.1): a failed row has left \`approvals_open_idx\`,
+      -- because it *is* answered.
+      CREATE INDEX approvals_effect_failed_idx ON approvals (effect_failed_at)
+        WHERE effect_failed_at IS NOT NULL;
+    `,
+  },
 ];

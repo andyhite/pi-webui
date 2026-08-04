@@ -7,6 +7,7 @@ import {
   newApprovalId,
   newPreGrantId,
   raiseApproval,
+  recordApprovalEffectFailure,
   sessionAuthor,
   settlesAsk,
   type Approval,
@@ -138,6 +139,12 @@ export interface AnsweredApproval {
   readonly settled: boolean;
   /** True when approving executed the destruction it authorized. */
   readonly executed: boolean;
+  /**
+   * Why the authorized effect did not happen, when it did not: `executed` is false
+   * for a denial and for a failure alike, and those are not the same event. Null in
+   * every other case.
+   */
+  readonly effectFailure: string | null;
 }
 
 export class ApprovalService {
@@ -180,6 +187,14 @@ export class ApprovalService {
    * the answer, act on what it authorized, then tell the blocked call. Telling the
    * runtime first would let a session proceed on a decision that had not been
    * written down.
+   *
+   * **An effect that fails does not stop the last step**, and it does not reopen
+   * the first. The answer is what a human decided and it stands; the failure is
+   * recorded on the row (`recordApprovalEffectFailure`), which is what puts it back
+   * in §7.1 and what makes `approvalOutcome` deny rather than allow. Skipping
+   * `settle` was the actual bug: under the embedded sidecar the blocked call is an
+   * in-process await inside a session-host process PlotRoom owns and pays for, so
+   * an unsettled approval wedges a process rather than merely losing a call.
    */
   async answer(request: AnswerApprovalRequest): Promise<AnsweredApproval> {
     const stores = this.deps.stores;
@@ -202,10 +217,22 @@ export class ApprovalService {
     const saved = stores.approvals.answer(answered.value);
     this.publish(saved, "updated");
 
-    const executed = await this.applyAnswer(saved);
-    const settled = await this.settle(saved);
+    let executed = false;
+    let record = saved;
+    try {
+      executed = await this.applyAnswer(saved);
+    } catch (error) {
+      record = this.recordEffectFailure(saved, error);
+    }
 
-    return { approval: saved, settled, executed };
+    const settled = await this.settle(record);
+
+    return {
+      approval: record,
+      settled,
+      executed,
+      effectFailure: record.effectFailure?.message ?? null,
+    };
   }
 
   pending(sessionId?: string): readonly Approval[] {
@@ -227,11 +254,22 @@ export class ApprovalService {
    * wait is gone is left out: the wait was withdrawn or granted elsewhere, so
    * there is nothing left to answer — the record stays as history rather than
    * sitting in the queue asking about something that no longer exists.
+   *
+   * Two lists, because §7.1 has two things to show about an approval: one still
+   * asking, and one the operator answered whose effect then failed. The second is
+   * answered, so it is not in `pending()`, and leaving it out is what made a failed
+   * destruction invisible on every surface at once. `stillAsking` does not apply to
+   * it — nothing is being asked.
    */
   attention(): readonly { approval: Approval; attention: ApprovalAttention }[] {
     const rows: { approval: Approval; attention: ApprovalAttention }[] = [];
     for (const approval of this.pending()) {
       if (!this.stillAsking(approval)) continue;
+      const attention = approvalAttention(approval);
+      if (attention === null) continue;
+      rows.push({ approval, attention });
+    }
+    for (const approval of this.deps.stores.approvals.effectFailures()) {
       const attention = approvalAttention(approval);
       if (attention === null) continue;
       rows.push({ approval, attention });
@@ -498,6 +536,61 @@ export class ApprovalService {
     return outcome.changed;
   }
 
+  /**
+   * The effect did not happen. Write that down, tell every surface, and hand back
+   * the record the blocked call is settled from.
+   *
+   * Written to the row rather than logged, and this is the whole point of the
+   * record: a log line leaves an approval that reads answered-and-done next to a
+   * destruction that never occurred, which is the invisible state from the other
+   * side. The publish is `updated` — the same verb the answer used, because this is
+   * the same record changing again, and §7.1 re-derives from it.
+   *
+   * A store that will not take the failure is the one case with nowhere left to
+   * write: it is logged, and `settle` still runs, because a wedged session-host
+   * process is worse than a lost sentence.
+   */
+  private recordEffectFailure(approval: Approval, error: unknown): Approval {
+    const message = error instanceof Error ? error.message : String(error);
+    this.deps.logger.error("an approved effect failed", {
+      approvalId: approval.id,
+      sessionId: approval.sessionId,
+      kind: approval.kind,
+      message,
+    });
+
+    const recorded = recordApprovalEffectFailure(approval, {
+      message:
+        message.trim().length === 0
+          ? `the ${approval.kind} this authorized failed without saying why`
+          : message,
+      at: this.deps.stores.clock(),
+    });
+    if (!recorded.ok) {
+      this.deps.logger.error("could not record a failed approval effect", {
+        approvalId: approval.id,
+        reason: recorded.refusal.reason,
+        message: recorded.refusal.message,
+      });
+      return approval;
+    }
+
+    const saved = this.deps.stores.approvals.recordEffectFailure(
+      recorded.value,
+    );
+    this.publish(saved, "updated");
+    return saved;
+  }
+
+  /**
+   * Settle the claim wait this approval stood for (§3.4).
+   *
+   * It does **not** catch: a wait the claim manager would not settle is a failed
+   * effect like any other, and `answer` records it where the operator sees it. This
+   * used to log and carry on while the destruction branch beside it did neither,
+   * which meant one method treated the same kind of failure two ways — and neither
+   * of the two put the fact anywhere the operator would find it.
+   */
   private answerClaimWait(
     approval: Approval,
     decision: "grant" | "deny",
@@ -507,19 +600,11 @@ export class ApprovalService {
     if (waitId === undefined || answerer === undefined) return;
     if (!answerer.waitExists(waitId)) return;
 
-    try {
-      answerer.answerApproval({
-        waitId,
-        decision,
-        by: approval.answer?.by ?? { kind: "human" },
-      });
-    } catch (error) {
-      this.deps.logger.error("could not settle a claim wait from an approval", {
-        approvalId: approval.id,
-        waitId,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
+    answerer.answerApproval({
+      waitId,
+      decision,
+      by: approval.answer?.by ?? { kind: "human" },
+    });
   }
 
   /**

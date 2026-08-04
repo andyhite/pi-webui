@@ -259,6 +259,63 @@ describe("a session destroying authored state (§6.6, principle 10)", () => {
       otherId,
     );
   });
+
+  it("reports an authorized effect that failed, and keeps it in the queue (#74)", async () => {
+    const harness = await boot(repository());
+    const { sessionId } = await board(harness);
+
+    // The guard raises before the route looks anything up, so a gesture against
+    // something that is not there is a real approval whose effect cannot succeed —
+    // reachable over HTTP with nothing stubbed.
+    const attempt = await harness.call("/objects/obj_no-such-object", {
+      method: "DELETE",
+      actor: `session:${sessionId}`,
+    });
+    expect(attempt.status).toBe(202);
+    const approvalId = str(attempt.body, "approval.id");
+
+    // Answered, not crashed: the operator's decision was recorded and the effect
+    // failed afterwards, which is a fact about the row rather than a 500.
+    const answered = await harness.ok(`/approvals/${approvalId}/answer`, {
+      method: "POST",
+      body: { decision: "approve-once" },
+    });
+    expect(at(answered, "executed")).toBe(false);
+    expect(String(at(answered, "effectFailure"))).toContain(
+      "obj_no-such-object",
+    );
+
+    // The answer stands: retrying it is refused rather than replayed, so a partly
+    // applied effect is never run a second time.
+    const again = await harness.call(`/approvals/${approvalId}/answer`, {
+      method: "POST",
+      body: { decision: "approve-once" },
+    });
+    expect(again.status).toBe(409);
+    expect(at(again.body, "error.details.reason")).toBe("already_answered");
+
+    // And §7.1 says so, as its own item asking for nothing: the operator's own
+    // gesture is unfinished, which used to be invisible on every surface at once.
+    const queue = await harness.ok("/attention");
+    const item = list(queue, "items").find(
+      (row) => at(row, "id") === `approval:${approvalId}:effect-failed`,
+    );
+    expect(item).toBeDefined();
+    expect(String(at(item, "summary"))).toContain("could not be carried out");
+    expect(at(queue, `states.approval:${approvalId}:effect-failed`)).toEqual([
+      "failed",
+      "anything",
+    ]);
+
+    const row = (await pendingApprovals(harness)).find(
+      (entry) => at(entry, "approval.id") === approvalId,
+    );
+    // Not in `pending()` — it is answered — so the queue is where it lives now.
+    expect(row).toBeUndefined();
+    expect(
+      at(await harness.ok(`/approvals/${approvalId}`), "attention.answers"),
+    ).toEqual([]);
+  });
 });
 
 describe("the call an approval blocks (§6.6)", () => {

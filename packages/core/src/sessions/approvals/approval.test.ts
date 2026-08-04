@@ -10,6 +10,7 @@ import {
   isApprovalAnswered,
   isApproved,
   raiseApproval,
+  recordApprovalEffectFailure,
   type Approval,
 } from "./approval.js";
 import { describeAsk, toolCallAsk } from "./ask.js";
@@ -195,5 +196,125 @@ describe("the attention row (§7.1)", () => {
     });
     expect(answered.ok).toBe(true);
     if (answered.ok) expect(approvalAttention(answered.value)).toBeNull();
+  });
+});
+
+describe("an authorized effect that failed (§6.6)", () => {
+  function approved(): Approval {
+    const answered = answerApproval(raised(), {
+      decision: "approve-once",
+      by: humanAuthor,
+      at: 101,
+    });
+    if (!answered.ok) throw new Error("the fixture could not answer");
+    return answered.value;
+  }
+
+  function failed(): Approval {
+    const recorded = recordApprovalEffectFailure(approved(), {
+      message: "the runtime would not stop the session",
+      at: 150,
+    });
+    if (!recorded.ok) throw new Error("the fixture could not record a failure");
+    return recorded.value;
+  }
+
+  it("does not reopen the answer: the decision was a human's and it stands", () => {
+    const second = answerApproval(failed(), {
+      decision: "approve-once",
+      by: humanAuthor,
+      at: 200,
+    });
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.refusal.reason).toBe("already_answered");
+  });
+
+  it("denies the blocked call and names what did not happen", () => {
+    expect(approvalOutcome(approved())).toEqual({ kind: "allow" });
+    expect(approvalOutcome(failed())).toEqual({
+      kind: "deny",
+      reason:
+        "the operator approved this, but it could not be carried out: the runtime would not stop the session",
+    });
+  });
+
+  it("tells the session not to proceed, because the thing did not happen", () => {
+    const encoded = encodeApprovalAnswer(failed());
+    expect(encoded?.decision).toBe("approve-once");
+    expect(encoded?.disposition).toBe("not-this-way");
+    expect(encoded?.reason).toBe("the runtime would not stop the session");
+  });
+
+  it("leaves a denial's own feedback alone: that reason was already the answer", () => {
+    const denied = answerApproval(raised(), {
+      decision: "deny",
+      reason: "not that repository; open a PR against the fork",
+      by: humanAuthor,
+      at: 101,
+    });
+    expect(denied.ok).toBe(true);
+    if (!denied.ok) return;
+    const recorded = recordApprovalEffectFailure(denied.value, {
+      message: "the claim wait had already lapsed",
+      at: 150,
+    });
+    expect(recorded.ok).toBe(true);
+    if (!recorded.ok) return;
+
+    expect(approvalOutcome(recorded.value)).toEqual({
+      kind: "deny",
+      reason: "not that repository; open a PR against the fork",
+    });
+    expect(encodeApprovalAnswer(recorded.value)?.reason).toBe(
+      "not that repository; open a PR against the fork",
+    );
+  });
+
+  it("comes back to §7.1 asking for nothing, at the moment it failed", () => {
+    const row = approvalAttention(failed());
+    expect(row).not.toBeNull();
+    if (row === null) return;
+    expect(row.effectFailure).toBe("the runtime would not stop the session");
+    expect(row.sentence).toContain("could not be carried out");
+    // Nothing to answer: the decision was made, and `answerApproval` would refuse
+    // every option a surface offered here.
+    expect(row.answers).toEqual([]);
+    // The failure's own moment, so the queue orders it where it happened and an
+    // acknowledgement of the question does not cover it (§4.5).
+    expect(row.raisedAt).toBe(150);
+  });
+
+  it("keeps the first failure: a doubled report must not rewrite what went wrong", () => {
+    const second = recordApprovalEffectFailure(failed(), {
+      message: "something else entirely",
+      at: 200,
+    });
+    expect(second.ok).toBe(false);
+    if (!second.ok) {
+      expect(second.refusal.reason).toBe("effect_failure_recorded");
+    }
+    expect(failed().effectFailure?.message).toBe(
+      "the runtime would not stop the session",
+    );
+  });
+
+  it("refuses a failure with no answer behind it, and one with nothing said", () => {
+    const unanswered = recordApprovalEffectFailure(raised(), {
+      message: "it broke",
+      at: 150,
+    });
+    expect(unanswered.ok).toBe(false);
+    if (!unanswered.ok) {
+      expect(unanswered.refusal.reason).toBe("effect_without_answer");
+    }
+
+    const silent = recordApprovalEffectFailure(approved(), {
+      message: "   ",
+      at: 150,
+    });
+    expect(silent.ok).toBe(false);
+    if (!silent.ok) {
+      expect(silent.refusal.reason).toBe("effect_failure_needs_message");
+    }
   });
 });
