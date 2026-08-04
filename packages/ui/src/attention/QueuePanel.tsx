@@ -15,11 +15,13 @@
  * **The cursor is the host's** (`useAttentionQueueCursor`), not this panel's,
  * because §11's queue verbs are keyboard verbs first: they have to work
  * whether or not this panel happens to be open, and a click and a keypress
- * must be the same act on the same selection. So every button below calls
- * the same cursor method the registered binding does — and the panel adds
- * only the two bindings that need something it owns: the arrows (a listbox's
- * expected keys) and `d`, which denies with the reason typed into the
- * highlighted row.
+ * must be the same act on the same selection. So every button below calls the
+ * same cursor method the registered binding does, and this panel registers no
+ * bindings at all — the queue's keys belong to the host precisely so the
+ * shortcuts overlay lists them while the panel is closed, which is when a
+ * keyboard user most needs to be told they exist. The typed deny reason lives
+ * on the cursor for the same reason: the `d` binding and the row's own deny
+ * button must read one draft, not two.
  *
  * Announced (§11): a listbox with `aria-activedescendant` naming the
  * highlighted row, so the highlight is announced and not merely drawn, and
@@ -29,11 +31,8 @@
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
  */
 
-import { useMemo, useRef, useState } from "react";
 import { APPROVAL_ANSWER_OPTIONS } from "@plotroom/core";
 
-import type { KeyBinding } from "../keyboard/bindings.js";
-import { useKeyBindings } from "../keyboard/use-key-bindings.js";
 import type { AttentionQueueCursor } from "./use-queue-cursor.js";
 import type { AttentionItem } from "./types.js";
 
@@ -60,59 +59,6 @@ function feedBadge(feed: AttentionItem["feed"]): string {
 }
 
 export function QueuePanel({ cursor }: QueuePanelProps) {
-  // A deny needs a reason (§6.6: "declining is feedback... never a bare
-  // refusal") — typed per row, keyed by item id, so several approval rows
-  // never clobber each other's draft.
-  const [denyReasons, setDenyReasons] = useState<Record<string, string>>({});
-
-  const cursorRef = useRef(cursor);
-  cursorRef.current = cursor;
-  const denyReasonsRef = useRef(denyReasons);
-  denyReasonsRef.current = denyReasons;
-
-  const bindings = useMemo<readonly KeyBinding[]>(
-    () => [
-      {
-        kind: "dispatched",
-        id: "queue-move-arrows",
-        chords: [{ key: "ArrowDown" }, { key: "ArrowUp" }],
-        keysLabel: "↓ / ↑",
-        label: "move through the attention queue",
-        description:
-          "moves the highlight while the queue has focus — the same act as J/K",
-        scope: "queue",
-        run: (_event, chord) =>
-          cursorRef.current.move(chord.key === "ArrowDown" ? "next" : "prev"),
-      },
-      {
-        kind: "dispatched",
-        id: "queue-navigate",
-        chords: [{ key: "Enter" }],
-        label: "go to the highlighted item",
-        description:
-          "moves the canvas to the highlighted row's node (the queue is a lens)",
-        scope: "queue",
-        run: () => cursorRef.current.navigate(),
-      },
-      {
-        kind: "dispatched",
-        id: "queue-deny",
-        chords: [{ key: "d" }],
-        label: "deny the highlighted approval",
-        description:
-          "denies with the reason typed in that row; a bare refusal is refused (§6.6)",
-        scope: "queue",
-        run: () => {
-          const id = cursorRef.current.selectedId;
-          if (id === null) return;
-          cursorRef.current.deny(denyReasonsRef.current[id] ?? "");
-        },
-      },
-    ],
-    [],
-  );
-  useKeyBindings(bindings);
-
   const activeOptionId =
     cursor.selectedId === null
       ? undefined
@@ -164,19 +110,16 @@ export function QueuePanel({ cursor }: QueuePanelProps) {
                     <input
                       type="text"
                       aria-label={`${option.label} reason for ${item.id}`}
-                      value={denyReasons[item.id] ?? ""}
+                      value={cursor.denyReason(item.id)}
                       onChange={(event) =>
-                        setDenyReasons((current) => ({
-                          ...current,
-                          [item.id]: event.target.value,
-                        }))
+                        cursor.setDenyReason(item.id, event.target.value)
                       }
                     />
                     <button
                       type="button"
-                      disabled={!denyReasons[item.id]?.trim()}
+                      disabled={cursor.denyReason(item.id).trim() === ""}
                       onClick={() =>
-                        cursor.deny(denyReasons[item.id] ?? "", item.id)
+                        cursor.deny(cursor.denyReason(item.id), item.id)
                       }
                     >
                       {option.label}

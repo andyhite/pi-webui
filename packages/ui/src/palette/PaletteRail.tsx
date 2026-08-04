@@ -4,14 +4,15 @@
  * ordered unblocked-first (`orderTicketsUnblockedFirst`) so the top row is
  * always something nothing else is blocking.
  *
- * Keyboard-reachable (§11, Epic 8.1): every row is a real `<button>`, so Tab
- * reaches it and Enter/Space activates it with the browser's own semantics —
- * no invented listbox, no key handler of this component's own. Activating a
- * row is the **same act** as dropping it on the canvas: the host places the
- * entry through the same action its `onDropPaletteEntry` uses, only with a
- * position the host derives instead of one the pointer supplied. A rail whose
- * host has not wired that yet renders the buttons disabled with the reason,
- * rather than looking activatable and doing nothing.
+ * Keyboard-reachable (§11, Epic 8.1): each group is an announced listbox and
+ * every row is a tabbable `option`, so Tab reaches a row and Enter places it.
+ * That Enter is a **registered binding** (scope `list`, surface
+ * `palette-rail`), not a handler of this component's own, so it appears in the
+ * shortcuts overlay like every other key. Placing a row is the same act as
+ * dropping it on the canvas: the host places the entry through the same action
+ * its `onDropPaletteEntry` uses, only with a position the host derives instead
+ * of one the pointer supplied. A rail whose host has not wired that yet says
+ * so on the row rather than looking activatable and doing nothing.
  *
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
  * Dragging a row sets `PALETTE_ENTRY_DRAG_TYPE` in the drag payload; the
@@ -19,19 +20,26 @@
  * placed node — this component only has to be a legal HTML5 drag source.
  */
 
+import { useMemo, useRef } from "react";
+
 import {
   COMMAND_DEFINITION_DRAG_TYPE,
   PALETTE_ENTRY_DRAG_TYPE,
 } from "../canvas/PlotCanvas.js";
+import type { KeyBinding } from "../keyboard/bindings.js";
+import { useKeyBindings } from "../keyboard/use-key-bindings.js";
 import type { PaletteEntry, PaletteTicketEntry } from "./model.js";
 import { orderTicketsUnblockedFirst } from "./model.js";
+
+/** The attribute a row carries its entry id in, read by the Enter binding. */
+export const PALETTE_ENTRY_ATTRIBUTE = "data-palette-entry";
 
 export interface PaletteRailProps {
   readonly entries: readonly PaletteEntry[];
   /**
    * The keyboard's equivalent of dropping this entry on the canvas — the host
    * places it (the same action a drop calls) at a position it derives.
-   * Absent: the rows render disabled, naming why.
+   * Absent: the rows say placing from the keyboard is not wired here.
    */
   readonly onActivateEntry?: (entryId: string) => void;
 }
@@ -51,13 +59,7 @@ const KIND_ORDER: readonly PaletteEntry["kind"][] = [
 
 const NOT_WIRED_REASON = "placing from the keyboard is not wired here";
 
-function PaletteRow({
-  entry,
-  onActivate,
-}: {
-  readonly entry: PaletteEntry;
-  readonly onActivate: ((entryId: string) => void) | undefined;
-}) {
+function PaletteRow({ entry }: { readonly entry: PaletteEntry }) {
   // Command definitions have their own legal drop target — a bare ticket,
   // creating a workstream in one gesture (§3.5) — everything else is a
   // plain content/session node placed wherever it's dropped on the canvas.
@@ -66,18 +68,18 @@ function PaletteRow({
       ? COMMAND_DEFINITION_DRAG_TYPE
       : PALETTE_ENTRY_DRAG_TYPE;
   return (
-    <button
-      type="button"
+    <li
+      role="option"
+      aria-selected={false}
+      tabIndex={0}
+      {...{ [PALETTE_ENTRY_ATTRIBUTE]: entry.id }}
       draggable
-      disabled={onActivate === undefined}
-      {...(onActivate === undefined ? { title: NOT_WIRED_REASON } : {})}
       onDragStart={(event) => {
         event.dataTransfer.setData(dragType, entry.id);
       }}
-      onClick={() => onActivate?.(entry.id)}
     >
       {entry.label}
-    </button>
+    </li>
   );
 }
 
@@ -85,20 +87,45 @@ export function PaletteRail({ entries, onActivateEntry }: PaletteRailProps) {
   const tickets = orderTicketsUnblockedFirst(entries.filter(isTicket));
   const others = entries.filter((entry) => !isTicket(entry));
 
+  const activateRef = useRef(onActivateEntry);
+  activateRef.current = onActivateEntry;
+
+  const bindings = useMemo<readonly KeyBinding[]>(
+    () => [
+      {
+        kind: "dispatched",
+        id: "palette-rail-place",
+        chords: [{ key: "Enter" }, { key: " " }],
+        keysLabel: "Enter",
+        label: "place the focused palette row on the canvas",
+        description: `the keyboard's version of dragging it out (§5) — ${NOT_WIRED_REASON} when the host wired no placement`,
+        scope: "list",
+        surface: "palette-rail",
+        run: () => {
+          // The focused element *is* the row, so no walk is needed.
+          const entryId =
+            document.activeElement?.getAttribute(PALETTE_ENTRY_ATTRIBUTE) ??
+            null;
+          if (entryId) activateRef.current?.(entryId);
+        },
+      },
+    ],
+    [],
+  );
+  useKeyBindings(bindings);
+
   return (
-    <div>
+    <div data-key-scope="list:palette-rail">
       {KIND_ORDER.map((kind) => {
         const rows =
           kind === "ticket" ? tickets : others.filter((e) => e.kind === kind);
         if (rows.length === 0) return null;
         return (
-          <section key={kind} aria-label={`palette: ${kind}`}>
+          <section key={kind}>
             <h3>{kind}</h3>
-            <ul aria-label={`${kind} not yet on the canvas`}>
+            <ul role="listbox" aria-label={`${kind} not yet on the canvas`}>
               {rows.map((entry) => (
-                <li key={entry.id}>
-                  <PaletteRow entry={entry} onActivate={onActivateEntry} />
-                </li>
+                <PaletteRow key={entry.id} entry={entry} />
               ))}
             </ul>
           </section>

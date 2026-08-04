@@ -11,6 +11,7 @@ import type {
   ContinueVsFreshView,
   GraphSnapshot,
   HandoffBriefView,
+  KeyBinding,
   Note,
   OpenQuestion,
   Placements,
@@ -969,6 +970,30 @@ function Board() {
         },
       },
       {
+        id: "verb-queue-deny",
+        label: "deny the selected approval",
+        description:
+          "denies with the reason typed in that row; a bare refusal is refused (§6.6)",
+        chords: [{ key: "d" }],
+        scope: "queue",
+        run: () => {
+          if (!queueCursor.denySelected()) {
+            log(
+              "nothing denied: a deny needs a reason typed in its row (§6.6)",
+            );
+          }
+        },
+      },
+      {
+        id: "verb-queue-navigate",
+        label: "go to the selected attention item",
+        description:
+          "moves the canvas to the highlighted row's node — the queue is a lens, not a place (§7.1)",
+        chords: [{ key: "Enter" }],
+        scope: "queue",
+        run: () => queueCursor.navigate(),
+      },
+      {
         id: "verb-run-selected-node",
         label: "run the selected node",
         description:
@@ -1024,9 +1049,29 @@ function Board() {
   );
 
   // The bindings these verbs back, registered for as long as the board is
-  // mounted — which is also what puts them in the shortcuts overlay.
+  // mounted — which is also what puts them in the shortcuts overlay. Two
+  // aliases ride along: a listbox is expected to answer to the arrows, and
+  // they are the same act `J`/`K` are, not a second one.
   const verbBindings = useMemo(() => bindingsFromVerbs(verbs), [verbs]);
+  const queueArrowBindings = useMemo<readonly KeyBinding[]>(
+    () => [
+      {
+        kind: "dispatched",
+        id: "queue-move-arrows",
+        chords: [{ key: "ArrowDown" }, { key: "ArrowUp" }],
+        keysLabel: "↓ / ↑",
+        label: "move through the attention queue",
+        description:
+          "moves the highlight while the queue has focus — the same act as J/K",
+        scope: "queue",
+        run: (_event, chord) =>
+          queueCursor.move(chord.key === "ArrowDown" ? "next" : "prev"),
+      },
+    ],
+    [queueCursor],
+  );
   useKeyBindings(verbBindings);
+  useKeyBindings(queueArrowBindings);
 
   // Command palette (§11): one keyboard entry point for navigation and
   // every verb. Navigation items always resolve through `select` — the same

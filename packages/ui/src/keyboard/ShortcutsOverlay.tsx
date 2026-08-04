@@ -14,10 +14,12 @@
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
  */
 
-import type { KeyScope } from "./bindings.js";
+import { useMemo, useRef } from "react";
+
+import type { KeyBinding, KeyScope } from "./bindings.js";
 import { bindingKeysLabel, groupBindingsByScope } from "./bindings.js";
 import { useFocusTrap } from "./use-focus-trap.js";
-import { useRegisteredBindings } from "./use-key-bindings.js";
+import { useKeyBindings, useRegisteredBindings } from "./use-key-bindings.js";
 
 const SCOPE_TITLES: Record<KeyScope, string> = {
   dialog: "in a dialog",
@@ -36,6 +38,30 @@ export function ShortcutsOverlay({ open, onClose }: ShortcutsOverlayProps) {
   const bindings = useRegisteredBindings();
   const containerRef = useFocusTrap<HTMLDivElement>(open);
 
+  // Its own dismissal is a registered binding — so the overlay lists the key
+  // that closes it, which is the smallest possible test of the rule it exists
+  // to enforce. Registered whether or not it is open: the binding is scoped to
+  // this dialog's surface, so it can only fire while focus is inside it.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const closeBindings = useMemo<readonly KeyBinding[]>(
+    () => [
+      {
+        kind: "dispatched",
+        id: "shortcuts-overlay-close",
+        chords: [{ key: "Escape" }, { key: "?" }],
+        keysLabel: "Escape",
+        label: "close the shortcuts overlay",
+        description: "closes this list and returns focus where it was",
+        scope: "dialog",
+        surface: "shortcuts-overlay",
+        run: () => closeRef.current(),
+      },
+    ],
+    [],
+  );
+  useKeyBindings(closeBindings);
+
   if (!open) return null;
 
   const groups = groupBindingsByScope(bindings);
@@ -46,7 +72,7 @@ export function ShortcutsOverlay({ open, onClose }: ShortcutsOverlayProps) {
       role="dialog"
       aria-modal="true"
       aria-label="keyboard shortcuts"
-      data-key-scope="dialog"
+      data-key-scope="dialog:shortcuts-overlay"
       data-testid="shortcuts-overlay"
       tabIndex={-1}
     >

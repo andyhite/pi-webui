@@ -56,6 +56,15 @@ export interface AttentionQueueCursor {
    * reason returns false here rather than sending one.
    */
   readonly deny: (reason: string, itemId?: string) => boolean;
+  /**
+   * The deny reason typed for a row, and the setter for it. Held here rather
+   * than in the panel because the `d` binding has to read the same draft the
+   * row's own deny button does — one selection, one draft, one act.
+   */
+  readonly denyReason: (itemId: string) => string;
+  readonly setDenyReason: (itemId: string, reason: string) => void;
+  /** Denies the highlighted row with whatever reason is currently typed for it. */
+  readonly denySelected: () => boolean;
   readonly acknowledge: (itemId?: string) => boolean;
   readonly snooze: (itemId?: string, snoozeSeconds?: number) => boolean;
   readonly mute: (itemId?: string) => boolean;
@@ -78,6 +87,9 @@ export function useAttentionQueueCursor({
 }: UseAttentionQueueCursorOptions): AttentionQueueCursor {
   const [items, setItems] = useState<readonly AttentionItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // A deny needs a reason (§6.6) — typed per row, keyed by item id, so several
+  // approval rows never clobber each other's draft.
+  const [denyReasons, setDenyReasons] = useState<Record<string, string>>({});
 
   useEffect(() => {
     return dataSource.subscribe((next) => {
@@ -125,6 +137,16 @@ export function useAttentionQueueCursor({
       return true;
     }
 
+    /** One deny path, called by the row's button, `deny`, and `denySelected`. */
+    function denyWith(reason: string, itemId?: string): boolean {
+      const trimmed = reason.trim();
+      if (trimmed === "") return false;
+      return withItem(itemId, (item) => {
+        if (item.payload.kind !== "approval") return;
+        void dataSource.decideApproval(item.id, "deny", triageInput(), trimmed);
+      });
+    }
+
     return {
       items: ranked,
       selectedId,
@@ -167,18 +189,16 @@ export function useAttentionQueueCursor({
           );
         });
       },
-      deny(reason, itemId) {
-        const trimmed = reason.trim();
-        if (trimmed === "") return false;
-        return withItem(itemId, (item) => {
-          if (item.payload.kind !== "approval") return;
-          void dataSource.decideApproval(
-            item.id,
-            "deny",
-            triageInput(),
-            trimmed,
-          );
-        });
+      deny: denyWith,
+      denyReason(itemId) {
+        return denyReasons[itemId] ?? "";
+      },
+      setDenyReason(itemId, reason) {
+        setDenyReasons((current) => ({ ...current, [itemId]: reason }));
+      },
+      denySelected() {
+        if (selectedId === null) return false;
+        return denyWith(denyReasons[selectedId] ?? "", selectedId);
       },
       acknowledge(itemId) {
         return withItem(itemId, (item) => {
@@ -199,5 +219,14 @@ export function useAttentionQueueCursor({
         });
       },
     };
-  }, [dataSource, now, onNavigate, ranked, resolve, selectedId, triageInput]);
+  }, [
+    dataSource,
+    denyReasons,
+    now,
+    onNavigate,
+    ranked,
+    resolve,
+    selectedId,
+    triageInput,
+  ]);
 }
