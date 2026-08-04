@@ -193,6 +193,8 @@ class SessionHostHandle implements RuntimeSessionHandle {
   #commandSeq = 0;
   #fatal: string | null = null;
   #stopRequested: "user" | null = null;
+  /** Set once the frame stream has ended; what a later command rejects with. */
+  #ended: Error | null = null;
   readonly #pump: Promise<void>;
 
   constructor(process: SessionHostProcess, now: () => EpochMillis) {
@@ -273,6 +275,13 @@ class SessionHostHandle implements RuntimeSessionHandle {
   }
 
   async #send(command: SessionHostCommand): Promise<void> {
+    // A command written after the frame stream ended can never be answered: the
+    // drain below has already run, so nothing would ever settle this promise —
+    // and `stop("graceful")` awaits one, which would hang the request behind it
+    // for ever. The window is real: a stop gesture can land between the sidecar
+    // dying and the driver detaching its handle.
+    if (this.#ended !== null) return Promise.reject(this.#ended);
+
     const settled = new Promise<void>((resolve, reject) => {
       this.#pending.set(command.id, { resolve, reject });
     });
@@ -305,6 +314,7 @@ class SessionHostHandle implements RuntimeSessionHandle {
     const ended = new Error(
       this.#fatal ?? "the session host ended before it answered",
     );
+    this.#ended = ended;
     this.#settleReady(ended);
     for (const waiting of this.#pending.values()) waiting.reject(ended);
     this.#pending.clear();

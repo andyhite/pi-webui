@@ -310,6 +310,24 @@ describe("the session-host adapter", () => {
     await expect(pending).rejects.toThrow("no request req-1 is pending");
   });
 
+  it("refuses a command after the stream ended rather than waiting for ever", async () => {
+    const host = new FakeSessionHost();
+    const handle = await started(host);
+    const drained = collect(handle);
+    host.end();
+    await drained;
+
+    // The sidecar is gone. Nothing will ack anything, so a command that waited
+    // for one would hang the request behind it — a stop gesture can land in
+    // exactly this window, between the process dying and the driver detaching.
+    await expect(
+      handle.inject({ id: "inj-1", text: "too late" }),
+    ).rejects.toThrow("the session host ended before it answered");
+
+    // And a graceful stop still finishes, because that is the one a request waits on.
+    await expect(handle.stop("graceful")).resolves.toBeUndefined();
+  });
+
   it("receipts an injection on queue acceptance, not on delivery", async () => {
     const host = new FakeSessionHost();
     let clock = 1_000;

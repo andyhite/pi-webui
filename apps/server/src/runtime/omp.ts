@@ -82,7 +82,7 @@ export function createOmpRuntime(
       });
     });
 
-    return new SessionHostChildProcess(child);
+    return new SessionHostChildProcess(child, options.logger);
   };
 
   return createOmpAdapter({ connect, now: systemMillisClock, sessionDir });
@@ -110,8 +110,19 @@ function resolveEntry(): string {
 class SessionHostChildProcess implements SessionHostProcess {
   readonly #child: ChildProcessWithoutNullStreams;
 
-  constructor(child: ChildProcessWithoutNullStreams) {
+  constructor(child: ChildProcessWithoutNullStreams, logger?: Logger) {
     this.#child = child;
+    // Writing to the stdin of a process that has exited emits `error` on the
+    // stream, and an unhandled one is an uncaught exception — the server would
+    // die because a session host did. The window is real (a stop can land
+    // between the sidecar's death and the driver detaching its handle), and the
+    // observation stream is where that failure is already reported: its own end
+    // is what says the session is over, so here it is noted and dropped.
+    this.#child.stdin.on("error", (error: Error) => {
+      logger?.debug("session host stdin closed under a write", {
+        message: error.message,
+      });
+    });
   }
 
   write(line: string): void {

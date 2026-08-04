@@ -129,6 +129,25 @@ describe("the session host as a spawned process", () => {
     await second.stop("abort");
   }, 20_000);
 
+  it("stops a session host that is already gone, without taking the server", async () => {
+    const handle = await runtime().start({
+      ...LAUNCH,
+      prompt: "die",
+      workspacePath: workdir,
+    });
+    await drain(handle);
+
+    // A stop gesture can land after the sidecar died and before the driver
+    // detaches its handle. The `stop` command is then written to the stdin of an
+    // exited process, which emits `error` on the stream — unhandled, that is an
+    // uncaught exception and the server dies because a session host did.
+    await expect(handle.stop("graceful")).resolves.toBeUndefined();
+
+    const next = await runtime().start({ ...LAUNCH, workspacePath: workdir });
+    expect(next.ref).toBe("stand-in-session");
+    await next.stop("abort");
+  }, 20_000);
+
   it("refuses to start when the session host says it cannot run", async () => {
     await expect(
       runtime().start({
