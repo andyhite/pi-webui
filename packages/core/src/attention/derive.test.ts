@@ -212,6 +212,21 @@ describe("the attention derivation", () => {
     expect(row?.item.raisedAt).toBe(1200);
     // It blocks nobody and asks for no decision: the answer was given.
     expect(row?.states).toEqual(["failed", "anything"]);
+
+    // Its own way out, and the only one: nothing clears a failure, so the operator
+    // muting the row is what takes it off the queue (§4.5).
+    const mutedFailure = applyTriage(
+      ledger,
+      "approval:appr-1:effect-failed",
+      "mute",
+      { at: 1600, by: humanAuthor },
+    );
+    expect(
+      deriveAttention(sources({ approvals: [{ attention, target }] }), {
+        now: 9_000_000,
+        triage: mutedFailure,
+      }).some((entry) => entry.item.id === "approval:appr-1:effect-failed"),
+    ).toBe(false);
   });
 
   it("hides a snoozed item, then returns it with snoozeUntil back to null", () => {

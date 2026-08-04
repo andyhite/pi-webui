@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { humanAuthor, sessionAuthor } from "../../author.js";
 import { session, ws } from "../../claims/testing.js";
-import { answerApproval, raiseApproval } from "./approval.js";
+import {
+  answerApproval,
+  raiseApproval,
+  recordApprovalEffectFailure,
+} from "./approval.js";
 import { claimAsk, destructionAsk, proposalAsk, toolCallAsk } from "./ask.js";
 import { decideApproval } from "./decide.js";
 import type { ApprovalId, PreGrantId } from "./ids.js";
@@ -209,6 +213,45 @@ describe("decideApproval (§6.6)", () => {
       if (verdict.kind === "denied") {
         expect(verdict.reason).toContain("open a PR against the fork");
       }
+    }
+  });
+
+  it("stops authorizing once its effect failed, and says why (#74)", () => {
+    const approved = answerApproval(
+      raiseApproval({
+        id: "appr_fail" as ApprovalId,
+        sessionId: A,
+        workstreamId: W,
+        ask: mergeAsk,
+        at: 10,
+      }),
+      { decision: "approve-once", by: humanAuthor, at: 11 },
+    );
+    expect(approved.ok).toBe(true);
+    if (!approved.ok) return;
+
+    expect(
+      decideApproval(mergeAsk, { ...context, approval: approved.value }).kind,
+    ).toBe("allowed");
+
+    const failed = recordApprovalEffectFailure(approved.value, {
+      message: "github refused the merge",
+      at: 12,
+    });
+    expect(failed.ok).toBe(true);
+    if (!failed.ok) return;
+
+    // One answer, one attempt. Repeating the call used to be allowed off this same
+    // row — re-running an effect that may have partly applied, with nobody asked
+    // again — while the call it originally blocked had already been told `deny`.
+    const verdict = decideApproval(mergeAsk, {
+      ...context,
+      approval: failed.value,
+    });
+    expect(verdict.kind).toBe("denied");
+    if (verdict.kind === "denied") {
+      expect(verdict.reason).toContain("github refused the merge");
+      expect(verdict.reason).not.toContain("declined by the operator");
     }
   });
 

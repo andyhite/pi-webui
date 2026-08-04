@@ -188,13 +188,26 @@ export class ApprovalService {
    * runtime first would let a session proceed on a decision that had not been
    * written down.
    *
-   * **An effect that fails does not stop the last step**, and it does not reopen
-   * the first. The answer is what a human decided and it stands; the failure is
-   * recorded on the row (`recordApprovalEffectFailure`), which is what puts it back
-   * in §7.1 and what makes `approvalOutcome` deny rather than allow. Skipping
-   * `settle` was the actual bug: under the embedded sidecar the blocked call is an
-   * in-process await inside a session-host process PlotRoom owns and pays for, so
-   * an unsettled approval wedges a process rather than merely losing a call.
+   * **Nothing after the answer is written can stop the last step**, and none of it
+   * reopens the first. The answer is what a human decided and it stands; anything
+   * that then fails is recorded on the row (`recordApprovalEffectFailure`), which is
+   * what puts it back in §7.1 and what makes `approvalOutcome` deny rather than
+   * allow.
+   *
+   * The guarded region deliberately includes the **publish**: `EventBus.publish`
+   * calls its listeners inline and does not isolate them, and one of them
+   * (`PluginService.onEvent`) writes a grant and talks to a worker, so a listener
+   * throwing used to unwind straight out of here and reproduce this bug exactly —
+   * answered row, no effect, no record, no settle.
+   *
+   * On the blocked call: `settle` is a no-op for an approval raised with no runtime
+   * request behind it, which today is every kind whose effect can fail (a
+   * destruction arrives as an HTTP tool call the guard already answered 202; a claim
+   * wait has no request either). So the reachable damage this fixes is the 500, the
+   * row that read answered-and-done, and the silence in §7.1. Running `settle`
+   * unconditionally is what stops the *other* half from returning when a runtime
+   * raises a destruction with a request behind it — #81's gate — and it costs a
+   * null check to keep true now rather than to remember later.
    */
   async answer(request: AnswerApprovalRequest): Promise<AnsweredApproval> {
     const stores = this.deps.stores;
@@ -215,11 +228,11 @@ export class ApprovalService {
     if (!answered.ok) throw refused(answered.refusal);
 
     const saved = stores.approvals.answer(answered.value);
-    this.publish(saved, "updated");
 
     let executed = false;
     let record = saved;
     try {
+      this.publish(saved, "updated");
       executed = await this.applyAnswer(saved);
     } catch (error) {
       record = this.recordEffectFailure(saved, error);
@@ -250,16 +263,15 @@ export class ApprovalService {
   }
 
   /**
-   * The attention rows (§7.1), wording each approval once. A claim approval whose
-   * wait is gone is left out: the wait was withdrawn or granted elsewhere, so
+   * The approvals **still asking** (§7.1), wording each one once. A claim approval
+   * whose wait is gone is left out: the wait was withdrawn or granted elsewhere, so
    * there is nothing left to answer — the record stays as history rather than
    * sitting in the queue asking about something that no longer exists.
    *
-   * Two lists, because §7.1 has two things to show about an approval: one still
-   * asking, and one the operator answered whose effect then failed. The second is
-   * answered, so it is not in `pending()`, and leaving it out is what made a failed
-   * destruction invisible on every surface at once. `stillAsking` does not apply to
-   * it — nothing is being asked.
+   * Only unanswered rows, and that is load-bearing rather than incidental: this
+   * list is also what the health feed reads as "a question or approval nobody has
+   * answered yet" (§7.2's `unanswered` alert). An answered row in here becomes an
+   * alert claiming nobody answered, timed from the raise, that never clears.
    */
   attention(): readonly { approval: Approval; attention: ApprovalAttention }[] {
     const rows: { approval: Approval; attention: ApprovalAttention }[] = [];
@@ -269,6 +281,25 @@ export class ApprovalService {
       if (attention === null) continue;
       rows.push({ approval, attention });
     }
+    return rows;
+  }
+
+  /**
+   * The approvals the operator answered whose authorized effect then **failed**
+   * (§7.1). Its own verb rather than more rows out of `attention()`, because the
+   * two are different facts and only one of them is a question: this list asks for
+   * nothing, it reports that a decision did not take effect.
+   *
+   * It leaves the queue when the operator triages it (§4.5's mute), like any other
+   * row §7.1 tells them about rather than asks them. Nothing here clears itself —
+   * the fact happened, and a record that quietly disappeared would be the state
+   * this whole thing exists to prevent.
+   */
+  effectFailureAttention(): readonly {
+    approval: Approval;
+    attention: ApprovalAttention;
+  }[] {
+    const rows: { approval: Approval; attention: ApprovalAttention }[] = [];
     for (const approval of this.deps.stores.approvals.effectFailures()) {
       const attention = approvalAttention(approval);
       if (attention === null) continue;
@@ -546,12 +577,16 @@ export class ApprovalService {
    * side. The publish is `updated` — the same verb the answer used, because this is
    * the same record changing again, and §7.1 re-derives from it.
    *
-   * A store that will not take the failure is the one case with nowhere left to
-   * write: it is logged, and `settle` still runs, because a wedged session-host
-   * process is worse than a lost sentence.
+   * **Nothing in here may throw**, and that is why the store write and the publish
+   * are inside the guard rather than trusted: this function's whole job is to be the
+   * thing that runs when something else broke, and a listener or a full disk taking
+   * it down with them would leave the caller in the state it exists to prevent. When
+   * it cannot persist, the in-memory record is still returned, so the answer is
+   * still settled from a record that knows the effect failed — one lost sentence
+   * rather than one lost call.
    */
   private recordEffectFailure(approval: Approval, error: unknown): Approval {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = failureMessage(error, approval.kind);
     this.deps.logger.error("an approved effect failed", {
       approvalId: approval.id,
       sessionId: approval.sessionId,
@@ -560,10 +595,7 @@ export class ApprovalService {
     });
 
     const recorded = recordApprovalEffectFailure(approval, {
-      message:
-        message.trim().length === 0
-          ? `the ${approval.kind} this authorized failed without saying why`
-          : message,
+      message,
       at: this.deps.stores.clock(),
     });
     if (!recorded.ok) {
@@ -575,21 +607,33 @@ export class ApprovalService {
       return approval;
     }
 
-    const saved = this.deps.stores.approvals.recordEffectFailure(
-      recorded.value,
-    );
-    this.publish(saved, "updated");
-    return saved;
+    try {
+      const saved = this.deps.stores.approvals.recordEffectFailure(
+        recorded.value,
+      );
+      this.publish(saved, "updated");
+      return saved;
+    } catch (writeError) {
+      this.deps.logger.error("could not store a failed approval effect", {
+        approvalId: approval.id,
+        message:
+          writeError instanceof Error ? writeError.message : String(writeError),
+      });
+      return recorded.value;
+    }
   }
 
   /**
    * Settle the claim wait this approval stood for (§3.4).
    *
-   * It does **not** catch: a wait the claim manager would not settle is a failed
-   * effect like any other, and `answer` records it where the operator sees it. This
-   * used to log and carry on while the destruction branch beside it did neither,
-   * which meant one method treated the same kind of failure two ways — and neither
-   * of the two put the fact anywhere the operator would find it.
+   * This one catches, and the asymmetry with the destruction branch is deliberate
+   * rather than the oversight it looks like. Most of what the claim manager refuses
+   * here is **self-resolving**: a wait that was authorized while the operator was
+   * deciding is "already authorized and only waiting for the path to free", and one
+   * whose granting claim has gone re-raises itself. Recording either as a failed
+   * effect would put a state that is fixing itself in front of the operator for
+   * ever, and §7.1's job is the opposite of that. A destruction is not like this:
+   * nothing retries it, so a failure there is final until somebody acts.
    */
   private answerClaimWait(
     approval: Approval,
@@ -600,11 +644,19 @@ export class ApprovalService {
     if (waitId === undefined || answerer === undefined) return;
     if (!answerer.waitExists(waitId)) return;
 
-    answerer.answerApproval({
-      waitId,
-      decision,
-      by: approval.answer?.by ?? { kind: "human" },
-    });
+    try {
+      answerer.answerApproval({
+        waitId,
+        decision,
+        by: approval.answer?.by ?? { kind: "human" },
+      });
+    } catch (error) {
+      this.deps.logger.error("could not settle a claim wait from an approval", {
+        approvalId: approval.id,
+        waitId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -676,6 +728,36 @@ export class ApprovalService {
       author: approval.answer?.by ?? sessionAuthor(approval.sessionId),
     });
   }
+}
+
+/**
+ * How long a recorded failure may be. It becomes the §7.1 sentence and travels to
+ * an outbound route (§7.3), so an unbounded one turns the operator's queue row into
+ * a paragraph of system text — and it is bounded here rather than at the route,
+ * because the row is what everything else reads.
+ */
+const FAILURE_MESSAGE_MAX_CHARS = 240;
+
+/**
+ * What went wrong, in one line the operator can act on.
+ *
+ * This is PlotRoom's own error text rather than a tool's input, so it is not the
+ * credential hazard `buildToolSummary` refuses raw input over (§9.3) — but it is
+ * unbounded system text on its way to a queue row and a webhook, so it is
+ * collapsed to one line and capped, visibly, rather than passed through. An error
+ * that says nothing at all still has to say something: an unexplained failure sends
+ * the operator looking for a log they may not have kept.
+ */
+function failureMessage(error: unknown, kind: string): string {
+  const raw = (error instanceof Error ? error.message : String(error))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (raw.length === 0) {
+    return `the ${kind} this authorized failed without saying why`;
+  }
+  return raw.length <= FAILURE_MESSAGE_MAX_CHARS
+    ? raw
+    : `${raw.slice(0, FAILURE_MESSAGE_MAX_CHARS)}… (truncated; the whole message is in the log)`;
 }
 
 /** Exported for the gate: whether this answered approval settles that ask. */

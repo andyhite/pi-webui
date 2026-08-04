@@ -328,8 +328,21 @@ function sameTarget(
   return a.kind === b.kind && a.id === b.id;
 }
 
+/**
+ * Whether this approval authorizes the gesture it was raised for — **now**.
+ *
+ * A recorded effect failure takes that back, and it has to: this predicate is what
+ * the gate turns into `approvedCallIds` and what `decideApproval` allows on, so an
+ * approval that still said "approved" after its effect failed would let the session
+ * simply repeat the call and re-run a destruction that may have partly applied
+ * (§4.4's cascade), with no new decision from anybody. One answer, one attempt: a
+ * retry is a new question, and `decideApproval` asks it.
+ */
 export function isApproved(approval: Approval): boolean {
-  return approval.answer?.decision === "approve-once";
+  return (
+    approval.answer?.decision === "approve-once" &&
+    approval.effectFailure === null
+  );
 }
 
 /**
@@ -481,10 +494,7 @@ export function approvalAttention(
     workstreamId: approval.workstreamId,
     askKind: approval.kind,
     tool: approval.ask.tool,
-    sentence:
-      failure === null
-        ? describeAsk(approval.ask)
-        : `approved, but it could not be carried out: ${describeAsk(approval.ask)} — ${failure.message}`,
+    sentence: failureSentence(approval) ?? describeAsk(approval.ask),
     reversibility: approval.ask.world?.reversibility ?? null,
     irreversible: isIrreversibleAsk(approval.ask),
     piercedPreGrant: approval.piercedPreGrant?.description ?? null,
@@ -498,4 +508,22 @@ export function approvalAttention(
     answers: failure === null ? APPROVAL_ANSWER_OPTIONS : [],
     effectFailure: failure?.message ?? null,
   };
+}
+
+/**
+ * How a failed effect reads, by **what was decided** — the same split
+ * `approvalOutcome` and `encodeApprovalAnswer` make, so the three cannot tell one
+ * operator three stories. "Approved, but it could not be carried out" on a row the
+ * operator *denied* would misreport their own decision back to them, which is
+ * worse than saying nothing.
+ *
+ * Null when there is no failure to word.
+ */
+function failureSentence(approval: Approval): string | null {
+  const failure = approval.effectFailure;
+  if (failure === null) return null;
+  const asked = describeAsk(approval.ask);
+  return approval.answer?.decision === "approve-once"
+    ? `approved, but it could not be carried out: ${asked} — ${failure.message}`
+    : `declined, and what that settled did not happen either: ${asked} — ${failure.message}`;
 }

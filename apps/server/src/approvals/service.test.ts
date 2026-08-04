@@ -6,10 +6,12 @@ import {
   destructionAsk,
   humanAuthor,
   INHERIT_APP_TOOLS,
+  sessionAuthor,
   type RequestOutcome,
   type RuntimeObservation,
   type RuntimeRequestId,
   type RuntimeSessionHandle,
+  type SessionId,
 } from "@plotroom/core";
 import { manualClock, type ManualClock } from "@plotroom/core/testing";
 import { openDatabase, type PlotroomDatabase } from "@plotroom/db";
@@ -23,17 +25,25 @@ import { ApprovalService } from "./service.js";
 /**
  * An approved effect that fails (§6.6, #74).
  *
- * The failure this covers is specific and it used to be silent in three places at
- * once: the effect threw, so the row was already answered and could never be
- * answered again, `settle` never ran and the blocked call waited for ever, and the
- * row had left `pending()` so §7.1 showed nothing either. Under the embedded
- * sidecar that unsettled call is an in-process await inside a session-host process
- * PlotRoom owns and pays for, which is why it wedges a process rather than merely
- * losing a call.
+ * The failure this covers used to be silent three ways at once: the effect threw,
+ * so the row was already answered and could never be answered again; `settle` never
+ * ran; and the row had left `pending()`, so §7.1 showed nothing either. The
+ * destruction the operator agreed to had not happened and no surface said so.
  *
- * The path exercised here is the real one: an approved `session_delete` whose
- * runtime stop rejects (`destroySession` awaits it before touching the record), so
- * the destruction genuinely does not happen.
+ * The effect is the real one throughout — an approved `session_delete` whose
+ * runtime stop rejects, which `destroySession` awaits before touching the record,
+ * so nothing is deleted.
+ *
+ * **What is a fixture and what is production, stated rather than implied.** No
+ * current raiser of an effect-bearing approval supplies a `requestId`: a session's
+ * destruction arrives as an HTTP tool call the guard answers 202, and a claim wait
+ * has no runtime request either. So `settle` is a no-op today and the reachable
+ * damage is the 500, the row reading answered-and-done, and the silence — which is
+ * what the no-request test below asserts, on exactly the shape the guard produces.
+ * The `requestId` case beside it is the shape a **runtime-raised** destruction has,
+ * which is what #81's permission gate introduces and why #74 blocks it; it is here
+ * so the answer that reaches that call is pinned before the gate exists, not
+ * because anything raises it that way now.
  */
 let dir: string;
 let state: PlotroomDatabase;
@@ -47,6 +57,8 @@ let responded: { requestId: string; outcome: RequestOutcome }[];
 let stopFails: boolean;
 
 const STOP_FAILURE = "the runtime would not stop the session";
+const CLAIM_REFUSAL =
+  "this wait is already authorized and only waiting for the path to free; nothing to answer";
 
 /** A live handle that records what the host told the blocked call. */
 function handle(): RuntimeSessionHandle {
@@ -88,6 +100,15 @@ beforeEach(() => {
       stopFails
         ? Promise.reject(new Error(STOP_FAILURE))
         : Promise.resolve(undefined),
+    // A claim manager that refuses the answer, which is the routine case: a wait
+    // authorized while the operator was deciding has "nothing to answer".
+    claims: {
+      answerApproval: () => {
+        throw new Error(CLAIM_REFUSAL);
+      },
+      waitExists: () => true,
+      checkWrite: () => ({ allowed: true }),
+    },
   });
 
   workstreamId = stores.workstreams.create({ author: humanAuthor }).id;
@@ -115,8 +136,26 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-/** The session's own ask to delete itself, blocking a runtime call. */
+/**
+ * The session's ask to delete itself, **as the destruction guard raises it**: no
+ * runtime request, because the gesture arrived over HTTP and was answered 202.
+ */
 function raiseSessionDelete() {
+  return approvals.raise({
+    sessionId,
+    ask: destructionAsk({
+      toolName: "session_delete",
+      target: { kind: "session", id: sessionId },
+    }),
+  });
+}
+
+/**
+ * The same ask with a blocked runtime call behind it — the shape a destruction
+ * raised by the permission gate has (#81). Nothing raises it this way yet, which is
+ * why it is a named fixture rather than the default one above.
+ */
+function raiseGatedSessionDelete() {
   return approvals.raise({
     sessionId,
     ask: destructionAsk({
@@ -129,8 +168,28 @@ function raiseSessionDelete() {
 }
 
 describe("an approved effect that fails", () => {
-  it("settles the blocked call rather than leaving a session-host process wedged", async () => {
+  it("answers instead of throwing, and leaves nothing for the operator to guess", async () => {
     const raised = raiseSessionDelete();
+    const answered = await approvals.answer({
+      approvalId: raised.id,
+      decision: "approve-once",
+      actor: humanAuthor,
+    });
+
+    // The reachable bug: this call used to reject, so the operator got a 500 and
+    // nothing anywhere recorded that their approved deletion had not happened.
+    expect(answered.executed).toBe(false);
+    expect(answered.effectFailure).toBe(STOP_FAILURE);
+    // Nothing to settle: no runtime request was ever behind this gesture.
+    expect(answered.settled).toBe(false);
+    expect(responded).toEqual([]);
+    expect(
+      stores.sessions.get(sessionId).session.deletion.deletedAt,
+    ).toBeNull();
+  });
+
+  it("tells a blocked runtime call the truth when there is one (#81's shape)", async () => {
+    const raised = raiseGatedSessionDelete();
     const answered = await approvals.answer({
       approvalId: raised.id,
       decision: "approve-once",
@@ -177,7 +236,65 @@ describe("an approved effect that fails", () => {
     ]);
   });
 
-  it("keeps asking in §7.1, because the operator's own gesture is unfinished", async () => {
+  it("survives a listener that throws while being told the answer", async () => {
+    // `EventBus.publish` calls its listeners inline and isolates none of them, and
+    // one of them writes plugin grants and talks to a worker. A listener throwing
+    // used to unwind out of `answer` before the effect or the settle — this bug
+    // again, reached from the other side, and on the one kind of approval that does
+    // have a blocked runtime call behind it.
+    stopFails = false;
+    stores.bus.subscribe((event) => {
+      if (event.entity !== "approval" || event.verb !== "updated") return;
+      throw new Error("a listener broke");
+    });
+
+    const raised = raiseGatedSessionDelete();
+    const answered = await approvals.answer({
+      approvalId: raised.id,
+      decision: "approve-once",
+      actor: humanAuthor,
+    });
+
+    expect(answered.effectFailure).toBe("a listener broke");
+    expect(answered.settled).toBe(true);
+    expect(responded[0]?.outcome).toEqual({
+      kind: "deny",
+      reason:
+        "the operator approved this, but it could not be carried out: a listener broke",
+    });
+    // The effect never ran, and the row says so rather than reading answered-and-done.
+    expect(
+      stores.sessions.get(sessionId).session.deletion.deletedAt,
+    ).toBeNull();
+    expect(approvals.get(raised.id).effectFailure?.message).toBe(
+      "a listener broke",
+    );
+  });
+
+  it("keeps a runaway error message down to something a queue row can hold", async () => {
+    stopFails = false;
+    stores.bus.subscribe((event) => {
+      if (event.entity !== "approval" || event.verb !== "updated") return;
+      throw new Error(`sqlite said:\n${"x".repeat(4000)}`);
+    });
+
+    const raised = raiseSessionDelete();
+    const answered = await approvals.answer({
+      approvalId: raised.id,
+      decision: "approve-once",
+      actor: humanAuthor,
+    });
+
+    // One line, capped, and it says it was capped — this string becomes the §7.1
+    // sentence and travels to an outbound route (§7.3).
+    const message = answered.effectFailure ?? "";
+    expect(message.length).toBeLessThan(400);
+    expect(message).not.toContain("\n");
+    expect(message).toContain("truncated");
+    expect(message.startsWith("sqlite said: xxx")).toBe(true);
+  });
+
+  it("reports it as §7.1's own row, and never as one still being asked", async () => {
     const raised = raiseSessionDelete();
     await approvals.answer({
       approvalId: raised.id,
@@ -185,13 +302,18 @@ describe("an approved effect that fails", () => {
       actor: humanAuthor,
     });
 
-    const rows = approvals.attention();
+    const rows = approvals.effectFailureAttention();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.approval.id).toBe(raised.id);
     expect(rows[0]?.attention.effectFailure).toBe(STOP_FAILURE);
     expect(rows[0]?.attention.sentence).toContain("could not be carried out");
     // Nothing to answer here; the decision was made and the effect is what broke.
     expect(rows[0]?.attention.answers).toEqual([]);
+
+    // And not in the asking list, which the health feed reads as "nobody has
+    // answered this yet" — an answered row in there is an alert saying something
+    // false, timed from the raise, that never clears (§7.2's `unanswered`).
+    expect(approvals.attention()).toEqual([]);
   });
 
   it("does not hand the answer back: the decision was a human's and it stands", async () => {
@@ -214,9 +336,65 @@ describe("an approved effect that fails", () => {
     ).rejects.toThrowError(ApiError);
   });
 
+  it("stops authorizing the gesture, so a repeat asks the operator again", async () => {
+    const raised = raiseSessionDelete();
+    await approvals.answer({
+      approvalId: raised.id,
+      decision: "approve-once",
+      actor: humanAuthor,
+    });
+
+    // One answer, one attempt. The session repeating its delete used to find this
+    // row still saying "approved" and execute with nobody asked a second time —
+    // re-running a destruction that may already have partly applied (#76).
+    const routing = approvals.decideDestruction({
+      toolName: "session_delete",
+      targetId: sessionId,
+      actor: sessionAuthor(sessionId as SessionId),
+      sessionId,
+      workstreamId,
+    });
+    expect(routing.kind).toBe("destruction");
+    if (routing.kind !== "destruction") return;
+    expect(routing.verdict.kind).toBe("denied");
+    if (routing.verdict.kind !== "denied") return;
+    expect(routing.verdict.reason).toContain(STOP_FAILURE);
+  });
+
+  it("records nothing when settling a claim wait fails: that state resolves itself", async () => {
+    const raised = approvals.raise({
+      sessionId,
+      ask: {
+        kind: "claim",
+        trigger: "outside-policy",
+        tool: null,
+        summary: `${sessionId} is waiting for a write claim no policy covers`,
+        writeExtent: "paths",
+        paths: ["src/app.ts"],
+        world: null,
+        target: { kind: "claim-wait", id: "wait-1" },
+      },
+      requestId: "req-claim",
+      callId: "call-claim",
+    });
+
+    const answered = await approvals.answer({
+      approvalId: raised.id,
+      decision: "approve-once",
+      actor: humanAuthor,
+    });
+
+    // The wait refused the answer — most often because it was authorized while the
+    // operator was deciding, or because its granting claim went and it will re-raise.
+    // Neither is an unfinished gesture, so neither becomes a durable failure.
+    expect(answered.effectFailure).toBeNull();
+    expect(approvals.get(raised.id).effectFailure).toBeNull();
+    expect(approvals.effectFailureAttention()).toEqual([]);
+  });
+
   it("leaves an ordinary approval alone: nothing recorded, and the effect happens", async () => {
     stopFails = false;
-    const raised = raiseSessionDelete();
+    const raised = raiseGatedSessionDelete();
     const answered = await approvals.answer({
       approvalId: raised.id,
       decision: "approve-once",
@@ -230,6 +408,7 @@ describe("an approved effect that fails", () => {
     ]);
     expect(approvals.get(raised.id).effectFailure).toBeNull();
     expect(approvals.attention()).toEqual([]);
+    expect(approvals.effectFailureAttention()).toEqual([]);
     expect(
       stores.sessions.get(sessionId).session.deletion.deletedAt,
     ).not.toBeNull();

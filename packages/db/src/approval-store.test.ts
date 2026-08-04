@@ -200,11 +200,19 @@ describe("approvals", () => {
         .run("it broke", 500, raised.id),
     ).toThrow(/CHECK constraint failed/);
 
-    // Half a failure: a time with nothing said, or a message at no time.
+    // Half a failure, both ways round. The message-only half is the one that
+    // matters most: `effectFailures()` keys on the time, so a row with words and no
+    // time would be a failure nothing ever showed the operator.
     expect(() =>
       state.sqlite
         .prepare("UPDATE approvals SET effect_failed_at = ? WHERE id = ?")
         .run(500, raised.id),
+    ).toThrow(/CHECK constraint failed/);
+
+    expect(() =>
+      state.sqlite
+        .prepare("UPDATE approvals SET effect_failure_message = ? WHERE id = ?")
+        .run("it broke", raised.id),
     ).toThrow(/CHECK constraint failed/);
   });
 });

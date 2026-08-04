@@ -229,6 +229,14 @@ describe("an authorized effect that failed (§6.6)", () => {
     if (!second.ok) expect(second.refusal.reason).toBe("already_answered");
   });
 
+  it("stops reading as approved, because that is what the gate allows on", () => {
+    expect(isApproved(approved())).toBe(true);
+    // `gate.ts` turns this into `approvedCallIds` and `decideApproval` allows on it,
+    // so leaving it true would let the session repeat the call and re-run an effect
+    // that may already have partly applied — with nobody asked a second time.
+    expect(isApproved(failed())).toBe(false);
+  });
+
   it("denies the blocked call and names what did not happen", () => {
     expect(approvalOutcome(approved())).toEqual({ kind: "allow" });
     expect(approvalOutcome(failed())).toEqual({

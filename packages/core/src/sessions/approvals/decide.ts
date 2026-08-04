@@ -1,6 +1,11 @@
 import type { Author } from "../../author.js";
 import { describeAsk, type ApprovalAsk } from "./ask.js";
-import { settlesAsk, type Approval } from "./approval.js";
+import {
+  approvalOutcome,
+  isApproved,
+  settlesAsk,
+  type Approval,
+} from "./approval.js";
 import {
   describePreGrant,
   evaluatePreGrants,
@@ -101,19 +106,27 @@ export function decideApproval(
   // execution: an approval names one gesture, and the operator who answered it was
   // answering that one (principle 9).
   if (raised !== null && answered !== null && settlesAsk(raised, ask)) {
-    if (answered.decision === "approve-once") {
+    // `isApproved` and `approvalOutcome`, not `answered.decision` — because a third
+    // reading of one answer is how the gate and this ended up disagreeing about an
+    // approval whose authorized effect failed. That one is answered and does *not*
+    // authorize anything: the call it blocked was already told so, and letting the
+    // session repeat the gesture would re-run a possibly half-applied destruction
+    // with nobody asked again.
+    if (isApproved(raised)) {
       return {
         kind: "allowed",
         by: { kind: "approval", approvalId: raised.id },
         reason: `approved once by the operator: ${describeAsk(ask)}`,
       };
     }
+    const outcome = approvalOutcome(raised);
     return {
       kind: "denied",
       by: { kind: "approval", approvalId: raised.id },
       reason:
-        answered.reason ??
-        "declined by the operator; this is feedback about how to proceed, not a failure (§6.6)",
+        outcome?.kind === "deny"
+          ? outcome.reason
+          : "declined by the operator; this is feedback about how to proceed, not a failure (§6.6)",
     };
   }
 
