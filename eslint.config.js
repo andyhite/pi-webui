@@ -25,6 +25,15 @@ export default tseslint.config(
     },
   },
   {
+    // Repository tooling run by a human at a terminal (`scripts/`, #94): its
+    // output *is* its interface — a release script that could not print the
+    // version and notes it derived would have no dry-run mode to review. The
+    // `no-console` warning is there to keep logging out of the product, where
+    // the server has a real logger; nothing here runs in the product.
+    files: ["scripts/**/*.ts"],
+    rules: { "no-console": "off" },
+  },
+  {
     // A plugin's renderer half runs in the browser (`@plotroom/ui`'s
     // `ContributionRegistry` calls these contributions in the page), so nothing
     // in this graph may reach for Node. It is not a style rule: importing a

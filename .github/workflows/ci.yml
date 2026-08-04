@@ -38,14 +38,30 @@ jobs:
       - name: Format
         run: pnpm format:check
 
+      # `scripts/**` is repository tooling, not a workspace package, so turbo
+      # does not reach it and the `:scripts` passes are separate steps rather
+      # than chained onto the turbo ones — chaining them into one script would
+      # have sent `pnpm typecheck --filter …`'s arguments to the tail command
+      # instead of to turbo. The release script decides what version the
+      # product claims to be (#94); "outside the build graph" is a bad reason
+      # for it to be the one file CI never checks.
       - name: Typecheck
         run: pnpm typecheck
+
+      - name: Typecheck (tooling)
+        run: pnpm typecheck:scripts
 
       - name: Lint
         run: pnpm lint
 
+      - name: Lint (tooling)
+        run: pnpm lint:scripts
+
       - name: Test
         run: pnpm test
+
+      - name: Test (tooling)
+        run: pnpm test:scripts
 
   e2e:
     runs-on: ubuntu-latest
