@@ -87,4 +87,15 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // The desktop backend picker's own page (Epic 8.4): a static file loaded
+    // via `BrowserWindow.loadFile`, never bundled, running as a plain browser
+    // script against the narrow bridge `backend-picker-preload.ts` exposes as
+    // `window.plotroomBackends`. Browser globals only — it never reaches for
+    // Node, same reasoning as the plugin-renderer override above.
+    files: ["apps/desktop/src/backend-picker.js"],
+    languageOptions: {
+      globals: { window: "readonly", document: "readonly" },
+    },
+  },
 );
