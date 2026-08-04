@@ -140,10 +140,16 @@ export function stageNativeAddon(outDir: string): string[] {
   return staged;
 }
 
-/**
- * A launch of the artifact, as the checks below read it.
- */
+/** A launch of the artifact, as the checks below read it. */
 export interface SmokeLaunch {
+  /**
+   * Was it still running when the probe's bound elapsed? Carried as its own fact
+   * rather than inferred from the exit code: a killed child and a child that
+   * died on a signal both report no code, and reading one as the other would
+   * pass a worker that crashed in its first moments.
+   */
+  readonly running: boolean;
+  /** `null` when it left on a signal — its own or the probe's kill. */
   readonly code: number | null;
   readonly stdout: string;
   readonly stderr: string;
@@ -153,11 +159,14 @@ export interface SmokeLaunch {
  * Did the artifact start? PlotRoom's parser refusing an unknown argument is the
  * cheapest proof — the binary ran, the SDK's module graph loaded, the native
  * addon resolved, our own code decided, and a frame reached stdout and was
- * flushed — and it needs no credentials, model or workspace. `null` code means
- * the launch was killed on the timeout, which is a failure to start too.
+ * flushed — and it needs no credentials, model or workspace.
  */
 export function startedAndRefused(launch: SmokeLaunch): boolean {
-  return launch.code === 2 && firstFrame(launch.stdout)?.type === "fatal";
+  return (
+    !launch.running &&
+    launch.code === 2 &&
+    firstFrame(launch.stdout)?.type === "fatal"
+  );
 }
 
 /**
@@ -170,11 +179,11 @@ export function startedAndRefused(launch: SmokeLaunch): boolean {
  * still running at the bound is the pass — and the check is that rather than the
  * absence of the parser's sentence, because every way this can go wrong ends the
  * process early. The parser refusing exits 2, an unknown selector exits 1 from
- * the SDK's own dispatcher, and a handover that leaves through `process.exit`
- * exits 0 with nothing on stdout at all.
+ * the SDK's own dispatcher, a handover that leaves through `process.exit` exits 0
+ * with nothing on stdout at all, and a worker that crashes leaves on a signal.
  */
 export function dispatchedTheWorker(launch: SmokeLaunch): boolean {
-  return launch.code === null;
+  return launch.running;
 }
 
 /** Long enough for a cold 124MB binary on a contended runner, short enough to fail. */
@@ -246,14 +255,19 @@ async function launch(
     },
   });
 
-  // The bound is timed here rather than handed to `Bun.spawn`, and "still
-  // running" is what this function reports rather than a kill code: a killed
+  // Drained from the start, not after the race: a child that filled the pipe
+  // buffer would block on its own write, never exit, and be reported as still
+  // running — the one answer that means health here.
+  const stdout = new Response(child.stdout).text();
+  const stderr = new Response(child.stderr).text();
+
+  // The bound is timed here rather than handed to `Bun.spawn` because a killed
   // child's exit code is the platform's business (143 here, something else on
-  // Windows) and reading one as "was it still running?" makes the answer depend
+  // Windows); reading one as "was it still running?" would make the answer depend
   // on where the compile ran. A binary that hangs at module init is one of the
   // failures this check exists to catch, so the bound itself is not optional.
   let timer: Timer | undefined;
-  const reachedBound = await Promise.race([
+  const running = await Promise.race([
     child.exited.then(() => false),
     new Promise<boolean>((resolve) => {
       timer = setTimeout(() => {
@@ -262,14 +276,11 @@ async function launch(
     }),
   ]);
   clearTimeout(timer);
-  if (reachedBound) child.kill();
+  if (running) child.kill();
 
-  const [stdout, stderr] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
+  const [out, err] = await Promise.all([stdout, stderr]);
   await child.exited;
-  return { code: reachedBound ? null : child.exitCode, stdout, stderr };
+  return { running, code: child.exitCode, stdout: out, stderr: err };
 }
 
 /** `Bun.spawn` rejects the `undefined` slots `process.env` can carry. */
@@ -282,8 +293,11 @@ function environment(): Record<string, string> {
 }
 
 function describe(launch: SmokeLaunch): string {
+  const outcome = launch.running
+    ? "still running at the bound"
+    : `exit ${launch.code === null ? "on a signal" : launch.code.toString()}`;
   return (
-    `: exit ${launch.code === null ? "timed out" : launch.code.toString()}\n` +
+    `: ${outcome}\n` +
     `stdout: ${launch.stdout.trim() || "(empty)"}\n` +
     `stderr: ${launch.stderr.trim() || "(empty)"}`
   );
