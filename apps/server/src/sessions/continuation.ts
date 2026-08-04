@@ -6,6 +6,7 @@ import {
   deriveHandoffBrief,
   deriveOutsideWorldMarkers,
   draftHandoffBrief,
+  isDeleted,
   NO_TOOL_WORLD_DECLARATIONS,
   planHandoff,
   planResume,
@@ -649,6 +650,28 @@ export class ContinuationService {
     }
 
     const source = stores.sessions.get(brief.sourceSessionId);
+
+    // A deleted source is refused, exactly as `planResume` and `planSessionFork`
+    // refuse one — and this verb needed its own check because it is the one that
+    // records **provenance from** the source. `recordProvenance` is exempt from
+    // the legality checks `addContextEdge` applies, deliberately, so nothing
+    // downstream would have stopped a live provenance edge being drawn out of a
+    // node that is not on the board: `liveEdges()` would include it and the canvas
+    // would draw a wire from a card it does not have.
+    //
+    // Refused on a retry too, rather than skipping the write to complete the
+    // gesture. A retry whose source was deleted in the meantime has a remedy — the
+    // source's own restore, then the same key again, which replays what the first
+    // attempt produced (principle 9) — and that keeps the handoff recoverable
+    // without either lying about the graph or leaving a brief sent with nothing
+    // wired into it (principle 10, principle 12).
+    if (isDeleted(source.session)) {
+      throw refused({
+        reason: "source_deleted",
+        message: `session ${brief.sourceSessionId} was deleted; restore it first — a handoff records provenance from its source, and a deleted session is not on the board to draw one from (principle 10)`,
+      });
+    }
+
     const started = await this.deps.runs.startHandoffSession({
       brief,
       workstreamId: input.workstreamId,

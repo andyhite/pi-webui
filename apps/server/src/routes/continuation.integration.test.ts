@@ -956,6 +956,65 @@ describe("handoff (§6.3)", () => {
     expect(at(derived, "brief.draftedBy")).toBeNull();
     expect(String(at(derived, "brief.text"))).toContain("derived");
   });
+
+  it("refuses sending a brief whose source session was deleted (issue #76)", async () => {
+    const harness = await bootWith(twoTurns);
+    const { sessionId } = await endedTwoTurnSession(harness);
+    const target = await command(harness, {
+      lifecycle: "open",
+      name: "Receiving",
+    });
+
+    const briefId = str(
+      await harness.ok(`/sessions/${sessionId}/handoff-brief`, {
+        method: "POST",
+        body: { text: "here is where I got to" },
+      }),
+      "brief.id",
+    );
+    await harness.ok(`/handoff-briefs/${briefId}/review`, {
+      method: "POST",
+      body: {},
+    });
+
+    await harness.ok(`/sessions/${sessionId}`, { method: "DELETE" });
+
+    // A handoff records provenance **from** its source, and `recordProvenance` is
+    // exempt from the checks that refuse wiring a removed node — so without this
+    // refusal the send drew a live edge out of a node that is not on the board,
+    // which `liveEdges()` then hands to the canvas. Resume and fork already
+    // refuse a deleted source; this is the third gesture.
+    const refusedSend = await harness.call("/handoffs", {
+      method: "POST",
+      body: {
+        briefId,
+        workstreamId: target.workstream,
+        initiationKey: "handoff-deleted-source",
+      },
+    });
+    expect(refusedSend.status).toBe(409);
+    expect(at(refusedSend.body, "error.details.reason")).toBe("source_deleted");
+
+    // Nothing was drawn and nothing was spent: no provenance edge, and the brief
+    // is still sendable once the source is restored (principle 10).
+    const snapshot = await harness.ok("/snapshot");
+    expect(
+      list(snapshot, "edges").filter(
+        (edge) => at(edge, "relation") === "session_handoff",
+      ),
+    ).toHaveLength(0);
+
+    await harness.ok(`/sessions/${sessionId}/restore`, { method: "POST" });
+    const sent = await harness.ok("/handoffs", {
+      method: "POST",
+      body: {
+        briefId,
+        workstreamId: target.workstream,
+        initiationKey: "handoff-deleted-source",
+      },
+    });
+    expect(str(sent, "session.id")).not.toBe(sessionId);
+  });
 });
 
 describe("continue versus fresh (§4.3)", () => {
