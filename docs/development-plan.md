@@ -2699,10 +2699,58 @@ or opted into._
 - [ ] FTS search over sessions incl. archived, ranked over title/location/content; archived reported as archived (§6.8)
 - [ ] Archive-by-default posture: canvas holds what you placed; the rest browsable/searchable (§6.8, §3.3)
 
+_Track A's server half landed: the FTS scaffolding (migration 1) widened from one
+indexed column to three — title, location, body — weighted with bm25 so a
+session's own title outranks a coincidental word in its transcript
+(`packages/db/src/search.ts`). `reindexSessionSearch` keeps a session findable at
+the same boundaries §3.6's checkpoint rule already draws for the transcript
+itself (start, checkpoint, end — never per turn), and `GET /api/search` ranks
+over it. "Archived" is never written into the index; it is resolved fresh, per
+hit, from the session's own workstream record, so a workstream archived after
+indexing is never reported stale (§6.8's "reported as archived rather than
+hidden", made impossible to get wrong rather than merely correct today).
+Deferred, honestly: the Search panel itself (Track B); only the `session` kind
+is indexed this batch — the table is kind-agnostic, so a future producer (a
+note, a ticket) writes into the same index without a new endpoint._
+
 ### Epic 8.3 — Settings and logs (`app`)
 
 - [ ] Settings: grouped, searchable, applied without restart; env vars supply defaults only (§11)
 - [ ] Logs panel over the structured log, filtered (§8, §11)
+
+_Track A's server half landed: Epic 2.1's deliberately deferred seam is filled
+— a settings catalog (`apps/server/src/settings/catalog.ts`), persisted
+overrides (`SettingsStore`, migration 29), and `GET`/`PUT`/`DELETE
+/api/settings(/:key)`. Every entry's `appliesWithoutRestart` is asserted
+against a real live applier at construction, never merely documented: logLevel,
+trustedOrigins, credential, concurrencyLimit, and the three schedule intervals
+(compaction/attention/integration) apply with no restart; bind address, port,
+state/static dirs, non-loopback bind, the plugins directory, and
+runtime/workspace defaults are honestly `requiresRestart` with a stated reason
+each, persisted so they take effect on the next boot rather than pretended
+live. Every entry in this batch is `humanOnly` (principle 1), matching
+`/api/log-level`'s existing precedent for both its verbs — a narrower default
+than §8's "a session can see what remains" might eventually want for a few of
+these (concurrency, tick intervals), left for whoever designs the Settings
+panel to loosen deliberately rather than assumed here.
+
+Also landed: the structured log's queryable half (§8). A bounded
+`LogRingBuffer` wraps `Logger`'s own sink, queryable over `GET /api/logs`
+(level, component, sinceSeq) and honest about its bound — it reports its drop
+count on every read and publishes one `log` event the moment it starts
+dropping, never per line, so a live surface learns it may be missing entries
+without flooding the vocabulary. `Logger.child(component)` tags a few
+subsystems' own lines (http, maintenance, attention, integrations); most
+existing call sites are not yet tagged, which is why `component` filtering
+works but is not yet comprehensive.
+
+Deferred, honestly: the Settings and Logs panels themselves (Track B); an
+agent-tool-catalog entry for any of this (`packages/core/src/sessions/tools/
+catalog.ts` is Track C's file) — every new route is listed instead in that
+file's own `OPERATOR_ONLY_ROUTES` exceptions (a narrow, orchestrator-granted
+cross-track exception, its own commit); and that same test's route-scanner does
+not catch `PUT /api/settings/:key`, a real coverage gap for Track C or the
+invariant/e2e work to close._
 
 ### Epic 8.4 — Packaging and deployment (`desktop`, `server`)
 
