@@ -565,6 +565,66 @@ describe("a removed node is off the board until it is restored", () => {
   });
 });
 
+/**
+ * The other half of principle 10's "the undo returns what its own removal took"
+ * (issue #76): a node stands for a record, and restoring it while that record is
+ * deleted would put a card on the board with nothing behind it — the reads the
+ * canvas is drawn from filter the record out.
+ */
+describe("a node does not come back without its subject (principle 10)", () => {
+  let objects: ObjectStore;
+
+  beforeEach(() => {
+    objects = new ObjectStore(state, () => 1_000_000);
+  });
+
+  function noteNode(): { readonly objectId: string; readonly nodeId: string } {
+    const objectId = objects.write({
+      kind: "note",
+      title: "the arrangement",
+      renderings: makeRenderings(),
+    }).objectId;
+
+    return { objectId, nodeId: place.content(objectId).id };
+  }
+
+  it("refuses the node's own restore while its subject is deleted", () => {
+    const { objectId, nodeId } = noteNode();
+    objects.delete(objectId);
+    graph.removeNode(nodeId);
+
+    expect(() => graph.restoreNode(nodeId)).toThrow(PlacementRefused);
+    try {
+      graph.restoreNode(nodeId);
+    } catch (err) {
+      expect((err as PlacementRefused).refusal.reason).toBe("subject_deleted");
+    }
+    expect(graph.node(nodeId).deletedAt).not.toBeNull();
+  });
+
+  it("puts the node back once the subject is restored", () => {
+    const { objectId, nodeId } = noteNode();
+    objects.delete(objectId);
+    graph.removeNode(nodeId);
+
+    // The subject's restore is the gesture that brings the node back with it,
+    // which is the order every restore route follows: record first, board second.
+    objects.restore(objectId);
+    expect(graph.restoreNode(nodeId).changed).toBe(true);
+    expect(graph.node(nodeId).deletedAt).toBeNull();
+  });
+
+  it("says nothing about a subject it has no row for", () => {
+    // A node may stand for something this store cannot see, the same tolerance
+    // the scope rule has: an absence is not a deletion, and refusing over one
+    // would refuse a gesture on a fact nobody recorded.
+    const node = place.content("obj_never_written");
+    graph.removeNode(node.id);
+
+    expect(graph.restoreNode(node.id).changed).toBe(true);
+  });
+});
+
 describe("provenance is recorded, never authored (§3.7)", () => {
   it("refuses to remove a provenance edge", () => {
     const command = place.command("cmd_1").id;
