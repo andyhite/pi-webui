@@ -11,6 +11,7 @@ import {
   resolveSetup,
   exportTranscript,
   PiForkUnavailable,
+  sessionAuthor,
   systemMillisClock,
   transcriptPrefix,
   transcriptRenderings,
@@ -31,6 +32,7 @@ import {
   type SessionLaunchChoices,
   type SessionRuntimeAdapter,
   type SessionStatus,
+  type VersionId,
   type Workspace,
   type WorkspaceKind,
   type WorkspaceKindConfig,
@@ -1151,6 +1153,14 @@ export class RunService {
 
     const interrupted = this.deps.stores.sessions.interruptInFlight(message);
     for (const session of interrupted) {
+      // This session just ended, so §3.6's checkpoint rule says its transcript
+      // versions and the index catches up — exactly as it would have on any
+      // other end. Skipping it here left a crashed session's *published*
+      // transcript, and the search index built from it, at whatever the last
+      // checkpoint said until some later boundary happened to move them: the
+      // record of a session that will never say anything again, stale for good
+      // if nobody ever resumed it.
+      this.finalizeTranscript(session);
       await this.endRunFor(session);
       this.deps.logger.warn("session interrupted by a restart", {
         sessionId: session.session.id,
@@ -1192,6 +1202,15 @@ export class RunService {
             interrupted: { message },
           }),
         );
+        // Same end, same rule as a restart-interrupted session above. Usually
+        // the abort below makes the runtime report an end and the driver
+        // publishes on the way out — but that is the runtime's behavior inside a
+        // bounded drain, and this is PlotRoom's own outcome: an adapter that
+        // reports no end, or reports it after `SHUTDOWN_DRAIN_MS`, must not be
+        // what decides whether the record was finished. Idempotent either way
+        // (§3.6's rule writes no version with nothing pending), so the two
+        // paths cannot produce two versions of one end.
+        this.finalizeTranscript(interrupted);
         await this.endRunFor(interrupted);
         this.publishSession(interrupted, { kind: "human" });
         ended.push(interrupted);
@@ -1824,6 +1843,50 @@ export class RunService {
     verb: "created" | "updated" = "updated",
   ): void {
     this.deps.bus.publish({ entity: "run", verb, run, author });
+  }
+
+  /**
+   * The transcript half of a session end PlotRoom itself wrote (§3.6).
+   *
+   * The driver does this for an end a *runtime* reported — publish the version
+   * the checkpoint rule now calls for, announce it, and reindex — but the two
+   * ends PlotRoom writes on its own (a restart finding a session in flight, and
+   * a shutdown ending one) never reach that path, because there is no
+   * observation to drive them. Without this they leave the published transcript
+   * and the search index at the last checkpoint, describing a session that has
+   * ended as if it were still mid-flight.
+   *
+   * `publishTranscript` returns `null` when nothing is pending, so a session
+   * interrupted with no unpublished turn writes no empty version (the rule's
+   * own "a publication with nothing pending is not written at all") — and the
+   * reindex still runs, because the session's *own* record changed even when
+   * its content did not.
+   */
+  private finalizeTranscript(session: StoredSession): void {
+    const { stores, bus } = this.deps;
+    const sessionId = session.session.id;
+    const end = session.session.end;
+    if (end === null) return;
+
+    const published = stores.sessions.publishTranscript(sessionId, {
+      kind: "session-ended",
+      at: end.at,
+      end,
+    });
+
+    if (published) {
+      bus.publish({
+        entity: "session_transcript",
+        verb: "created",
+        sessionId: sessionId as SessionId,
+        publication: published.publication,
+        objectId: published.objectId,
+        versionId: published.versionId as VersionId,
+        author: sessionAuthor(sessionId as SessionId),
+      });
+    }
+
+    reindexSessionSearch(stores, sessionId);
   }
 
   private publishSession(session: StoredSession, author: Author): void {

@@ -350,6 +350,35 @@ const oneTurn: RuntimeScript = {
   ],
 };
 
+/**
+ * One complete turn, then silence: the session stays in flight with a turn
+ * observed and **unpublished** — a live transcript never versions per turn
+ * (§3.6) — which is the state an interrupt has to catch up.
+ */
+const oneTurnThenStalls: RuntimeScript = {
+  acts: [
+    {
+      on: "start",
+      steps: [
+        { observation: { kind: "turn-started", turn: 1 } },
+        {
+          observation: {
+            kind: "output-delta",
+            text: "the fix was a peculiarincantation in the login test",
+          },
+        },
+        {
+          observation: {
+            kind: "turn-ended",
+            turn: 1,
+            usage: { inputTokens: 10, outputTokens: 10, costUsd: 0.001 },
+          },
+        },
+      ],
+    },
+  ],
+};
+
 /** A script that never ends: the session stays in flight (principle 11). */
 const neverEnds: RuntimeScript = {
   acts: [
@@ -1422,6 +1451,125 @@ describe("end states are distinct (§3.6, principle 11)", () => {
     });
     const recovered = await second.ok(`/sessions/${sessionId}`);
     expect(at(recovered, "session.end.message")).toMatch(/server shut down/);
+  });
+
+  it("publishes a crash-interrupted session's transcript at the next boot, so search stops describing it mid-flight", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-crash-index-"));
+    scratch.push(stateDir);
+
+    // A crash leaves a live session record with observations nothing published
+    // and no process — written directly, because that is exactly what a killed
+    // process leaves behind (§3.6's checkpoint rule means the last turn is in
+    // the log and in no version).
+    const first = await boot({}, { stateDir });
+    const workstreamId = str(
+      await first.ok("/workstreams", { method: "POST", body: {} }),
+      "workstream.id",
+    );
+    await first.handle.close();
+    harnesses.splice(harnesses.indexOf(first), 1);
+
+    const state = openDatabase({ stateDir });
+    const sessions = new SessionStore(state);
+    const orphan = sessions.start({
+      workstreamId,
+      mode: "open",
+      launch: {
+        model: "fixture-model",
+        effort: "medium",
+        toolPermissions: INHERIT_APP_TOOLS,
+      },
+      initiatedBy: humanAuthor,
+      runtime: { adapterId: "scripted", ref: "native-crashed" },
+    });
+    const sessionId = orphan.session.id;
+    for (const observation of [
+      { kind: "turn-started", at: 1_000, turn: 1 },
+      {
+        kind: "output-delta",
+        at: 1_001,
+        text: "the fix was a peculiarincantation in the login test",
+      },
+      {
+        kind: "turn-ended",
+        at: 1_002,
+        turn: 1,
+        usage: { inputTokens: 10, outputTokens: 10, costUsd: 0.001 },
+      },
+    ] as const) {
+      sessions.appendObservation(sessionId, observation);
+    }
+    expect(sessions.publications(sessionId)).toEqual([]);
+    state.close();
+
+    const second = await boot({}, { stateDir });
+    expect(
+      at(await second.ok(`/sessions/${sessionId}`), "session.end.kind"),
+    ).toBe("interrupted");
+
+    // The interrupt is an end, so §3.6 says the transcript versions — once, for
+    // that end — and the index is caught up to it rather than left describing a
+    // session that will never say anything again.
+    const publications = list(
+      await second.ok(`/sessions/${sessionId}/transcript`),
+      "publications",
+    );
+    expect(publications).toHaveLength(1);
+    expect(at(publications[0], "trigger")).toBe("session-end");
+    expect(at(publications[0], "throughTurn")).toBe(1);
+
+    const found = await second.ok(
+      `/search?q=${encodeURIComponent("peculiarincantation")}`,
+    );
+    expect(list(found, "hits").map((hit) => at(hit, "refId"))).toContain(
+      sessionId,
+    );
+  });
+
+  it("publishes an interrupted session's transcript and catches search up at a shutdown too, rather than leaving both at the last checkpoint", async () => {
+    const repositoryPath = gitRepository();
+    const stateDir = mkdtempSync(join(tmpdir(), "plotroom-interrupt-index-"));
+    scratch.push(stateDir);
+
+    const first = await boot({ workspace: { repositoryPath } }, { stateDir });
+    const fixture = await command(first);
+    const started = await run(first, fixture.commandId, oneTurnThenStalls);
+    const sessionId = str(started, "session.id");
+
+    // One turn observed, nothing published: §3.6's rule, and the reason the
+    // index cannot already know what this turn said.
+    await waitFor(async () => {
+      const read = await first.ok(`/sessions/${sessionId}/transcript`);
+      return at(read, "completedTurns") === 1 ? read : null;
+    }, "the turn to be observed");
+    const before = await first.ok(
+      `/search?q=${encodeURIComponent("peculiarincantation")}`,
+    );
+    expect(list(before, "hits")).toEqual([]);
+    expect(
+      list(await first.ok(`/sessions/${sessionId}/transcript`), "publications"),
+    ).toEqual([]);
+
+    await first.handle.close();
+    harnesses.splice(harnesses.indexOf(first), 1);
+
+    // The shutdown ended it as interrupted, which is an end: the transcript
+    // versioned once, for that end, and the index says what it says.
+    const second = await boot({ workspace: { repositoryPath } }, { stateDir });
+    const publications = list(
+      await second.ok(`/sessions/${sessionId}/transcript`),
+      "publications",
+    );
+    expect(publications).toHaveLength(1);
+    expect(at(publications[0], "trigger")).toBe("session-end");
+    expect(at(publications[0], "throughTurn")).toBe(1);
+
+    const found = await second.ok(
+      `/search?q=${encodeURIComponent("peculiarincantation")}`,
+    );
+    expect(list(found, "hits").map((hit) => at(hit, "refId"))).toContain(
+      sessionId,
+    );
   });
 
   it("marks a session the last process died on as interrupted at the next boot", async () => {
