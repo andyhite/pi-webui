@@ -24,6 +24,15 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # One package needs Bun: `apps/session-host` embeds the agent SDK, which is
+      # Bun-only, and runs its tests with `bun test` (decision 0005). A toolchain
+      # addition, not a replacement — pnpm still installs, turbo still runs
+      # everything, and every other package stays on Node. Producing the packaged
+      # compiled binary is #93's half of this.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
       - run: pnpm install --frozen-lockfile
 
       - name: Format
@@ -49,6 +58,11 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+
+      # `pnpm build` reaches `apps/session-host`'s `tsc -b`.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
 
       - run: pnpm install --frozen-lockfile
 
