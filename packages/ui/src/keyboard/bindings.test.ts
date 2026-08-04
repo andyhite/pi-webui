@@ -326,6 +326,26 @@ describe("createKeyBindingRegistry", () => {
     ).toBeNull();
   });
 
+  it("can only ever dispatch something it also lists — the whole structural rule (§11)", () => {
+    const registry = createKeyBindingRegistry();
+    registry.register(dispatched({ id: "listed", chords: [{ key: "r" }] }));
+    // A key nobody registered does nothing at all: there is no other path
+    // from a keypress to an action, so "undocumented" is unreachable rather
+    // than merely discouraged.
+    expect(
+      registry.dispatch(event({ key: "q" }), {
+        scopes: ["global"],
+        inTextEntry: false,
+      }),
+    ).toBeNull();
+    const ran = registry.dispatch(event({ key: "r" }), {
+      scopes: ["global"],
+      inTextEntry: false,
+    });
+    expect(ran).not.toBeNull();
+    expect(registry.list()).toContain(ran);
+  });
+
   it("notifies subscribers on register and unregister, so the overlay cannot go stale", () => {
     const registry = createKeyBindingRegistry();
     const listener = vi.fn();
