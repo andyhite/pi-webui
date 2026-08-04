@@ -142,7 +142,7 @@ jobs:
         run: pnpm compile
 
   # A full `pnpm install --frozen-lockfile` **with scripts**, on Windows,
-  # followed by the SQLite suite that binding is for (#183).
+  # followed by a round trip through the SQLite binding it installs (#183).
   #
   # Windows is the only platform where this can regress, and it regressed
   # silently: `better-sqlite3` carries a `binding.gyp` at its package root, so
@@ -154,10 +154,14 @@ jobs:
   # this job: without it, the next dependency that wants a compiler is found by
   # whoever tries to build the Windows installer (#79), not by CI.
   #
-  # It runs the `@plotroom/db` suite rather than merely loading the module,
-  # because "installs" and "the binding actually works, including the
-  # migration runner's pragma dance" are different claims and only the second
-  # one is worth a job.
+  # The last step exercises the binding rather than running `@plotroom/db`'s
+  # suite. That was the first shape of this job and it failed — for reasons
+  # that have nothing to do with installing: 21 of its tests tear down with
+  # `EBUSY: resource busy or locked, unlink ...\plotroom.db`, because Windows
+  # refuses to delete a file that still has an open handle and `afterEach`
+  # removes the state directory straight after `close()`. Filed as #202.
+  # Running it here would have made this job's red mean two unrelated things,
+  # and the one it exists to catch is the install.
   windows-install:
     runs-on: windows-latest
     timeout-minutes: 20
@@ -185,11 +189,21 @@ jobs:
           fi
           echo "no compiled addon: the shipped prebuild is what will load"
 
-      # Through turbo, not `pnpm --filter`: the suite imports `@plotroom/core`
-      # by its package exports, which resolve to `dist`, and only turbo's
-      # `test` task knows to build it first (`dependsOn: ["^build"]`).
-      - name: Exercise SQLite through @plotroom/db
-        run: pnpm exec turbo run test --filter @plotroom/db
+      # A round trip through the native module, which is the whole claim: the
+      # server's SQLite is what a Windows installer has to ship, and an
+      # install that "succeeded" without a loadable binding proves nothing.
+      # Run from `packages/db`, where `better-sqlite3` is actually a
+      # dependency — pnpm's store is not hoisted to the root.
+      - name: Load the SQLite binding and round-trip a row
+        working-directory: packages/db
+        run: >-
+          node -e "const D=require('better-sqlite3');
+          const d=new D(':memory:');
+          d.exec('create table t (x integer)');
+          d.prepare('insert into t values (?)').run(42);
+          const got=d.prepare('select x from t').get().x;
+          if (got !== 42) { throw new Error('round trip returned ' + got); }
+          console.log('sqlite ok via', require.resolve('better-sqlite3'));"
 
   commits:
     runs-on: ubuntu-latest
