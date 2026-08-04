@@ -85,10 +85,19 @@ jobs:
   # Nothing is uploaded: no release consumes an artifact from a PR run, and the
   # job's claim is that the binary builds and starts on each platform, which the
   # compile's own smoke test makes. Release wiring is #79/#94's.
+  #
+  # Three platforms, not five: `macos-latest` is arm64 and `ubuntu-latest` x64,
+  # so a green run says nothing about `darwin-x64` or `linux-arm64`, both of
+  # which the SDK publishes an addon for. Adding `macos-13` and
+  # `ubuntu-24.04-arm` is what would cover them; until then the gap is stated
+  # rather than implied by a green check.
   session-host-binary:
+    # The failure this job exists to catch includes a binary that hangs at module
+    # init; without a bound that burns the default six hours on a runner.
+    timeout-minutes: 20
     strategy:
-      # One platform failing must not hide the other two: which platforms can
-      # produce the binary is the whole question here.
+      # One platform failing must not hide the others: which of them can produce
+      # the binary is the whole question here.
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
