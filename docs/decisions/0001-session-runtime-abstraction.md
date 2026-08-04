@@ -418,3 +418,73 @@ Non-negotiables at this seam:
 - **Out-of-budget stops are initiated by PlotRoom** and recorded as their own
   outcome, distinct from failure.
 ```
+
+## Amendment — 2026-08-04: omp, embedded rather than spawned
+
+- **Status:** Accepted. Supersedes the adapter-order decision above: the first
+  concrete adapter is **omp** (`@oh-my-pi/pi-coding-agent`, MIT), and PlotRoom
+  drives it by **embedding the SDK in a PlotRoom-owned Bun sidecar**
+  (`apps/session-host`, one process per session) rather than by spawning a CLI
+  and speaking its RPC protocol.
+- **Date:** 2026-08-04
+- **Deciders:** operator, on evidence probed live against `omp` 17.2.7/17.2.8.
+
+### Why omp rather than vanilla pi
+
+omp is a derivative of pi with the same extension API and event vocabulary, and it
+is better on both criteria this record flagged as risks:
+
+- **C6 (permission interception) moves from _partial_ to _strong_.** pi had no
+  blessed per-call callback, so the gate was built on its tool layer. Under omp the
+  host is in the decision path twice: an inline `tool_call` handler that blocks a
+  call with a reason, and omp's own tier-based approval routed to the host. A
+  denied `bash` call was verified to produce no side effect — the marker file was
+  never created — and the gate fires for read-tier tools too, which §3.4's
+  path-read ledger needs.
+- **C4 gains the context-window meter.** `getSessionStats()` reports
+  `contextUsage { tokens, contextWindow, percent }`, so `reportsContextWindow`
+  becomes `true` and the meter stops being estimated. Per-turn
+  `usage.cost.total` keeps `reportsCost` true with the field names PlotRoom
+  already read.
+
+### Why embedded rather than spawned
+
+The RPC path was proven end to end before this choice was made, and it works; it
+remains the fallback if the dependency pin becomes unmaintainable. Embedding wins
+on four things that were measured rather than assumed:
+
+- **The gate is a typed callback.** No generated extension source written beside
+  the state directory on every start, no `plotroom-approval:` title-prefix
+  protocol, no `extension_ui_request`/`extension_ui_response` round trip.
+- **Injection delivery is exact.** `getQueuedMessages()` reports the steering
+  queue, so §6.5's queued → delivered is an observed fact. omp's RPC surface emits
+  no queue event; over the wire, delivery had to be inferred from a message echo.
+- **Session start is roughly 3× faster:** ~280–350 ms in-process against
+  1,094–2,345 ms to spawn the 180 MB binary to its ready frame.
+- **Fork and accounting are direct calls** rather than protocol exchanges.
+
+### What the process boundary still buys
+
+One process per session, spawned by the server, is kept deliberately:
+
+- **Crash containment.** The server owns all state; an OOM or unhandled throw in a
+  browser tool, python kernel, PTY or native addon must not take the state owner,
+  the other sessions and the event stream with it.
+- **A real abort.** `stop("abort")` is SIGKILL of the process tree. In-process
+  there is no equivalent for a runaway shell or browser child, and `interrupted`
+  versus `failed` stops being an honest distinction.
+- **One cwd per workspace.** The SDK admits a single `"Main"` identity per
+  generation in a process-global registry, host URI schemes are process-global, and
+  session switching re-points the process cwd. PlotRoom runs several sessions
+  concurrently in different worktrees.
+- **Credentials.** The sidecar resolves the operator's own credential store; the
+  server never holds provider tokens, and PlotRoom still injects none of its own.
+
+### One invariant this adds
+
+**The gate's liveness is asserted, not configured.** `restrictToolNames: true`
+silently unloads inline extensions — no error, no warning, and every tool then runs
+ungated. So the sidecar refuses to accept a prompt until it has proven its own
+gate: the extension is confirmed loaded, and a synthetic gated call is run and its
+denial verified. `capabilities.enforcesPermissions` must not be a declaration
+that a configuration change can falsify.
