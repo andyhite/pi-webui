@@ -97,3 +97,6 @@ export * from "./search/SearchPanel.js";
 export * from "./settings/types.js";
 export * from "./settings/data-source.js";
 export * from "./settings/SettingsPanel.js";
+export * from "./logs/types.js";
+export * from "./logs/data-source.js";
+export * from "./logs/LogsPanel.js";
