@@ -49,6 +49,7 @@ import { restorableRoutes } from "./routes/restorable.js";
 import { runQueueRoutes } from "./routes/run-queue.js";
 import { runRoutes } from "./routes/runs.js";
 import { searchRoutes } from "./routes/search.js";
+import { backfillSearchIndex } from "./search/backfill.js";
 import { sessionRoutes } from "./routes/sessions.js";
 import { snapshotRoutes } from "./routes/snapshot.js";
 import { steeringRoutes } from "./routes/steering.js";
@@ -163,6 +164,17 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   app.use("/api/*", actorMiddleware());
 
   const stores = createStores(db, bus);
+
+  // Catch every session that existed before search indexing did up to the
+  // index (§6.8, Epic 8.2). A read/derivation over records that already
+  // exist (principle 2), idempotent (`SearchIndex.has` skips whatever a
+  // previous boot already covered), and cheap enough to simply always run
+  // rather than gate behind a persisted "have I done this" flag — a second
+  // thing to get out of sync with the first.
+  const searchBackfill = backfillSearchIndex(stores);
+  if (searchBackfill.reindexed > 0) {
+    logger.info("backfilled the search index", { ...searchBackfill });
+  }
 
   // One workspace-kind registry for the whole app: the run path provisions
   // through it, and the reset plan asks it whether a checkout is holding work
