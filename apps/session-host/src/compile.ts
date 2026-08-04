@@ -161,14 +161,20 @@ export function startedAndRefused(launch: SmokeLaunch): boolean {
 }
 
 /**
- * Did a hidden worker selector reach the session parser? Compilation is what
- * makes the SDK re-exec this binary for its own worker subprocesses, so this is
- * the one defect a compiled artifact can have and a host-Bun run cannot
- * (`worker-dispatch.ts`). The parser's refusal is the symptom, and it is exactly
- * what the check above accepts as health, so the two must be read separately.
+ * Did a worker launch reach the worker instead of the session parser?
+ *
+ * Compilation is what makes the SDK re-exec this binary for the subprocesses its
+ * tools need, so this is the one defect a compiled artifact can have and a
+ * host-Bun run cannot (`worker-dispatch.ts`). A dispatched worker **does not
+ * exit**: it waits for the IPC peer the probe deliberately does not give it, so
+ * still running at the bound is the pass — and the check is that rather than the
+ * absence of the parser's sentence, because every way this can go wrong ends the
+ * process early. The parser refusing exits 2, an unknown selector exits 1 from
+ * the SDK's own dispatcher, and a handover that leaves through `process.exit`
+ * exits 0 with nothing on stdout at all.
  */
-export function refusedTheWorkerSelector(launch: SmokeLaunch): boolean {
-  return launch.stdout.includes("unknown session-host argument");
+export function dispatchedTheWorker(launch: SmokeLaunch): boolean {
+  return launch.code === null;
 }
 
 /** Long enough for a cold 124MB binary on a contended runner, short enough to fail. */
@@ -210,9 +216,9 @@ export async function smokeTest(binary: string): Promise<void> {
       home,
       WORKER_PROBE_MS,
     );
-    if (refusedTheWorkerSelector(worker)) {
+    if (!dispatchedTheWorker(worker)) {
       throw new SessionHostCompileError(
-        `the compiled session host refused the runtime's own worker selector, ` +
+        `the compiled session host did not hold the runtime's own worker launch, ` +
           `so a session on it loses every tool that needs a subprocess${describe(worker)}`,
       );
     }
@@ -231,9 +237,6 @@ async function launch(
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    // A binary that hangs at module init is this check's whole point; without a
-    // bound it would hang the build rather than report one.
-    timeout: bound,
     env: {
       ...environment(),
       HOME: home,
@@ -242,12 +245,31 @@ async function launch(
       LOCALAPPDATA: join(home, "AppData", "Local"),
     },
   });
-  const [stdout, stderr, code] = await Promise.all([
+
+  // The bound is timed here rather than handed to `Bun.spawn`, and "still
+  // running" is what this function reports rather than a kill code: a killed
+  // child's exit code is the platform's business (143 here, something else on
+  // Windows) and reading one as "was it still running?" makes the answer depend
+  // on where the compile ran. A binary that hangs at module init is one of the
+  // failures this check exists to catch, so the bound itself is not optional.
+  let timer: Timer | undefined;
+  const reachedBound = await Promise.race([
+    child.exited.then(() => false),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => {
+        resolve(true);
+      }, bound);
+    }),
+  ]);
+  clearTimeout(timer);
+  if (reachedBound) child.kill();
+
+  const [stdout, stderr] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
-    child.exited,
   ]);
-  return { code: child.signalCode === null ? code : null, stdout, stderr };
+  await child.exited;
+  return { code: reachedBound ? null : child.exitCode, stdout, stderr };
 }
 
 /** `Bun.spawn` rejects the `undefined` slots `process.env` can carry. */
