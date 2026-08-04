@@ -24,7 +24,7 @@ export function GraphWarningsPanel({
   }
 
   return (
-    <ul>
+    <ul aria-label="graph warnings">
       {warnings.map((warning, index) => (
         <li key={`${warning.nodeId}-${warning.kind}-${index}`}>
           <button type="button" onClick={() => onSelectNode(warning.nodeId)}>

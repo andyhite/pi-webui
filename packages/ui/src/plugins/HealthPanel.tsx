@@ -59,7 +59,7 @@ export function PluginHealthPanel({
 
   return (
     <div data-testid="plugin-health-panel">
-      <ul>
+      <ul aria-label="installed plugins">
         {entries.map((entry) => (
           <li
             key={entry.pluginId}

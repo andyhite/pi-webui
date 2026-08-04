@@ -560,7 +560,7 @@ export function ConversationPanel({
               >
                 request handoff brief
               </button>
-              <ul>
+              <ul aria-label="handoff briefs">
                 {handoffBriefs.map((brief) => (
                   <li key={brief.id} data-testid={`handoff-brief-${brief.id}`}>
                     <div>
@@ -627,7 +627,7 @@ export function ConversationPanel({
         ) : (
           <>
             <div>prompt history</div>
-            <ul>
+            <ul aria-label="prompt history">
               {history.map((entry, index) => (
                 <li key={index}>
                   <button
@@ -657,7 +657,7 @@ export function ConversationPanel({
           </>
         )}
         {injections.length > 0 ? (
-          <ul>
+          <ul aria-label="injections, queued and delivered">
             {injections.map((entry) => (
               <li
                 key={entry.id}

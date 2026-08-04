@@ -82,7 +82,11 @@ export function WhatChangedPanel({
             data-testid={`what-changed-${workstreamId}`}
           >
             <h3>{workstreamNames.get(workstreamId) ?? workstreamId}</h3>
-            <ul>
+            <ul
+              aria-label={`what changed in ${
+                workstreamNames.get(workstreamId) ?? workstreamId
+              }`}
+            >
               {entries.map((entry) => {
                 const exists = activityTargetExists(entry, nodeExists);
                 return (

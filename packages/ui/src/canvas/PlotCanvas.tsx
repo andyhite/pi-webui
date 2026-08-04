@@ -390,7 +390,7 @@ function BoxNodeView({ data, id, selected }: NodeProps<BoxNode>) {
         // want of a plugin contribution (§10.2).
         <div data-testid={`canvas-node-card-${id}`}>
           <div>{data.cardView.title}</div>
-          <ul>
+          <ul aria-label={`${data.cardView.title} details`}>
             {data.cardView.lines.map((line, index) => (
               <li key={index}>{line}</li>
             ))}
@@ -498,7 +498,7 @@ function CanvasLegend({ nodes }: { nodes: readonly CanvasNodeInput[] }) {
         background: "white",
       }}
     >
-      <ul>
+      <ul aria-label="nodes on the canvas, by role">
         {[...counts.entries()].map(([role, count]) => (
           <li key={role}>
             {role}: {count}

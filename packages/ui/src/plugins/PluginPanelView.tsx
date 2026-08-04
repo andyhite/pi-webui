@@ -69,7 +69,7 @@ export function PluginPanelView({ panel }: PluginPanelViewProps) {
   return (
     <div data-testid={`plugin-panel-${panel.id}`}>
       <div>{state.view.title}</div>
-      <ul>
+      <ul aria-label={`${state.view.title} details`}>
         {state.view.lines.map((line, index) => (
           <li key={index}>{line}</li>
         ))}

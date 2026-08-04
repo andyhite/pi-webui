@@ -81,7 +81,7 @@ export function ShortcutsOverlay({ open, onClose }: ShortcutsOverlayProps) {
       {groups.map((group) => (
         <section key={group.scope} aria-label={SCOPE_TITLES[group.scope]}>
           <h3>{SCOPE_TITLES[group.scope]}</h3>
-          <ul>
+          <ul aria-label={`shortcuts ${SCOPE_TITLES[group.scope]}`}>
             {group.bindings.map((binding) => (
               <li key={binding.id} data-testid={`shortcut-${binding.id}`}>
                 <kbd>{bindingKeysLabel(binding)}</kbd> {binding.label} —{" "}

@@ -32,7 +32,7 @@ function FileNodeView({ file }: { readonly file: DiffFile }) {
         {file.previousPath ? ` (from ${file.previousPath})` : ""}
       </div>
       {file.hunks ? (
-        <ul>
+        <ul aria-label={`hunks in ${file.path}`}>
           {file.hunks.map((hunk, index) => (
             <li key={index}>
               <div>{hunk.header}</div>
@@ -54,7 +54,7 @@ function TreeNodeView({ node }: { readonly node: DiffTreeNode }) {
     <li>
       <details open>
         <summary>{node.name}/</summary>
-        <ul>
+        <ul aria-label={`${node.name} contents`}>
           {node.children.map((child) => (
             <TreeNodeView key={child.path} node={child} />
           ))}
@@ -104,7 +104,7 @@ export function DiffPanel({ workstreamId, dataSource }: DiffPanelProps) {
     <div>
       <div>{diff.files.length} file(s) changed</div>
       {diff.base ? <div>against: {diff.base.description}</div> : null}
-      <ul>
+      <ul aria-label="changed files">
         {tree.map((node) => (
           <TreeNodeView key={node.path} node={node} />
         ))}
