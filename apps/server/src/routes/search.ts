@@ -21,6 +21,18 @@ const MAX_SEARCH_LIMIT = 100;
  * resolved fresh, per hit, from the session's own workstream record, so a
  * workstream archived a minute ago is never reported as if it still weren't.
  *
+ * **A deleted session stays findable, and that is the decision rather than an
+ * oversight** (issue #77). §6.8's promise is about *archived* sessions, and
+ * deleted is not archived: nothing removes a deleted record from the index and
+ * nothing filters one out of a query here, which is exactly how a deleted object
+ * behaves. Keeping the two the same is the point — a session-specific exception
+ * would be a second rule about what deletion does to a read (principle 8) — and a
+ * hit leads somewhere real, because a session record is readable always (§3.6)
+ * and its deletion is recoverable (principle 10). The §7.1 queue is the surface
+ * that *does* hide a deleted session's rows, and for a different reason: those
+ * point at a node the delete took off the board. If deleted records should ever
+ * be hidden or marked here, that is a decision about every kind at once.
+ *
  * Only the `session` kind is populated as of this batch (Epic 8.2): sessions
  * and their transcripts. The index itself is kind-agnostic — a future
  * producer can write `note`, `ticket`, or any other kind into the same table
