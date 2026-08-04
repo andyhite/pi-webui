@@ -41,8 +41,9 @@ defined in `AGENTS.md` — this is the git-level view of the middle of it.
 **Several agents work here at once.** Expect other worktrees in the parent
 directory and other tickets in flight; `In Progress` on the board means claimed
 by somebody else, and a worktree you did not create is theirs. Never take an
-`In Progress` item and never touch another worktree — `AGENTS.md`'s "Many agents
-work here at once" is the rule, this is the reminder.
+item another session claimed, and never _write_ to another worktree (reading one
+is fine — reviewing a branch you did not write means reading it). `AGENTS.md`'s
+"Many agents work here at once" is the rule, this is the reminder.
 
 1. **Issue first.** No branch without an issue. Take from the top of `To Do`, never from `In Progress`, and move yours to `In Progress` (with a comment naming your branch) **before** the first edit — that claim is the only thing stopping a second agent starting the same work.
 2. **Branch.** `<type>/<short-slug>`, referencing the issue where practical, e.g. `feat/42-session-delete`, in a worktree in the parent directory:
@@ -137,8 +138,9 @@ git worktree prune
 Never nest a worktree inside the repo. Keep the primary checkout on `main` —
 switching its branch breaks every concurrent session at once.
 
-`git worktree list` normally shows several: one per ticket currently
-`In Progress`, each another agent's. Create and remove your own; touch no other.
+`git worktree list` normally shows several: one per ticket in flight —
+`In Progress` or `Review`, since a worktree lives until the ticket is delivered.
+Create and remove your own; write to no other.
 
 ## Changing the spec
 

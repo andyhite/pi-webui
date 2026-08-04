@@ -486,22 +486,36 @@ written down**, which is why keeping the ticket current is a rule rather than a
 courtesy: an item nobody moved to `In Progress` is an item two agents will pick
 up.
 
-- **`In Progress` means claimed — by somebody who is not you.** Never start
-  work on an item already in that column, and never "help" with one. Its
-  branch, its worktree, and its issue comments belong to whoever claimed it. If
-  you believe it is stalled or abandoned, say so on the issue and let the
-  operator decide; taking it over silently means two agents editing one branch.
+- **`In Progress` means claimed — by somebody who is not you.** Never start work
+  on an item another session claimed, and never "help" with one. Its branch, its
+  worktree, and its issue comments belong to whoever claimed it. If the claim
+  comment names _your_ branch it is still yours — including a review stage 6 sent
+  back. If you believe somebody else's is stalled or abandoned, say so on the
+  issue and let the operator decide; taking it over silently means two agents
+  editing one branch. ("Claimed" here is a board convention and has nothing to do
+  with the path claims of §3.4.)
 - **Choosing your own next task: take the top of `To Do`.** Skip `In Progress`
   entirely, and skip `decision` and `directional` items unconditionally (see
   stage 2). Claim it — move it to `In Progress` and comment with your branch —
   **before** the first edit, so the claim is visible to the next agent that
-  looks.
+  looks. The move is not atomic: re-read the item afterwards, and if two claims
+  exist the earlier comment wins and the later agent stands down. A subagent with
+  no `gh` access has its orchestrator claim for it and does not edit until that
+  is confirmed (see the **Orchestrators** paragraph at the end of the lifecycle).
 - **One issue, one branch, one worktree, one writer.** Two agents must never
   hold the same branch or the same worktree.
-- **Other worktrees in the parent directory are other agents' workspaces.** Do
-  not read them for context, edit them, run installs or builds in them, or
-  remove them — including ones whose branch looks merged or abandoned. You clean
-  up what you created and nothing else (see "Worktrees").
+- **Another session's worktree is not yours to write in.** Expect several in the
+  parent directory — one per ticket in flight, which is `In Progress` _or_
+  `Review`, since a worktree lives until stage 8. Reading one is fine (reviewing
+  a branch you did not write means reading it); writing to one never is: no
+  edits, commits, `pnpm install`, builds, or `git worktree remove`, not even for
+  a branch that looks merged or abandoned — you cannot tell a landed branch from
+  one mid-rebase. To run the suite against somebody else's commit, check it out
+  detached in a tree of your own
+  (`git worktree add --detach ../plotroom-review-<sha> <sha>`) and remove that
+  when you are done. Ownership comes from the ticket, not from who typed
+  `git worktree add`: an orchestrator creates the worktrees its subagents work
+  in, and those are the subagents' to write in.
 - **`main` moves under you.** Another agent may land while you are working, so
   rebase onto `main` and re-run `pnpm verify` **immediately** before landing,
   not once at the start (stage 7, including the lockfile protocol — the most
@@ -576,9 +590,9 @@ Findings are recorded **on the issue**: blocking findings send it back to
 non-blocking findings become stage-1 issues. No blocking findings → proceed.
 
 **7. Land.**
-Rebase onto `main` **now**, not once at the start — another agent may have
-landed while this ticket was in flight (lockfile protocol if `pnpm-lock.yaml`
-is involved: take main's, rerun `pnpm install`, commit the result), re-run verify, then
+Rebase onto `main` at this point, not once at the start of the ticket — another
+agent may have landed since (lockfile protocol if `pnpm-lock.yaml` is involved:
+take main's, rerun `pnpm install`, commit the result), re-run verify, then
 fast-forward merge — `main` is ff-only, no merge commits. The landing
 commit/PR carries `Fixes #N` so the issue closes on push; **verify the issue
 actually closed** (auto-close can lag or miss — close manually with a landing
@@ -684,10 +698,10 @@ andyhite/
 Rules:
 
 - **Agents MUST do all work in a worktree and NEVER change the branch of the primary checkout.** No `git checkout`/`git switch` in the primary checkout, ever — another agent or the operator may be relying on it, and switching it breaks every concurrent session at once. Create a worktree for your branch and work there; if you find the primary checkout on anything other than `main`, report it rather than "fixing" it.
-- **A worktree you did not create belongs to another agent.** Expect several to exist at once (their tickets are the board's `In Progress` items). Do not edit, build, install into, commit in, or remove one — not even one whose branch looks merged or abandoned; you cannot tell a finished branch from one mid-rebase. Report it on the issue instead.
+- **A worktree you did not create belongs to another session.** Expect several to exist at once — one per ticket in flight, `In Progress` or `Review`, because a worktree lives until stage 8. Read one if your task is to review it; never write to one: no edits, commits, installs, builds, or `git worktree remove`, not even for a branch that looks merged or abandoned (you cannot tell a landed branch from one mid-rebase). To run something against another branch's commit, check it out detached in a tree of your own. Anything else you find wrong with it goes on the issue.
 - Never create a worktree inside the repo directory.
 - One worktree per branch, and one agent per worktree; remove it when the branch lands: `git worktree remove ../plotroom-<branch>` then `git worktree prune`.
-- **Agents clean up after themselves — and only after themselves.** Once your work has merged to `main`, removing your worktree (and deleting the merged topic branch) is part of the task — not optional, not someone else's job. A task is not complete while its worktree still exists. Leaving somebody else's in place is likewise not optional: the only worktree you remove is the one you created.
+- **Agents clean up after themselves — and only after themselves.** Once your work has merged to `main`, removing your worktree (and deleting the merged topic branch) is part of the task — not optional, not someone else's job. A task is not complete while its worktree still exists. The only worktree you remove is one you created, and not even that one if the operator or your orchestrator asked you to leave it in place.
 - The primary checkout stays on `main` and is never removed.
 
 ## Agent working agreement
