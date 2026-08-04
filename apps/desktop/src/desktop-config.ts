@@ -2,8 +2,9 @@
  * Desktop-owned configuration (spec §12, Epic 3.0's remote-backend
  * carry-over): what backend this instance talks to, the backends it
  * remembers, and the one updater setting the operator controls directly
- * (principle 2 — an automatic install needs an explicit setting behind
- * it, never a default).
+ * (principle 2 — auto-*downloading* a found update needs an explicit
+ * setting behind it, never a default; installing always asks regardless
+ * of this setting — see `autoInstallUpdates`'s own doc comment).
  *
  * Deliberately not `apps/server`'s settings store (Epic 8.3, Track A/B's):
  * this is Electron-shell state that exists whether or not any server is
@@ -33,9 +34,14 @@ export interface DesktopConfig {
    */
   readonly activeBackendId: string | null;
   /**
-   * Explicit operator opt-in to auto-install a downloaded update on quit
-   * (principle 2). Defaults to `false`: a downloaded update always waits
-   * for an operator's own "restart to install" unless this is set.
+   * Explicit operator opt-in to auto-*download* a found update without
+   * asking first (principle 2) — `updater.ts`'s `configureUpdater` reads
+   * this to decide `autoDownload`. Defaults to `false`: a found update
+   * instead raises a "download now?" prompt. This setting does **not**
+   * cover installing: a downloaded update always asks again ("restart now
+   * to install?") regardless of this setting, and installing silently on
+   * quit is never wired at all — a second, stronger claim this batch does
+   * not make on the operator's behalf.
    */
   readonly autoInstallUpdates: boolean;
 }
