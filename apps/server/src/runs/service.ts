@@ -49,6 +49,7 @@ import { driveSession } from "../sessions/driver.js";
 import type { SessionHub } from "../sessions/hub.js";
 import type { ApiStores } from "../routes/api.js";
 import { toCommandNode, toEdge, toPlacedNode } from "../routes/mappers.js";
+import { reindexSessionSearch } from "../search/session-index.js";
 import type { BudgetService } from "../budgets/service.js";
 import type { ClaimService } from "../claims/service.js";
 import type { SessionGate } from "../sessions/gate.js";
@@ -419,6 +420,8 @@ export class RunService {
       initiatedBy: input.actor,
       runtime: { adapterId, ref: handle.ref },
     });
+    // Findable from the moment it exists, before it has said anything (§6.8).
+    reindexSessionSearch(stores, session.session.id);
 
     // The session goes on the board, and the command that started it is
     // recorded as provenance — never authored (§3.7).
@@ -775,6 +778,7 @@ export class RunService {
       runtime: { adapterId: adapter.id, ref: handle.ref },
       runtimeMode: mode,
     });
+    reindexSessionSearch(stores, session.session.id);
 
     const node = stores.graph.place({
       role: "session",
@@ -877,6 +881,7 @@ export class RunService {
         initiatedBy: input.actor,
         runtime: { adapterId: adapter.id, ref: handle.ref },
       });
+      reindexSessionSearch(stores, session.session.id);
 
       const node = stores.graph.place({
         role: "session",
@@ -1273,6 +1278,9 @@ export class RunService {
             this.#onQuestion(question);
           },
           onEnded: async ({ sessionId: id }) => {
+            // The transcript has just versioned for the last time (§3.6's
+            // checkpoint rule, at session end); catch the search index up to it.
+            reindexSessionSearch(this.deps.stores, id);
             await this.endRunFor(this.deps.stores.sessions.get(id));
             this.deps.hub.detach(id);
           },

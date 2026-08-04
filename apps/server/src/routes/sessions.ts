@@ -14,6 +14,7 @@ import {
 import type { ClaimService } from "../claims/service.js";
 import { validateJsonBody } from "../http/validate.js";
 import type { RunService } from "../runs/service.js";
+import { reindexSessionSearch } from "../search/session-index.js";
 import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
 
 /**
@@ -204,6 +205,10 @@ export function sessionRoutes(
     if (published === null) {
       return c.json({ published: null, reason: "nothing new to publish" });
     }
+
+    // A checkpoint versions the transcript (§3.6); catch the search index up
+    // to it, same as session end does.
+    reindexSessionSearch(stores, id);
 
     stores.bus.publish({
       entity: "session_transcript",
