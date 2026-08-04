@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+
+  /*
+   * Typecheck the tests too — same reasoning as `packages/core`: the build
+   * excludes `src/**\/*.test.ts` so it cannot emit them, and without this
+   * project nothing would typecheck them at all (Bun's test runner strips types
+   * without checking them).
+   */
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": true,
+    "tsBuildInfoFile": "dist/.tsbuildinfo.tests"
+  },
+  "include": ["src/**/*"],
+  "exclude": []
+}

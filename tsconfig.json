@@ -10,6 +10,7 @@
     { "path": "packages/plugins/jira" },
     { "path": "packages/ui" },
     { "path": "apps/server" },
+    { "path": "apps/session-host" },
     { "path": "apps/web" },
     { "path": "apps/desktop" }
   ]
