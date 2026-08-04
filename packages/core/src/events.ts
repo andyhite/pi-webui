@@ -166,6 +166,24 @@ export const EVENT_ENTITIES = [
    * and nothing on disk was touched (principle 10).
    */
   "plugin",
+  /**
+   * A setting overridden or reverted (§11, §8, Epic 8.3). Its own entity so a
+   * Settings surface hears a change made from another window without polling.
+   * Always `updated`, never `deleted`: reverting an override changes what the
+   * setting currently reads, but the setting itself — declared in the catalog,
+   * not this row — never stops existing, unlike every other entity here whose
+   * `deleted` means "nothing left to draw".
+   */
+  "setting",
+  /**
+   * The structured log's own liveness signal (§8, Epic 8.3) — published only
+   * when the bounded ring buffer drops entries nobody read yet, never once per
+   * line: a Logs panel polls `GET /api/logs` for content, and this is the one
+   * fact polling cannot recover on its own ("you may be missing entries").
+   * There is deliberately no `updated`/`deleted`: a drop is an event, not a
+   * row with a lifecycle.
+   */
+  "log",
 ] as const;
 
 export type EventEntity = (typeof EVENT_ENTITIES)[number];
@@ -547,7 +565,42 @@ export type DomainEventBody =
       readonly entity: "plugin";
       readonly verb: "deleted";
       readonly pluginId: string;
+    }
+  | {
+      readonly entity: "setting";
+      readonly verb: "updated";
+      readonly setting: SettingChange;
+    }
+  | {
+      readonly entity: "log";
+      readonly verb: "created";
+      readonly drop: LogDropNotice;
     };
+
+/**
+ * What a Settings surface needs to render one row live (Epic 8.3): the
+ * catalog says the rest (group, label, description, type). `value` is
+ * `null` for a sensitive setting with a credential set — never echoed, on
+ * the wire any more than in a read (§9.3's rule for integration credentials,
+ * applied here for the same reason).
+ */
+export interface SettingChange {
+  readonly key: string;
+  readonly value: unknown;
+  readonly overridden: boolean;
+  readonly appliesWithoutRestart: boolean;
+}
+
+/**
+ * The bounded log sink dropped entries nobody read yet (§8: "a bounded log
+ * sink must say it is bounded and report what it dropped, not silently
+ * drop"). `sinceSeq` is where a client's own last-seen sequence number can
+ * tell whether the drop reached content it had not fetched yet.
+ */
+export interface LogDropNotice {
+  readonly droppedCount: number;
+  readonly sinceSeq: number;
+}
 
 /** One message on the state-change stream: envelope plus a typed body. */
 export type DomainEvent = DomainEventEnvelope & DomainEventBody;
