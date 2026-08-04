@@ -1591,6 +1591,24 @@ export const proposals = sqliteTable(
   ],
 );
 
+/**
+ * Settings overrides (§11, §8, Epic 8.3, migration 29).
+ *
+ * A row means the current value has been overridden from its env-derived
+ * default; an absence means the default still applies — the same "row or
+ * absence" shape `plugin_disablements` and `plugin_grants` use, for the same
+ * reason: an override that lapsed on a restart would be a decision undone
+ * with nobody behind it. The catalog (group, label, description, type,
+ * whether it applies without a restart) is code, in
+ * `apps/server/src/settings/catalog.ts` — this table stores only the current
+ * value, never the shape of the setting.
+ */
+export const settings = sqliteTable("settings", {
+  key: text("key").primaryKey(),
+  valueJson: text("value_json").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
 export type IntegrationRow = typeof integrations.$inferSelect;
 export type PluginGrantRow = typeof pluginGrants.$inferSelect;
 export type PluginDisablementRow = typeof pluginDisablements.$inferSelect;
@@ -1600,6 +1618,7 @@ export type StandingInstructionOptInRow =
 export type ProposalRow = typeof proposals.$inferSelect;
 export type IntegrationCredentialRow =
   typeof integrationCredentials.$inferSelect;
+export type SettingRow = typeof settings.$inferSelect;
 
 export type ApprovalRow = typeof approvals.$inferSelect;
 export type PreGrantRow = typeof preGrants.$inferSelect;

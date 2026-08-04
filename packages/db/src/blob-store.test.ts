@@ -131,12 +131,16 @@ describe("search (spec §6.8)", () => {
     const external = store.put(body, { kind: "transcript_part" });
 
     search.index({
+      title: "Fix the login bug",
+      location: "Workstream OXY-2982",
       body,
-      kind: "transcript_part",
+      kind: "session",
       refKind: "session",
       refId: "sess_1",
     });
     search.index({
+      title: "a note",
+      location: "world",
       body: "an inline note mentioning needle",
       kind: "note",
       refKind: "note",
@@ -151,16 +155,45 @@ describe("search (spec §6.8)", () => {
     expect(external.external).toBe(true);
   });
 
+  it("ranks a match in the title above the same word merely in the body", () => {
+    const search = new SearchIndex(state);
+
+    search.index({
+      title: "unrelated",
+      location: "world",
+      body: "mentions needle only once, in passing",
+      kind: "note",
+      refKind: "note",
+      refId: "body_match",
+    });
+    search.index({
+      title: "needle",
+      location: "world",
+      body: "nothing relevant here",
+      kind: "note",
+      refKind: "note",
+      refId: "title_match",
+    });
+
+    const hits = search.query("needle");
+
+    expect(hits.map((hit) => hit.refId)).toEqual(["title_match", "body_match"]);
+  });
+
   it("filters by kind and replaces an entry on reindex", () => {
     const search = new SearchIndex(state);
 
     search.index({
+      title: "a note",
+      location: "world",
       body: "first version",
       kind: "note",
       refKind: "note",
       refId: "note_1",
     });
     search.index({
+      title: "a note",
+      location: "world",
       body: "second version",
       kind: "note",
       refKind: "note",

@@ -41,5 +41,6 @@ export * from "./plugin-grant-store.js";
 export * from "./plugin-disablement-store.js";
 export * from "./standing-instruction-store.js";
 export * from "./proposal-store.js";
+export * from "./settings-store.js";
 export * from "./maintenance.js";
 export { migrations, type Migration } from "./migrations.js";

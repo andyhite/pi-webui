@@ -1978,4 +1978,53 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    id: 29,
+    name: "settings",
+    sql: `
+      -- Settings overrides (§11, §8, Epic 8.3).
+      --
+      -- A row means the operator overrode this key from its env-derived default;
+      -- an absence means the default still applies. The same "row or absence"
+      -- shape \`plugin_disablements\` and \`plugin_grants\` use, and for the same
+      -- reason: an override that lapsed on a restart would be a decision undone
+      -- with nobody behind it. \`value_json\` is whatever JSON-serializable value
+      -- the setting's declared type accepts (a string, a number, a boolean, or a
+      -- string array); the catalog that says which keys exist, how they group,
+      -- and whether they apply without a restart is code
+      -- (\`apps/server/src/settings/catalog.ts\`), never a row here — this table is
+      -- values only, never the shape of a setting.
+      CREATE TABLE settings (
+        key        TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `,
+  },
+  {
+    id: 30,
+    name: "search_titled",
+    sql: `
+      -- Widens the index-only FTS5 table (migration 1) from one indexed \`body\`
+      -- column to three — \`title\`, \`location\`, \`body\` — so a search can rank a
+      -- session's own title and where it lives above a coincidental word buried in
+      -- its transcript (§6.8: "ranked over title, location, and content").
+      --
+      -- A plain drop-and-recreate, not a \`rebuildsTable\` rebuild: this is a
+      -- virtual table with no rows anything else references by foreign key — it is
+      -- index-only and fully rebuilt from source content on the next write, so
+      -- there is no child row a cascading drop could take with it (the concern
+      -- \`rebuildsTable\` exists for).
+      DROP TABLE search;
+
+      CREATE VIRTUAL TABLE search USING fts5(
+        title,
+        location,
+        body,
+        kind UNINDEXED,
+        ref_kind UNINDEXED,
+        ref_id UNINDEXED
+      );
+    `,
+  },
 ];
