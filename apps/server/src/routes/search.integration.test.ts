@@ -249,6 +249,26 @@ describe("search (§6.8)", () => {
     expect(list(complete, "hits")).toHaveLength(2);
     expect(at(complete, "limit")).toBe(5);
     expect(at(complete, "truncated")).toBe(false);
+
+    // The boundary the probe exists for: a full page that is also the whole
+    // answer. `hits.length === limit` says "truncated" here and is wrong — the
+    // only honest evidence is that no further hit existed.
+    const exact = await harness.ok(
+      `/search?q=${encodeURIComponent("flaky")}&limit=2`,
+    );
+    expect(list(exact, "hits")).toHaveLength(2);
+    expect(at(exact, "limit")).toBe(2);
+    expect(at(exact, "truncated")).toBe(false);
+  });
+
+  it("applies an integer limit rather than forwarding a fractional one into SQLite", async () => {
+    const harness = await boot(repository());
+    const res = await harness.call(
+      `/search?q=${encodeURIComponent("flaky")}&limit=1.5`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(at(res.body, "limit")).toBe(1);
   });
 
   it("reports the default limit when the caller named none, and does not claim truncation under it", async () => {

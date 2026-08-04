@@ -82,9 +82,15 @@ export function searchRoutes(stores: ApiStores): Hono<ApiEnv> {
       : undefined;
 
     const limitParam = c.req.query("limit");
+    // Truncated to an integer, not merely clamped: a fractional `LIMIT` is a
+    // datatype mismatch SQLite raises as a 500, and "1.5 hits" is not a
+    // question this route should be forwarding in the first place.
     const limit =
       limitParam !== undefined && Number.isFinite(Number(limitParam))
-        ? Math.max(1, Math.min(MAX_SEARCH_LIMIT, Number(limitParam)))
+        ? Math.max(
+            1,
+            Math.min(MAX_SEARCH_LIMIT, Math.trunc(Number(limitParam))),
+          )
         : DEFAULT_SEARCH_LIMIT;
 
     // One past the limit: the extra hit is never returned, and its existence
