@@ -315,7 +315,7 @@ both levels.
 
 - [x] xyflow integration; nodes DOM-based (plugin renderers + a11y later, §11)
 - [x] Rigid-body push: custom drag handling + collision/push solver over node extents; chains propagate; at-rest stays put (§5)
-- [x] Durable placement across restarts; derived initial arrangement; "reset arrangement" as the only auto-layout verb (§5) — _server-side durability landed with Epic 2.3 (positions on `nodes`, `PATCH /api/arrangement`, `POST /api/reset` with `scope: "arrangement"`); the renderer still writes to `localStorage` until it adopts those endpoints_
+- [x] Durable placement across restarts; derived initial arrangement; "reset arrangement" as the only auto-layout verb (§5) — _server-side durability landed with Epic 2.3 (positions on `nodes`, `PATCH /api/arrangement`, `POST /api/reset` with `scope: "arrangement"`); the renderer adopted those endpoints in the live path — deferral closed. `GraphSnapshot.positions` (`packages/ui/src/data-source/types.ts`) carries every node's authored position off the same snapshot/`node`-event stream the canvas already subscribes to; `apps/web/src/App.tsx` seeds and reconciles `placements` from it (`reconcileAuthoredPlacements`), a drag persists through `PATCH /api/nodes/:id/position` for one node or `PATCH /api/arrangement` for a whole rigid-body-pushed selection (debounced and coalesced, never dropped, through `createArrangementWriteQueue`), and "reset arrangement" calls `POST /api/reset` (scope `"arrangement"`) then forces a fresh `/api/snapshot` read (`GraphDataSource.refresh`, added because that endpoint publishes nothing on `/ws` by design). `localStorage` remains only for fixture/offline mode and a one-time migration of whatever a pre-upgrade browser already saved there (`localPlacementsToMigrate`) — never a second live writer. Proven end to end, including across a real server restart into a brand new browser context, by `apps/web/e2e/arrangement-durability.spec.ts` (Epic 8.5's canvas e2e gate, arrangement-durability leg)._
 - [x] Selection as the route: selected node reflected in the address; one navigation primitive for click/palette/queue/deep-link (§5)
 
 _Landed unstyled per the design gate (fleet rule 5), against fixture data in
@@ -613,10 +613,11 @@ Also in stage 2: **durable placement**. Node positions are columns on `nodes`
 move one or a whole selection in one transaction, the snapshot and every `node`
 event carry `position` (null meaning "no authored position", which is what
 `deriveInitialArrangement` fills in), and an arrangement survives both a restart
-and a state-directory move. Track B still stores placement in `localStorage`;
-switching it to these endpoints is its own change and is deliberately not made
-here. Deferred: nothing renders the preview yet (Track B), and continue-vs-fresh
-preview is Batch 3 (§4.3)._
+and a state-directory move. Track B switched to these endpoints in the live
+path in the arrangement-server-adoption batch (Epic 3.1's own note carries the
+full account); `localStorage` was the interim store only, never a second
+source of truth once the switch landed. Deferred: nothing renders the preview
+yet (Track B), and continue-vs-fresh preview is Batch 3 (§4.3)._
 
 ### Epic 4.3 — Workspaces (`workspaces`) — _done (domain + git kind)_
 

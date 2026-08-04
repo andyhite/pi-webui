@@ -80,6 +80,7 @@ import {
 } from "./tombstones.js";
 import { remotelyDeletedIds, withConfirmed } from "./reconcile.js";
 import { applyArrangementReset } from "./arrangement-reset.js";
+import { diffDraggedPositions } from "./drag-diff.js";
 import {
   computeAbsoluteScreenExtents,
   toExtentAwareNodes,
@@ -171,21 +172,34 @@ export interface PlotCanvasProps {
    */
   readonly collapsedContainerIds?: ReadonlySet<string>;
   readonly onToggleContainer?: (containerId: string) => void;
-  /** Durable placements, loaded by the host through a PlacementStore. */
+  /**
+   * Durable placements (§5, §12): sparse and explicit-only — an id absent
+   * from this map has nothing authored, and this canvas's own derived
+   * fallback decides where it sits. The host owns loading it (from the
+   * server's authored positions, live; a `PlacementStore` in fixture/
+   * offline mode) and is the one place that persists a change.
+   */
   readonly placements: Placements;
-  /** Called with every node's position whenever an arrangement settles. */
+  /**
+   * Called at drag-stop with only the ids whose position actually changed
+   * during that gesture — the dragged node and whatever the rigid-body push
+   * chain displaced, never every other mounted node the drag left alone
+   * (`drag-diff.ts`). The host persists exactly this delta; nothing wider
+   * has moved.
+   */
   readonly onPlacementsChange: (placements: Placements) => void;
   /**
-   * A one-shot signal for "reset arrangement" (§5's only automatic-layout
-   * verb): bump this (e.g. an incrementing counter) *after* the host has
-   * already written fresh `placements` for every node, and every currently
-   * mounted node jumps to its new placement exactly once. This is
-   * deliberately not a react-to-`placements`-changed effect — durable
-   * placement means an already-mounted node's position must otherwise never
-   * move just because `placements` changed underneath it (a live snapshot
-   * updating some other node's stored spot, say); only a genuine bump of
-   * this counter re-applies positions to nodes already on the canvas.
-   * Omitted or unchanged: nothing resets.
+   * A one-shot signal for re-applying `placements` to every already-mounted
+   * node: bump this (e.g. an incrementing counter) *after* the host has
+   * already written fresh `placements`, and every currently mounted node
+   * jumps to its new placement exactly once. This is deliberately not a
+   * react-to-`placements`-changed effect — durable placement means an
+   * already-mounted node's position must otherwise never move just because
+   * `placements` changed underneath it; only a genuine bump of this counter
+   * does. Two gestures bump it: "reset arrangement" (§5's only automatic-
+   * layout verb) and the host reconciling a live snapshot's authored
+   * position for a node this same client did not just move itself (another
+   * tab's drag, landing here). Omitted or unchanged: nothing moves.
    */
   readonly arrangementEpoch?: number;
   readonly selectedNodeId: string | null;
@@ -1223,9 +1237,26 @@ function CanvasInner({
   // pushing a node inside an expanded container against its siblings is a
   // follow-on refinement (containers are new in this epic; xyflow already
   // clamps a child's position to its parent's extent).
+  //
+  // `dragStartPositions` snapshots every top-level node's position the
+  // moment a gesture begins (the first frame this render's drag has seen),
+  // so drag-stop can persist only what this gesture actually changed —
+  // never every node currently mounted, most of which this drag never
+  // touched (`drag-diff.ts`).
+  const dragStartPositions = useRef<Map<string, Point> | null>(null);
   const onNodeDrag: OnNodeDrag<CanvasNode> = useCallback(
     (_event, dragged) => {
       if (dragged.parentId) return;
+      if (dragStartPositions.current === null) {
+        dragStartPositions.current = new Map(
+          getNodes()
+            .filter((node) => !node.parentId)
+            .map((node) => [
+              node.id,
+              { x: node.position.x, y: node.position.y },
+            ]),
+        );
+      }
       setNodes((current) => {
         const topLevel = current.filter((node) => !node.parentId);
         const extents: NodeExtent[] = topLevel.map((node) => ({
@@ -1247,17 +1278,18 @@ function CanvasInner({
         });
       });
     },
-    [setNodes],
+    [setNodes, getNodes],
   );
 
-  // Durable placement: the settled arrangement — dragged node and everything
-  // it pushed — is persisted when the drag ends.
+  // Durable placement: only what this gesture actually settled — the
+  // dragged node and everything it pushed — is persisted when the drag
+  // ends, diffed against the positions captured at its start.
   const onNodeDragStop: OnNodeDrag<CanvasNode> = useCallback(() => {
-    const settled: Record<string, Point> = {};
-    for (const node of getNodes()) {
-      settled[node.id] = { x: node.position.x, y: node.position.y };
-    }
-    onPlacementsChange(settled);
+    const before = dragStartPositions.current;
+    dragStartPositions.current = null;
+    if (!before) return;
+    const changed = diffDraggedPositions(before, getNodes());
+    if (Object.keys(changed).length > 0) onPlacementsChange(changed);
   }, [getNodes, onPlacementsChange]);
 
   // Multi-select (§5): xyflow's own marquee/modified-click drives node

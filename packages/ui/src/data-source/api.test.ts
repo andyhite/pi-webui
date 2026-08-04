@@ -392,3 +392,75 @@ describe("createApiGraphDataSource.subscribe", () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("createApiGraphDataSource.refresh", () => {
+  it("re-fetches the snapshot into this source's own cached mirror and notifies subscribers (§5, §12)", async () => {
+    const socket = fakeSocket();
+    const createSocket: WebSocketFactory = vi.fn(() => socket);
+    let call = 0;
+    const get = vi.fn(async () => {
+      call += 1;
+      return call === 1
+        ? emptyRawSnapshot(1)
+        : rawSnapshotWithWorkstream(2, "ws_after_refresh");
+    });
+    const http = { get } as unknown as HttpClient;
+
+    const source = createApiGraphDataSource({ http, createSocket });
+    const onSnapshot = vi.fn();
+    source.subscribe(onSnapshot);
+    socket.onopen?.();
+    await flush();
+
+    await source.refresh?.();
+
+    expect(get).toHaveBeenCalledTimes(2);
+    const last = onSnapshot.mock.calls.at(-1)?.[0];
+    expect(last.containers).toEqual([
+      expect.objectContaining({ id: "ws_after_refresh" }),
+    ]);
+  });
+
+  it("supersedes a reconnect's own in-flight resync, so it cannot revert what refresh() already settled", async () => {
+    const socket = fakeSocket();
+    const createSocket: WebSocketFactory = vi.fn(() => socket);
+
+    // The reconnect's own resync (triggered by `socket.onopen?.()` below)
+    // is the first fetch; `refresh()`'s own is the second. Both held open
+    // so the test controls exactly which resolves first.
+    const reconnectFetch = deferred<RawSnapshot>();
+    const refreshFetch = deferred<RawSnapshot>();
+    const get = vi.fn(async (): Promise<RawSnapshot> =>
+      get.mock.calls.length === 1
+        ? reconnectFetch.promise
+        : refreshFetch.promise,
+    );
+    const http = { get } as unknown as HttpClient;
+
+    const source = createApiGraphDataSource({ http, createSocket });
+    const onSnapshot = vi.fn();
+    source.subscribe(onSnapshot);
+    socket.onopen?.(); // starts the reconnect's own resync; its fetch is held open
+
+    const refreshed = source.refresh?.(); // a second, competing fetch, also held open
+    refreshFetch.resolve(rawSnapshotWithWorkstream(9, "ws_refresh"));
+    await refreshed;
+
+    const afterRefresh = onSnapshot.mock.calls.at(-1)?.[0];
+    expect(afterRefresh.containers).toEqual([
+      expect.objectContaining({ id: "ws_refresh" }),
+    ]);
+
+    // The reconnect's own resync finally resolves, with older/different
+    // data. `refresh()` already reassigned `currentBuffer` to its own
+    // buffer, so this resync's own "a newer buffer superseded mine" guard
+    // makes it a no-op rather than reverting what `refresh()` settled.
+    reconnectFetch.resolve(rawSnapshotWithWorkstream(1, "ws_stale"));
+    await flush();
+
+    const final = onSnapshot.mock.calls.at(-1)?.[0];
+    expect(final.containers).toEqual([
+      expect.objectContaining({ id: "ws_refresh" }),
+    ]);
+  });
+});

@@ -15,6 +15,7 @@
 
 import type { ContinueVsFresh, NodeRole } from "@plotroom/core";
 
+import type { Point } from "../solver/push.js";
 import { HttpError, type HttpClient } from "../transport/http.js";
 
 export interface ApiRefusal {
@@ -51,6 +52,12 @@ export interface AddContextEdgeInput {
   readonly from: string;
   readonly to: string;
   readonly ordinal?: number;
+}
+
+/** One node's slot in a batched arrangement move (§5, `PATCH /api/arrangement`). */
+export interface ArrangementEntry {
+  readonly nodeId: string;
+  readonly position: Point;
 }
 
 export interface CreateNoteInput {
@@ -150,6 +157,35 @@ export interface GraphActions {
     input: PlaceNodeInput,
   ): Promise<ActionResult<{ readonly nodeId: string }>>;
   removeNode(nodeId: string): Promise<ActionResult<void>>;
+  /**
+   * Durable placement, one node (§5, §12): the drag gesture that moved
+   * exactly one node with nothing to push — `PATCH /api/nodes/:id/position`,
+   * one transaction, one row. A gesture that displaced neighbours too calls
+   * {@link GraphActions.setArrangement} instead, never this in a loop (one
+   * gesture is one transaction, principle 9).
+   */
+  setNodePosition(nodeId: string, position: Point): Promise<ActionResult<void>>;
+  /**
+   * Durable placement, a whole selection at once (§5, §12): a rigid-body
+   * push displaces neighbours in the same gesture that moved the dragged
+   * node, so the whole settled arrangement is one transaction —
+   * `PATCH /api/arrangement`, never a half-applied move.
+   */
+  setArrangement(
+    positions: readonly ArrangementEntry[],
+  ): Promise<ActionResult<void>>;
+  /**
+   * "Reset arrangement" (§5's only automatic-layout verb), gone durable:
+   * `POST /api/reset` with scope `"arrangement"`, confirmed inline — the
+   * operator's own gesture *is* the confirmation, the same as every other
+   * one-click verb here, and the scope removes nothing but where things sit
+   * (`apps/server/src/maintenance/reset.ts`). The caller still has to force
+   * a fresh snapshot afterward (`GraphDataSource.refresh`): this clears the
+   * authored rows but publishes nothing on `/ws`.
+   */
+  resetArrangement(): Promise<
+    ActionResult<{ readonly arrangedNodesCleared: number }>
+  >;
   addContextEdge(
     input: AddContextEdgeInput,
   ): Promise<ActionResult<{ readonly edgeId: string }>>;
@@ -339,6 +375,29 @@ export function createApiActions(http: HttpClient): GraphActions {
     removeNode: (nodeId) =>
       asAction(async () => {
         await http.delete(apiPath("/api/nodes", nodeId));
+      }),
+
+    setNodePosition: (nodeId, position) =>
+      asAction(async () => {
+        await http.patch(`${apiPath("/api/nodes", nodeId)}/position`, {
+          position,
+        });
+      }),
+
+    setArrangement: (positions) =>
+      asAction(async () => {
+        await http.patch("/api/arrangement", { positions });
+      }),
+
+    resetArrangement: () =>
+      asAction(async () => {
+        const response = await http.post<{
+          confirmed: boolean;
+          result: { readonly removed: Readonly<Record<string, number>> };
+        }>("/api/reset", { scope: "arrangement", confirm: true });
+        return {
+          arrangedNodesCleared: response.result.removed.arrangedNodes ?? 0,
+        };
       }),
 
     addContextEdge: (input) =>

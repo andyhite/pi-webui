@@ -384,6 +384,10 @@ export const FIXTURE_SNAPSHOT: GraphSnapshot = {
   warningFacts: FIXTURE_WARNING_FACTS_MAP,
   paletteEntries: FIXTURE_PALETTE_ENTRIES,
   contextEdges: FIXTURE_CONTEXT_EDGES,
+  // Fixture/offline mode never has a server-authored position (§5's fallback
+  // stays local, `createWebStoragePlacementStore` below) — every node is
+  // "nothing authored yet", same as a fresh install's live graph.
+  positions: new Map(),
 };
 
 /**

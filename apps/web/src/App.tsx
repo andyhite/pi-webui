@@ -65,6 +65,7 @@ import {
   createFixtureSearchDataSource,
   createFixtureSessionDataSource,
   createFixtureSettingsDataSource,
+  createArrangementWriteQueue,
   createHttpClient,
   createInBoxContributionRegistry,
   createNote,
@@ -72,6 +73,8 @@ import {
   createUnavailableLifecycleActions,
   createWebStoragePlacementStore,
   createWebStorageSessionDraftsStore,
+  localPlacementsToMigrate,
+  reconcileAuthoredPlacements,
   commandPaletteItemsFromRegistry,
   commandPaletteItemsFromVerbs,
   decideNotification,
@@ -121,12 +124,21 @@ import {
 } from "./fixtures.js";
 
 /**
- * Placement is durable across reloads (spec §5). localStorage stands in for
- * a server-side placement store (none exists — position is client-owned,
- * not part of `PlacedNode`); the canvas only ever sees the `PlacementStore`
- * interface, so a future swap would not touch it.
+ * Placement is durable across reloads (spec §5, §12). The server is the
+ * source of truth in the live path now — every node's authored position
+ * travels on the graph snapshot and every `node` event, and a drag persists
+ * through `PATCH /api/nodes/:id/position` / `PATCH /api/arrangement` below
+ * (Epic 3.1's deferral: "the renderer still writes to localStorage until it
+ * adopts those endpoints" — closed). This store is kept for exactly two
+ * things now, both deliberately *not* the live write path: fixture/offline
+ * mode (`VITE_USE_FIXTURES=1`, where there is no server to author anything),
+ * and reading whatever a pre-upgrade browser already saved here, once, to
+ * migrate it onto the server rather than silently discarding an operator's
+ * existing arrangement (`migrateLocalPlacements` below). The live path never
+ * calls `.save()` on this — two writers of the same fact is exactly the
+ * drift principle 8 exists to prevent.
  */
-const placementStore = createWebStoragePlacementStore(
+const localPlacementStore = createWebStoragePlacementStore(
   window.localStorage,
   "plotroom.placements.v1",
 );
@@ -347,6 +359,32 @@ function Board() {
   // spec §5) — "reset arrangement" also bumps this counter so the canvas
   // applies the fresh positions to nodes already on screen, exactly once.
   const [arrangementEpoch, setArrangementEpoch] = useState(0);
+  /**
+   * Durable placement, the write queue (§5, §12): every drag-stop and every
+   * placed-with-a-position palette drop enqueues here rather than calling
+   * the API directly, so a burst of quick gestures coalesces into one
+   * request instead of several that could land out of order — "debounce
+   * sensibly, never drop the final state." `actions` itself satisfies
+   * `ArrangementWriter` (it has both methods the queue calls); created once
+   * per mount, since `log` inside `onFailure` always forwards to the
+   * *current* gesture log through `setGestureLog`'s stable functional
+   * updater, however old the closure that captured it is.
+   */
+  const arrangementWriteQueueRef = useRef<ReturnType<
+    typeof createArrangementWriteQueue
+  > | null>(null);
+  if (arrangementWriteQueueRef.current === null) {
+    arrangementWriteQueueRef.current = createArrangementWriteQueue(actions, {
+      onFailure: (result) => {
+        log(
+          `refused: saving the arrangement - ${
+            result.refusal?.message ?? "the write did not go through"
+          }`,
+        );
+      },
+    });
+  }
+  const arrangementWriteQueue = arrangementWriteQueueRef.current;
   // The run gesture's client-side guard (§4.1, principle 9 at the gesture
   // level): a command node id stays in this set for exactly as long as its
   // POST /api/runs is outstanding, so a double-click cannot mint a second
@@ -486,11 +524,28 @@ function Board() {
     setGestureLog((current) => [...current, entry]);
   }
 
+  // Durable placement, the live path (§5, §12): the graph snapshot already
+  // carries every node's authored position, so `placements` is seeded and
+  // reconciled from it (`reconcileAuthoredPlacements`) rather than a
+  // separate load below. Fixture/offline mode has no server to author
+  // anything, so it still reads `localPlacementStore` once at mount, the
+  // same as before. Kept live so drag-stop can diff against it without
+  // depending on the `placements` state directly (which would re-fire this
+  // effect on every drag).
+  const placementsRef = useRef<Placements | null>(null);
+  placementsRef.current = placements;
+  // Guards the local→server migration (`localPlacementsToMigrate`) to fire
+  // at most once per mount, regardless of how many snapshots arrive while
+  // its own async push is still in flight.
+  const migrationAttempted = useRef(false);
+
   useEffect(() => {
     let cancelled = false;
-    void placementStore.load().then((loaded) => {
-      if (!cancelled) setPlacements(loaded);
-    });
+    if (!LIVE) {
+      void localPlacementStore.load().then((loaded) => {
+        if (!cancelled) setPlacements(loaded);
+      });
+    }
     const unsubscribe = graphDataSource.subscribe((snapshot) => {
       if (!cancelled) setGraph(snapshot);
     });
@@ -499,6 +554,66 @@ function Board() {
       unsubscribe();
     };
   }, []);
+
+  // Durable placement, reconciled (§5, §12): every snapshot — not only a
+  // placement one — carries every node's authored position, so this folds
+  // it into `placements` every time `graph` changes. The very first
+  // application (this mount's first snapshot) always applies, even when
+  // there is nothing to reconcile yet, because that is what flips
+  // `placements` from `null` to `{}` and unblocks the canvas's first
+  // render; every application after that only touches state and bumps
+  // `arrangementEpoch` when something genuinely changed — this same
+  // client's own optimistic write, echoed back, changes nothing and moves
+  // nothing on screen a second time.
+  useEffect(() => {
+    if (!LIVE || !graph) return;
+
+    const authoredCount = [...graph.positions.values()].filter(
+      (position) => position !== null,
+    ).length;
+
+    if (!migrationAttempted.current) {
+      migrationAttempted.current = true;
+      // One-time migration off the pre-upgrade client-only store (Epic 3.1's
+      // deferral, closed): a browser already holding positions here,
+      // against a server that has authored none yet, is an operator's
+      // existing arrangement about to be silently discarded if nothing
+      // pushes it across — principle 12 forbids that. Pushed once, as a
+      // batch, then the local copy is cleared so nothing dual-writes
+      // afterward; a refusal is surfaced (never silently dropped) and the
+      // local copy is deliberately left in place so a retry on the next
+      // load can still find it.
+      void localPlacementStore.load().then(async (local) => {
+        const toMigrate = localPlacementsToMigrate(local, authoredCount);
+        if (!toMigrate) return;
+        const entries = Object.entries(toMigrate).map(([nodeId, position]) => ({
+          nodeId,
+          position,
+        }));
+        const result = await actions.setArrangement(entries);
+        if (!result.ok) {
+          log(
+            `refused: migrating ${entries.length} locally-stored position(s) to the server - ${result.refusal.message}`,
+          );
+          return;
+        }
+        window.localStorage.removeItem("plotroom.placements.v1");
+        log(
+          `migrated ${entries.length} locally-stored position(s) to the server`,
+        );
+      });
+    }
+
+    const before = placementsRef.current;
+    const isFirstApplication = before === null;
+    const { placements: next, changed } = reconcileAuthoredPlacements(
+      before ?? {},
+      graph.positions,
+    );
+    if (!isFirstApplication && !changed) return;
+    setPlacements(next);
+    if (!isFirstApplication) setArrangementEpoch((epoch) => epoch + 1);
+  }, [graph]);
 
   // "One derivation, many surfaces" (§7): every attention-facing render
   // below — off-screen markers, node badges, header count, window title,
@@ -877,31 +992,62 @@ function Board() {
         }
         log(`placed ${entryId} as node ${result.value.nodeId}`);
         if (position === undefined) return;
-        setPlacements((current) => {
-          const next = { ...current, [result.value.nodeId]: position };
-          void placementStore.save(next);
-          return next;
-        });
+        // Durable placement, one node (§5, §12): the server is the only place
+        // this lands now — optimistic locally so the drop shows up where it
+        // landed immediately, enqueued through the same write queue a drag
+        // uses so a drop right after a drag still coalesces sensibly.
+        setPlacements((current) => ({
+          ...current,
+          [result.value.nodeId]: position,
+        }));
+        arrangementWriteQueue.enqueue({ [result.value.nodeId]: position });
       });
   }
 
   /** §5's only automatic-layout verb: re-derive every position from structure. */
   function resetArrangement(): void {
     if (!graph) return;
-    const next = deriveInitialArrangement(
-      graph.nodes.map((node) => ({
-        id: node.id,
-        ...(node.containerId ? { containerId: node.containerId } : {}),
-      })),
-      graph.edges.map((edge) => ({ source: edge.source, target: edge.target })),
-      graph.containers.map((container) => ({ id: container.id })),
-    );
-    setPlacements(next);
-    void placementStore.save(next);
-    // A fresh `placements` value alone never moves an already-mounted node;
-    // this bump is what actually applies it, exactly once.
-    setArrangementEpoch((epoch) => epoch + 1);
-    log("reset arrangement: re-derived from graph structure");
+
+    if (!LIVE) {
+      // Fixture/offline mode has no server to clear; re-derive and save
+      // locally, exactly as before.
+      const next = deriveInitialArrangement(
+        graph.nodes.map((node) => ({
+          id: node.id,
+          ...(node.containerId ? { containerId: node.containerId } : {}),
+        })),
+        graph.edges.map((edge) => ({
+          source: edge.source,
+          target: edge.target,
+        })),
+        graph.containers.map((container) => ({ id: container.id })),
+      );
+      setPlacements(next);
+      void localPlacementStore.save(next);
+      setArrangementEpoch((epoch) => epoch + 1);
+      log("reset arrangement: re-derived from graph structure");
+      return;
+    }
+
+    // Durable, server-side (§5, §12): `POST /api/reset` (scope
+    // `"arrangement"`) clears every authored position — the operator's own
+    // click is the confirmation. That endpoint publishes nothing on `/ws`
+    // (`apps/server/src/maintenance/reset.ts`), so `refresh()` forces a
+    // fresh `/api/snapshot` read; the reconcile effect below then folds the
+    // now-null positions into `placements` and bumps `arrangementEpoch`
+    // itself — one path for "authored positions changed", never a second
+    // one duplicated here.
+    void actions.resetArrangement().then((result) => {
+      if (!result.ok) {
+        log(`refused: reset arrangement - ${result.refusal.message}`);
+        return;
+      }
+      void graphDataSource.refresh?.().then(() => {
+        log(
+          `reset arrangement: cleared ${result.value.arrangedNodesCleared} authored position(s); re-derived from graph structure`,
+        );
+      });
+    });
   }
 
   /**
@@ -1565,9 +1711,23 @@ function Board() {
               })
             }
             placements={placements}
-            onPlacementsChange={(next) => {
-              setPlacements(next);
-              void placementStore.save(next);
+            onPlacementsChange={(delta) => {
+              // `delta` is only what this gesture actually moved — the
+              // dragged node and whatever the rigid-body push chain
+              // displaced (`PlotCanvas`'s own `drag-diff.ts`), never every
+              // node currently on screen.
+              setPlacements((current) => ({ ...current, ...delta }));
+              if (LIVE) {
+                arrangementWriteQueue.enqueue(delta);
+              } else {
+                // Fixture/offline mode still has no server, so the full
+                // merged map is what localStorage keeps durable across a
+                // reload, exactly as before.
+                void localPlacementStore.save({
+                  ...(placementsRef.current ?? {}),
+                  ...delta,
+                });
+              }
             }}
             selectedNodeId={selectedNodeId}
             onSelectNode={select}

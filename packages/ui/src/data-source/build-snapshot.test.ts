@@ -76,6 +76,7 @@ describe("buildGraphSnapshot", () => {
       warningFacts: new Map(),
       paletteEntries: [],
       contextEdges: [],
+      positions: new Map(),
     });
   });
 
@@ -99,6 +100,37 @@ describe("buildGraphSnapshot", () => {
         role: "content",
       }),
     ]);
+  });
+
+  it("carries a node's authored position (§5, §12), and null when none is authored", () => {
+    const authored: PlacedNode = {
+      id: "n1" as PlacedNode["id"],
+      role: "content",
+      refId: ticket.id,
+      workstreamId: null,
+      createdAt: 0,
+      deletedAt: null,
+      position: { x: 10, y: 20 },
+    };
+    const unauthored: PlacedNode = {
+      id: "n2" as PlacedNode["id"],
+      role: "content",
+      refId: ticket.id,
+      workstreamId: null,
+      createdAt: 0,
+      deletedAt: null,
+      position: null,
+    };
+    const state = stateFromSnapshot(
+      rawSnapshot({ objects: [ticket], nodes: [authored, unauthored] }),
+    );
+    const snapshot = buildGraphSnapshot(state, new Map());
+    expect(snapshot.positions).toEqual(
+      new Map([
+        ["n1", { x: 10, y: 20 }],
+        ["n2", null],
+      ]),
+    );
   });
 
   it("labels a content node standing for an unbound output placeholder", () => {

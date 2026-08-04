@@ -277,6 +277,27 @@ export function createApiGraphDataSource(
       return buildGraphSnapshot(freshState, content, cardViews);
     },
 
+    /**
+     * Re-fetch `/api/snapshot` into *this source's own* cached mirror (never
+     * a caller's private copy the way `load()` is) and notify every
+     * subscriber, exactly as if a `/ws` event had just arrived — the escape
+     * hatch for the one write with nothing on the bus (`POST /api/reset`,
+     * scope `"arrangement"`). Implemented as *the same* resync `reconnect`
+     * runs, over a freshly minted buffer set as `currentBuffer` — never a
+     * second, competing code path: minting the buffer first is what makes
+     * this correct against a reconnect already resyncing when `refresh()`
+     * is called — `resync`'s own "a newer buffer superseded mine" guard
+     * then makes the older one a no-op once its fetch finally resolves,
+     * exactly as it already does for two overlapping reconnects. A message
+     * arriving on the socket while this fetch is in flight buffers into
+     * *this* buffer for the same reason, and is applied after, in order.
+     */
+    async refresh(): Promise<void> {
+      const buffer: BufferState = { buffering: true, events: [] };
+      currentBuffer = buffer;
+      await resync(buffer);
+    },
+
     subscribe(onSnapshot: (snapshot: GraphSnapshot) => void): Unsubscribe {
       listeners.add(onSnapshot);
       if (syncedOnce) {

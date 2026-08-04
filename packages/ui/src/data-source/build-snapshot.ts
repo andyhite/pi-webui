@@ -121,6 +121,14 @@ export function buildGraphSnapshot(
 
   const paletteEntries = buildPaletteEntries(state);
 
+  // Durable placement (§5, §12): the authored position off the board's own
+  // `PlacedNode`, never derived here — `null`/absent both mean "nothing
+  // authored yet", which is the host's cue to fall back to a derived initial
+  // arrangement rather than a value this function invents.
+  const positions = new Map(
+    liveNodes.map((node) => [node.id, node.position ?? null]),
+  );
+
   return {
     nodes,
     edges,
@@ -128,6 +136,7 @@ export function buildGraphSnapshot(
     warningFacts,
     paletteEntries,
     contextEdges,
+    positions,
   };
 }
 
