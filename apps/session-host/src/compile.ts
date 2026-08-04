@@ -1,13 +1,17 @@
 import {
+  closeSync,
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { FRAME_FD } from "@plotroom/core";
 
 import { WORKER_SELECTOR_PREFIX } from "./worker-dispatch.js";
 
@@ -151,6 +155,12 @@ export interface SmokeLaunch {
   readonly running: boolean;
   /** `null` when it left on a signal — its own or the probe's kill. */
   readonly code: number | null;
+  /**
+   * What came back over the **frame channel** on fd 3 (issue #109), which is
+   * where the session host frames and no longer stdout — so this check reads the
+   * channel the server reads rather than the one the SDK prints to.
+   */
+  readonly frames: string;
   readonly stdout: string;
   readonly stderr: string;
 }
@@ -158,14 +168,18 @@ export interface SmokeLaunch {
 /**
  * Did the artifact start? PlotRoom's parser refusing an unknown argument is the
  * cheapest proof — the binary ran, the SDK's module graph loaded, the native
- * addon resolved, our own code decided, and a frame reached stdout and was
- * flushed — and it needs no credentials, model or workspace.
+ * addon resolved, our own code decided, and a frame reached the frame channel —
+ * and it needs no credentials, model or workspace.
+ *
+ * Reading fd 3 also proves the artifact was given one and used it: a binary that
+ * framed to stdout would exit 2 with the same sentence and this would refuse it,
+ * which is the regression issue #109 is about.
  */
 export function startedAndRefused(launch: SmokeLaunch): boolean {
   return (
     !launch.running &&
     launch.code === 2 &&
-    firstFrame(launch.stdout)?.type === "fatal"
+    firstFrame(launch.frames)?.type === "fatal"
   );
 }
 
@@ -231,6 +245,23 @@ export async function smokeTest(binary: string): Promise<void> {
           `so a session on it loses every tool that needs a subprocess${describe(worker)}`,
       );
     }
+
+    // The channel as the *server* opens it, which the two launches above cannot
+    // show: they are Bun spawning Bun with a file at fd 3, and the server is
+    // Node spawning this artifact with a fourth **pipe**. That is a different
+    // mechanism, and on Windows a documented one — libuv hands fds above 2 to a
+    // child through the MSVCRT inherited-handle block, and this artifact is not
+    // an MSVCRT program. If it does not arrive the artifact refuses every
+    // session (issue #109), so the compile matrix is where that has to be a fact
+    // rather than an assumption about the platform.
+    const overNodePipe = await frameChannelOverNodePipe(binary);
+    if (overNodePipe === null) {
+      throw new SessionHostCompileError(
+        "the compiled session host got no writable frame channel when a Node " +
+          "parent spawned it with a fourth pipe, which is exactly how the " +
+          "server spawns it — every session on this artifact would refuse to start",
+      );
+    }
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -242,45 +273,113 @@ async function launch(
   home: string,
   bound: number = START_TIMEOUT_MS,
 ): Promise<SmokeLaunch> {
-  const child = Bun.spawn([binary, ...args], {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    env: {
-      ...environment(),
-      HOME: home,
-      USERPROFILE: home,
-      XDG_DATA_HOME: join(home, "share"),
-      LOCALAPPDATA: join(home, "AppData", "Local"),
-    },
-  });
+  // The frame channel the session host writes (issue #109), which it refuses to
+  // start without — so this probe has to supply it or it would be testing the
+  // refusal instead of the binary. A file rather than a pipe: the artifact may be
+  // killed at the bound, and a file still holds whatever it managed to write,
+  // with no reader to drain and no buffer to lose.
+  const frameFile = join(home, "frames.ndjson");
+  const frameFd = openSync(frameFile, "w");
 
-  // Drained from the start, not after the race: a child that filled the pipe
-  // buffer would block on its own write, never exit, and be reported as still
-  // running — the one answer that means health here.
-  const stdout = new Response(child.stdout).text();
-  const stderr = new Response(child.stderr).text();
+  try {
+    const child = Bun.spawn([binary, ...args], {
+      // `stdio` alone: given both forms `Bun.spawn` takes this one outright, and
+      // a second copy of the same three slots is one a later edit can change
+      // without changing anything.
+      stdio: ["ignore", "pipe", "pipe", frameFd],
+      env: {
+        ...environment(),
+        HOME: home,
+        USERPROFILE: home,
+        XDG_DATA_HOME: join(home, "share"),
+        LOCALAPPDATA: join(home, "AppData", "Local"),
+      },
+    });
 
-  // The bound is timed here rather than handed to `Bun.spawn` because a killed
-  // child's exit code is the platform's business (143 here, something else on
-  // Windows); reading one as "was it still running?" would make the answer depend
-  // on where the compile ran. A binary that hangs at module init is one of the
-  // failures this check exists to catch, so the bound itself is not optional.
-  let timer: Timer | undefined;
-  const running = await Promise.race([
-    child.exited.then(() => false),
-    new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => {
-        resolve(true);
-      }, bound);
-    }),
-  ]);
-  clearTimeout(timer);
-  if (running) child.kill();
+    // Drained from the start, not after the race: a child that filled the pipe
+    // buffer would block on its own write, never exit, and be reported as still
+    // running — the one answer that means health here.
+    const stdout = new Response(child.stdout).text();
+    const stderr = new Response(child.stderr).text();
 
-  const [out, err] = await Promise.all([stdout, stderr]);
+    // The bound is timed here rather than handed to `Bun.spawn` because a killed
+    // child's exit code is the platform's business (143 here, something else on
+    // Windows); reading one as "was it still running?" would make the answer depend
+    // on where the compile ran. A binary that hangs at module init is one of the
+    // failures this check exists to catch, so the bound itself is not optional.
+    let timer: Timer | undefined;
+    const running = await Promise.race([
+      child.exited.then(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => {
+          resolve(true);
+        }, bound);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (running) child.kill();
+
+    const [out, err] = await Promise.all([stdout, stderr]);
+    await child.exited;
+    return {
+      running,
+      code: child.exitCode,
+      frames: readFileSync(frameFile, "utf8"),
+      stdout: out,
+      stderr: err,
+    };
+  } finally {
+    closeSync(frameFd);
+  }
+}
+
+/**
+ * What the artifact wrote to a fourth pipe opened by **Node**, or `null` if
+ * nothing arrived.
+ *
+ * Node, not Bun, and a pipe, not a file: this is the one check that runs the
+ * server's own mechanism (`apps/server/src/runtime/omp.ts`), and it is a
+ * subprocess rather than an import because this file runs under Bun and Bun's
+ * `node:child_process` is its own implementation, not libuv's — testing that
+ * would answer a different question than the one being asked.
+ *
+ * The parent script exits as soon as the artifact does, so the bound here is the
+ * artifact's own refusal path, which the first check has already proven is fast.
+ */
+async function frameChannelOverNodePipe(
+  binary: string,
+): Promise<string | null> {
+  const parent = `
+    const { spawn } = require("node:child_process");
+    const child = spawn(process.argv[1], ["--not-a-session-host-flag"], {
+      stdio: ["pipe", "pipe", "pipe", "pipe"],
+    });
+    let frames = "";
+    child.stdio[${FRAME_FD.toString()}].on("data", (chunk) => { frames += chunk; });
+    child.on("exit", () => { process.stdout.write(frames); });
+  `;
+
+  let child;
+  try {
+    child = Bun.spawn(["node", "-e", parent, binary], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: environment(),
+    });
+  } catch (error) {
+    // No `node` is a check that could not run, which is not the same answer as a
+    // check that failed — and reporting it as the latter would tell whoever reads
+    // the compile output that their artifact is broken.
+    throw new SessionHostCompileError(
+      `the frame-channel check needs \`node\` on PATH to spawn this artifact the way the server does: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
+  const frames = await new Response(child.stdout).text();
   await child.exited;
-  return { running, code: child.exitCode, stdout: out, stderr: err };
+
+  return firstFrame(frames)?.type === "fatal" ? frames : null;
 }
 
 /** `Bun.spawn` rejects the `undefined` slots `process.env` can carry. */
@@ -298,13 +397,14 @@ function describe(launch: SmokeLaunch): string {
     : `exit ${launch.code === null ? "on a signal" : launch.code.toString()}`;
   return (
     `: ${outcome}\n` +
+    `frames (fd 3): ${launch.frames.trim() || "(empty)"}\n` +
     `stdout: ${launch.stdout.trim() || "(empty)"}\n` +
     `stderr: ${launch.stderr.trim() || "(empty)"}`
   );
 }
 
-function firstFrame(stdout: string): { type?: string } | null {
-  const line = stdout.split("\n", 1)[0];
+function firstFrame(frames: string): { type?: string } | null {
+  const line = frames.split("\n", 1)[0];
   if (line === undefined || line.length === 0) return null;
   try {
     const frame: unknown = JSON.parse(line);

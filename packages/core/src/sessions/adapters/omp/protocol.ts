@@ -19,7 +19,23 @@ import type {
  * nothing else on the pipe to confuse it with.
  */
 
-/** Frames the sidecar writes to stdout, one JSON object per line. */
+/**
+ * The private fd the frames travel over (issue #109), and the one place either
+ * end learns the number.
+ *
+ * **Not stdout.** The sidecar embeds a vendor agent SDK whose native addon
+ * prints, and a vendor write interleaving inside a frame corrupted it — the
+ * adapter read an unparseable line and the observation vanished, in a system
+ * whose record *is* the observation log. A channel nothing else holds removes
+ * that rather than tolerating it.
+ *
+ * Here rather than in either end, because a server that spawned fd 3 and a
+ * sidecar that wrote fd 4 would be a session host that reports nothing at all,
+ * and both ends already import this package.
+ */
+export const FRAME_FD = 3;
+
+/** Frames the sidecar writes to the frame channel, one JSON object per line. */
 export type SessionHostEvent =
   /**
    * The native session exists and is addressable. Sent exactly once, before
@@ -49,9 +65,14 @@ const EVENT_TYPES: Record<string, true> = {
 };
 
 /**
- * Parse one frame. An unreadable line is `unknown`, never a throw: the adapter
- * must survive a sidecar that logged where it should have framed, and a crash
- * here would take the session with it.
+ * Parse one frame. An unreadable line is `unknown`, never a throw: a crash here
+ * would take the session with it, and the rest of the stream is worth having.
+ *
+ * On a channel only PlotRoom writes, `unknown` no longer means "the sidecar
+ * logged where it should have framed" — it means a frame arrived damaged and an
+ * observation is gone. Which is why the adapter **reports** one rather than
+ * dropping it (issue #109); this function's job is still only to refuse to
+ * guess what the line was.
  */
 export function parseSessionHostEvent(line: string): SessionHostEvent {
   let value: unknown;

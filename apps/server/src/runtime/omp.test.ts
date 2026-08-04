@@ -9,7 +9,7 @@ import type {
 } from "@plotroom/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createOmpRuntime } from "./omp.js";
+import { createOmpRuntime, FRAME_FD } from "./omp.js";
 
 /**
  * The process half of the seam, against a stand-in sidecar.
@@ -191,6 +191,34 @@ describe("the session host as a spawned process", () => {
       }),
     ).rejects.toThrow("no authenticated model available");
   }, 20_000);
+
+  it("keeps a frame intact while the SDK floods stdout (issue #109)", async () => {
+    const handle = await runtime().start({
+      ...LAUNCH,
+      prompt: "noisy-stdout",
+      workspacePath: workdir,
+    });
+
+    // The stand-in writes half a frame, then a megabyte to stdout, then the
+    // other half. A megabyte rather than "past 64KB": libuv gives spawned stdio
+    // a socketpair whose capacity is `net.core.wmem_default` (212992 here) and
+    // tunable, so a flood sized just over it goes vacuous on a tuned runner and
+    // still passes — testing less, silently.
+    const iterator = handle.observations()[Symbol.asyncIterator]();
+    let text: string | null = null;
+    while (text === null) {
+      const next = await iterator.next();
+      if (next.done === true) break;
+      if (next.value.kind === "output-delta") text = next.value.text;
+      // A frame damaged by the flood would arrive as this instead, which is what
+      // the shared channel produced and what fd 3 makes impossible.
+      expect(next.value.kind).not.toBe("runtime-error");
+    }
+
+    expect(text).toBe("survived");
+
+    await handle.stop("abort");
+  }, 20_000);
 });
 
 /**
@@ -217,12 +245,23 @@ async function gone(pid: number): Promise<boolean> {
  * A session host that speaks PlotRoom's frames and nothing else — no SDK, no
  * model. Its behaviour is chosen by the prompt, which is how one script covers
  * every case above.
+ *
+ * Frames go to the frame channel, like the real one (issue #109) — the fd is
+ * interpolated rather than written out, because a stand-in that agreed with an
+ * older number would prove nothing about the server. `noisy-stdout` is the case
+ * that used to corrupt them, and it now proves it cannot.
  */
 const STAND_IN = `#!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { closeSync } from "node:fs";
+import { closeSync, writeSync } from "node:fs";
 
-const write = (frame) => process.stdout.write(JSON.stringify(frame) + "\\n");
+const write = (frame) => {
+  const bytes = Buffer.from(JSON.stringify(frame) + "\\n", "utf8");
+  let written = 0;
+  while (written < bytes.length) {
+    written += writeSync(${FRAME_FD}, bytes, written, bytes.length - written);
+  }
+};
 const observe = (observation) => write({ type: "observation", observation });
 
 let buffer = "";
@@ -251,6 +290,21 @@ process.stdin.on("data", (chunk) => {
         process.stdin.destroy();
         closeSync(0);
         observe({ kind: "output-delta", text: "stdin-closed", at: Date.now() });
+        continue;
+      }
+      if (command.text === "noisy-stdout") {
+        // Exactly what the SDK's native addon does, and exactly where it used to
+        // land: interleaved between two halves of a frame. On fd 3 it cannot,
+        // because these two writes are not the same channel any more.
+        const bytes = Buffer.from(JSON.stringify({
+          type: "observation",
+          observation: { kind: "output-delta", text: "survived", at: Date.now() },
+        }) + "\\n", "utf8");
+        const half = Math.floor(bytes.length / 2);
+        writeSync(${FRAME_FD}, bytes, 0, half);
+        process.stdout.write("Downloading native addon...\\n");
+        writeSync(1, Buffer.from("x".repeat(1_000_000), "utf8"));
+        writeSync(${FRAME_FD}, bytes, half, bytes.length - half);
         continue;
       }
       if (command.text === "spawn-child") {

@@ -40,6 +40,13 @@ import {
  */
 export const OMP_ADAPTER_ID = "omp-session-host";
 
+/**
+ * How much of a damaged frame goes into the observation that reports it. Enough
+ * to recognise which frame was lost, not enough for one corrupt line to become
+ * the largest thing in the log.
+ */
+const UNREADABLE_FRAME_PREVIEW = 200;
+
 export const OMP_CAPABILITIES: RuntimeCapabilities = {
   // Native branching exists (`session.branch(entryId)`) but its arithmetic is
   // exclusive of the branched entry, which is not what `TranscriptPoint` means.
@@ -68,8 +75,17 @@ export const OMP_CAPABILITIES: RuntimeCapabilities = {
 /** One live session-host process, as the adapter needs it. */
 export interface SessionHostProcess {
   write(line: string): void;
-  /** Raw stdout chunks; framing is this module's job, not the caller's. */
-  chunks(): AsyncIterable<string>;
+  /**
+   * Raw chunks of the sidecar's **private frame channel** — not its stdout
+   * (issue #109). The embedded SDK and its native addon print to stdout, and a
+   * vendor write interleaving inside a frame corrupted it silently: the
+   * observation vanished from the one record the product has. A channel nothing
+   * else can reach removes the failure rather than tolerating it, which is why
+   * an unreadable line on it is now reported instead of dropped.
+   *
+   * Framing is this module's job, not the caller's.
+   */
+  frameChunks(): AsyncIterable<string>;
   /**
    * "graceful" waits for the sidecar to wind down after its `stop` command and
    * escalates if it will not; "abort" terminates the process tree at once.
@@ -187,6 +203,15 @@ class SessionHostHandle implements RuntimeSessionHandle {
   >();
 
   #ref: RuntimeSessionRef | null = null;
+  /**
+   * How many frames arrived damaged. Counted rather than reported one by one,
+   * because every observation advances the silence clock `deriveSessionHealth`
+   * reads: a sidecar spraying unreadable lines would look busy and healthy for
+   * as long as it kept spraying, which is the exact stall §7.2 exists to catch.
+   * The first one is reported when it happens and the total when the stream
+   * ends, so the count is in the record and the clock is not held open by it.
+   */
+  #damagedFrames = 0;
   #ready: {
     resolve: () => void;
     reject: (error: Error) => void;
@@ -300,7 +325,7 @@ class SessionHostHandle implements RuntimeSessionHandle {
   async #read(): Promise<void> {
     let buffer = "";
     try {
-      for await (const chunk of this.#process.chunks()) {
+      for await (const chunk of this.#process.frameChunks()) {
         buffer += chunk;
         const { lines, rest } = splitJsonLines(buffer);
         buffer = rest;
@@ -326,6 +351,18 @@ class SessionHostHandle implements RuntimeSessionHandle {
     this.#settleReady(ended);
     for (const waiting of this.#pending.values()) waiting.reject(ended);
     this.#pending.clear();
+
+    // The total, once, where it cannot hold the silence clock open: the first
+    // damaged frame was reported as it happened, and this says how many followed
+    // it, so the record states the size of the loss rather than only its start.
+    if (this.#damagedFrames > 1) {
+      this.#queue.push({
+        kind: "runtime-error",
+        message: `${this.#damagedFrames.toString()} session-host frames were unreadable, so that many observations were lost`,
+        fatal: false,
+        at: this.#now(),
+      });
+    }
 
     this.#queue.push({
       kind: "session-ended",
@@ -376,8 +413,28 @@ class SessionHostHandle implements RuntimeSessionHandle {
         return;
 
       case "unknown":
-        // A line PlotRoom cannot read is dropped, never thrown: the sidecar's
-        // stdout is a stream we share with whatever the SDK decides to print.
+        // Nothing but PlotRoom writes this channel (issue #109), so an
+        // unreadable line is not the vendor logging where it should have framed —
+        // it is a frame that arrived damaged, and an observation is gone. Still
+        // not thrown, because the session is alive and the rest of the stream is
+        // worth having; recorded rather than dropped, because the log **is** the
+        // record and a loss nobody wrote down is the quiet degradation principle
+        // 12 forbids. Non-fatal, for the same reason: the session did not end.
+        this.#damagedFrames += 1;
+        // Only the first, here. The total arrives when the stream ends, so a
+        // sidecar spraying garbage cannot hold the silence clock open (§7.2) or
+        // write a row per line into the observation log.
+        if (this.#damagedFrames > 1) return;
+
+        // The damaged bytes go in bounded, and the message states the full
+        // length beside the prefix — an unbounded one could be a whole
+        // interleaved output delta, and a bare prefix would hide how much.
+        this.#queue.push({
+          kind: "runtime-error",
+          message: `unreadable session-host frame (${line.length.toString()} chars), so one observation was lost: ${line.slice(0, UNREADABLE_FRAME_PREVIEW)}`,
+          fatal: false,
+          at,
+        });
         return;
     }
   }

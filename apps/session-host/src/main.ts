@@ -1,4 +1,5 @@
-import type { SessionHostEvent } from "@plotroom/core";
+import { writeSync } from "node:fs";
+import { FRAME_FD, type SessionHostEvent } from "@plotroom/core";
 import {
   AgentRegistry,
   SessionManager,
@@ -33,13 +34,45 @@ import { dispatchWorkerSelector } from "./worker-dispatch.js";
  * so it is forwarded knowingly rather than by omission.
  */
 
+/** Nothing to write: the fd either accepts a zero-length write or it is not one. */
+const EMPTY_PROBE = Buffer.alloc(0);
+
+/** Said once, because a channel that is gone stays gone. */
+let frameChannelLost = false;
+
 /**
  * Frames go out synchronously in write order. Nothing here awaits the pipe: an
  * observation reordered behind another would be a transcript that happened in a
- * different order than the session did.
+ * different order than the session did — and a synchronous write to a blocking
+ * pipe is also what makes the flush-before-exit dance unnecessary, because a
+ * frame is in the pipe by the time this returns rather than in a stream buffer.
+ *
+ * `write(2)` on a pipe may take fewer bytes than it was given, so the loop is
+ * the point: a frame written in part is exactly the corruption this channel
+ * exists to prevent.
+ *
+ * A synchronous write can also **throw** where the buffered stream call it
+ * replaced would have emitted `error` on a later tick — `EPIPE`, once the server
+ * has closed its end. This is called from inside the vendor's own event
+ * dispatch (`host.ts`), and how that code treats a throwing subscriber is not
+ * ours to assume, so the failure stops here: noted on stderr, which is all that
+ * is left, and then dropped. The session ends the moment stdin closes, which is
+ * what a server that stopped reading has already done.
  */
 function writeFrame(frame: SessionHostEvent): void {
-  process.stdout.write(`${JSON.stringify(frame)}\n`);
+  const bytes = Buffer.from(`${JSON.stringify(frame)}\n`, "utf8");
+  let written = 0;
+  try {
+    while (written < bytes.length) {
+      written += writeSync(FRAME_FD, bytes, written, bytes.length - written);
+    }
+  } catch (error) {
+    if (frameChannelLost) return;
+    frameChannelLost = true;
+    process.stderr.write(
+      `the session host's frame channel closed under a write, so PlotRoom is no longer observing this session: ${describe(error)}\n`,
+    );
+  }
 }
 
 async function* stdinChunks(): AsyncIterable<string> {
@@ -161,15 +194,28 @@ async function main(): Promise<number> {
 const workerExit = await dispatchWorkerSelector(process.argv.slice(2));
 if (workerExit !== null) process.exit(workerExit);
 
+// The frame channel, before the session: everything this process has to say
+// leaves over fd 3, so without it there is nothing to report a failure *with*.
+// Said on stderr — the only channel left — and refused, rather than writing
+// frames to stdout, where the corruption issue #109 fixed came from.
+//
+// The probe is a zero-length **write**, not an `fstat`: under Bun fd 3 can be
+// something this process inherited and cannot write, so `fstat` answers "yes" and
+// the first real frame then dies of `EBADF` in the middle of a session. Asking
+// the fd to do the one thing it exists for is the only question worth asking.
+try {
+  writeSync(FRAME_FD, EMPTY_PROBE);
+} catch {
+  process.stderr.write(
+    `the session host was started without a writable frame channel on fd ${FRAME_FD.toString()}; it is spawned by PlotRoom's server, not run by hand\n`,
+  );
+  process.exit(5);
+}
+
 const code = await main();
 
-// Flush before leaving: a frame still in the stream's buffer is an observation
-// PlotRoom never saw, and the last one is usually the one that mattered.
-await new Promise<void>((resolve) => {
-  process.stdout.write("", () => {
-    resolve();
-  });
-});
+// No flush: `writeFrame` writes synchronously, so every frame is already in the
+// pipe rather than in a stream buffer waiting for a tick that exiting skips.
 process.exit(code);
 
 function describe(error: unknown): string {

@@ -79,7 +79,7 @@ class FakeSessionHost implements SessionHostProcess {
     if (this.autoAck) this.emit({ type: "ack", id: command.id });
   }
 
-  chunks(): AsyncIterable<string> {
+  frameChunks(): AsyncIterable<string> {
     return {
       [Symbol.asyncIterator]: () => ({
         next: (): Promise<IteratorResult<string>> => {
@@ -416,23 +416,100 @@ describe("the session-host adapter", () => {
     });
   });
 
-  it("drops a line it cannot read rather than ending the session", async () => {
+  it("reports a line it cannot read rather than dropping it, and keeps the session (§109)", async () => {
     const host = new FakeSessionHost();
     const handle = await started(host);
     const observed = collect(handle);
 
-    // The SDK prints to stdout as well; a stray line is not a session ending.
-    host.raw("Downloading native addon...");
+    // Nothing but PlotRoom writes the frame channel, so a damaged line means a
+    // frame arrived corrupt and an observation is gone. Silence about that was
+    // the bug: the observation log is the record.
+    host.raw('{"type":"observation","observation":{"kind":"outpDownloading n');
     host.emit({
       type: "observation",
       observation: { kind: "turn-started", turn: 1, at: 1_000 },
     });
     host.end();
 
-    expect((await observed).map((observation) => observation.kind)).toEqual([
+    const stream = await observed;
+    expect(stream.map((observation) => observation.kind)).toEqual([
+      "runtime-error",
       "turn-started",
       "session-ended",
     ]);
+    // Non-fatal: the session is alive and the rest of the stream is worth
+    // having, so this must not read as the session having failed.
+    expect(stream[0]).toMatchObject({ kind: "runtime-error", fatal: false });
+    expect(stream[0]).toHaveProperty(
+      "message",
+      expect.stringContaining("one observation was lost"),
+    );
+    expect(stream.at(-1)).toMatchObject({
+      kind: "session-ended",
+      reason: { kind: "interrupted" },
+    });
+  });
+
+  it("bounds a damaged frame in the observation that reports it", async () => {
+    const host = new FakeSessionHost();
+    const handle = await started(host);
+    const observed = collect(handle);
+
+    // An interleaved vendor write can carry a whole output delta with it; one
+    // corrupt line must not become the largest thing in the log.
+    const damaged = `{"type":"observation",${"x".repeat(5_000)}`;
+    host.raw(damaged);
+    host.end();
+
+    const error = (await observed)[0];
+    expect(error?.kind).toBe("runtime-error");
+    const message = error?.kind === "runtime-error" ? error.message : "";
+    // The whole length is stated, so nothing about the loss is hidden, and only
+    // a prefix of the bytes is carried.
+    expect(message).toContain(`${damaged.length.toString()} chars`);
+    expect(message.length).toBeLessThan(400);
+  });
+
+  it("reports a flood of damaged frames twice, not once per line", async () => {
+    const host = new FakeSessionHost();
+    const handle = await started(host);
+    const observed = collect(handle);
+
+    // A sidecar logging plain text to the frame channel produces this
+    // continuously. One observation per line would write a row per line and,
+    // worse, keep advancing the silence clock `deriveSessionHealth` reads — so a
+    // session whose channel is broken would read as busy and healthy for as long
+    // as it stayed broken.
+    for (let i = 0; i < 50; i += 1) host.raw(`not a frame ${i.toString()}`);
+    host.end();
+
+    const errors = (await observed).filter(
+      (observation) => observation.kind === "runtime-error",
+    );
+    expect(errors).toHaveLength(2);
+    expect(errors[0]).toHaveProperty(
+      "message",
+      expect.stringContaining("one observation was lost"),
+    );
+    // The total is in the record, so the size of the loss is not lost with it.
+    expect(errors[1]).toHaveProperty(
+      "message",
+      "50 session-host frames were unreadable, so that many observations were lost",
+    );
+  });
+
+  it("reports a single damaged frame once, with no summary after it", async () => {
+    const host = new FakeSessionHost();
+    const handle = await started(host);
+    const observed = collect(handle);
+
+    host.raw("not a frame");
+    host.end();
+
+    const errors = (await observed).filter(
+      (observation) => observation.kind === "runtime-error",
+    );
+    expect(errors).toHaveLength(1);
   });
 
   it("streams observations the phase reducer accepts unchanged", async () => {

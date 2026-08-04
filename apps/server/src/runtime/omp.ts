@@ -2,10 +2,12 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createRequire } from "node:module";
+import type { Readable } from "node:stream";
 import {
   buildSessionHostArgs,
   createOmpAdapter,
   systemMillisClock,
+  FRAME_FD,
   OMP_ADAPTER_ID,
   type OmpConnect,
   type SessionHostProcess,
@@ -23,6 +25,9 @@ import type { Logger } from "../logging/logger.js";
  * rather than injected at launch.
  */
 export const SESSION_HOST_ENTRY = "@plotroom/session-host/main";
+
+/** Re-exported for the tests that spawn a stand-in over the same channel. */
+export { FRAME_FD };
 
 export interface OmpRuntimeOptions {
   /**
@@ -67,7 +72,13 @@ export function createOmpRuntime(
       // The session host authenticates with the operator's own credential
       // store, like workspace git: PlotRoom injects nothing of its own.
       env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
+      // Four, not three (issue #109). Frames go over fd 3, which nothing but
+      // PlotRoom's own writer can reach; the embedded SDK and its native addon
+      // print to stdout, and a vendor write interleaving inside a frame used to
+      // corrupt it and lose the observation silently — in a system whose record
+      // *is* the observation log. Sharing a channel and then tolerating the
+      // damage was the bug; not sharing it is the fix.
+      stdio: ["pipe", "pipe", "pipe", "pipe"],
       // Its own process group, so an abort can signal the group and take a
       // runaway bash or browser child with it. Detached does not mean orphaned:
       // stdin is a pipe from this server, so a server that dies closes it and
@@ -76,6 +87,18 @@ export function createOmpRuntime(
       detached: true,
     });
 
+    // Both vendor channels must be *read*: a piped fd nobody drains fills and
+    // then blocks the sidecar mid-turn, which would read as a hung session with
+    // no explanation.
+    //
+    // stdout is drained and **not recorded**. It is the vendor's channel in a
+    // process that holds the operator's provider tokens in memory, whose stated
+    // posture is that nothing PlotRoom writes may carry a credential (see
+    // `apps/session-host/src/main.ts`) — and before the frame channel existed
+    // these bytes were read and discarded anyway, so resuming the stream keeps
+    // exactly the posture that was there while removing the block. stderr is
+    // logged as it always was.
+    child.stdout.resume();
     child.stderr.on("data", (chunk: Buffer) => {
       options.logger?.debug("session host stderr", {
         line: chunk.toString("utf8"),
@@ -109,9 +132,22 @@ function resolveEntry(): string {
 
 class SessionHostChildProcess implements SessionHostProcess {
   readonly #child: ChildProcessWithoutNullStreams;
+  readonly #frames: Readable;
 
   constructor(child: ChildProcessWithoutNullStreams, logger?: Logger) {
     this.#child = child;
+    // fd 3, the channel this process was spawned with (issue #109). Resolved in
+    // the constructor rather than per read, and refused loudly if it is absent:
+    // a session host with no frame channel can report nothing at all, and
+    // falling back to stdout would restore the corruption the fd exists to end.
+    const frames = child.stdio[FRAME_FD];
+    if (frames === null || frames === undefined || !("read" in frames)) {
+      throw new Error(
+        `the session host was spawned without a readable frame channel on fd ${FRAME_FD.toString()}`,
+      );
+    }
+    this.#frames = frames;
+
     // Writing to the stdin of a process that has exited emits `error` on the
     // stream, and an unhandled one is an uncaught exception — the server would
     // die because a session host did. The window is real (a stop can land
@@ -129,11 +165,11 @@ class SessionHostChildProcess implements SessionHostProcess {
     this.#child.stdin.write(line);
   }
 
-  chunks(): AsyncIterable<string> {
-    const child = this.#child;
+  frameChunks(): AsyncIterable<string> {
+    const frames = this.#frames;
     return {
       async *[Symbol.asyncIterator]() {
-        for await (const chunk of child.stdout) {
+        for await (const chunk of frames) {
           yield (chunk as Buffer).toString("utf8");
         }
       },
