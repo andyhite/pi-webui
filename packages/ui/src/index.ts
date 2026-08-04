@@ -94,3 +94,6 @@ export * from "./plugins/PluginPanelView.js";
 export * from "./search/types.js";
 export * from "./search/data-source.js";
 export * from "./search/SearchPanel.js";
+export * from "./settings/types.js";
+export * from "./settings/data-source.js";
+export * from "./settings/SettingsPanel.js";
