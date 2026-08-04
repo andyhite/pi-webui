@@ -834,7 +834,13 @@ Decided (recorded as they were made):
   against one provider's rate limits. Zero is **refused** rather than read as
   "unlimited": a limit of none is spelled by setting it high, and a typo that
   silently removed the bound would be the one failure the limit exists to prevent.
-  Decided in Epic 5.5.
+  Decided in Epic 5.5. That refusal is **one statement, not one per entry point**
+  (`NumericBound` in `apps/server/src/config.ts`): the environment variable, the
+  settings write (§11), and boot reading a stored override back all apply the same
+  bound, because a rule only the boot path knew was one a settings write walked
+  around — a stored zero was accepted, persisted, and refused every admission for
+  ever. A stored number outside its bound is therefore **ignored and reported** at
+  boot rather than applied, so no persisted value can make the process unusable.
 - **The limit bounds initiation, not one endpoint.** `POST /api/runs` goes through
   the same admission as a scoped run: 201 with `{run, session, status}` when a slot
   was free, **202 with `{queued, run: null, session: null}`** when the gesture was

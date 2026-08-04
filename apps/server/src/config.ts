@@ -205,9 +205,66 @@ export const DEFAULT_COMPACTION_INTERVAL_SECONDS = 6 * 60 * 60;
  *
  * Zero is refused rather than treated as "unlimited": a limit of none is spelled
  * by setting it high, and a typo that silently removed the bound would be the one
- * failure the limit exists to prevent.
+ * failure the limit exists to prevent. That refusal is
+ * {@link CONCURRENCY_LIMIT_BOUND}, stated once so the environment variable and
+ * the settings write cannot disagree about it.
  */
 export const DEFAULT_CONCURRENCY_LIMIT = 4;
+
+/**
+ * What a configurable number has to be, stated once.
+ *
+ * Two paths set the same numbers — an environment variable at boot and a
+ * settings write at runtime (§11) — and a bound only the first one applied is a
+ * bound the second walks around: a stored `concurrencyLimit` of `0` was accepted
+ * by the settings route, persisted, and then refused every admission for ever,
+ * which is the exact failure the limit exists to prevent. So the rule is data
+ * here rather than a condition in two parsers: `config.ts` parsers check it,
+ * the settings catalog points its numeric entries at it, and boot skips a stored
+ * value that violates it (principle 8 — the rule has one statement).
+ *
+ * `requirement` is written to complete the sentence "X must be …", so the
+ * environment variable's message and the settings route's refusal say the same
+ * thing about the same number without either restating it.
+ */
+export interface NumericBound {
+  readonly min: number;
+  readonly integer: boolean;
+  readonly requirement: string;
+}
+
+export const CONCURRENCY_LIMIT_BOUND: NumericBound = {
+  min: 1,
+  integer: true,
+  requirement: "a whole number of sessions, at least 1",
+};
+
+/**
+ * Every interval in this file: zero is legal and means "no schedule", which is
+ * why this bound admits it (see `DEFAULT_COMPACTION_INTERVAL_SECONDS`) — a
+ * negative one is a typo, and a job that never ran because of one would be the
+ * quiet failure §12 is about.
+ */
+export const INTERVAL_SECONDS_BOUND: NumericBound = {
+  min: 0,
+  integer: false,
+  requirement: "a non-negative number of seconds",
+};
+
+/**
+ * Why `value` is not allowed, as the tail of "X must be …", or `null` when it is
+ * allowed. Callers supply the subject, because only they know whether they are
+ * refusing an environment variable or a settings key.
+ */
+export function outsideBound(
+  bound: NumericBound,
+  value: number,
+): string | null {
+  if (bound.integer ? !Number.isInteger(value) : !Number.isFinite(value)) {
+    return bound.requirement;
+  }
+  return value < bound.min ? bound.requirement : null;
+}
 
 /**
  * Thirty seconds between attention re-derivations.
@@ -246,10 +303,9 @@ function parseSeconds(
   // never runs because of a typo is exactly the kind of quiet failure §12 is
   // about. The variable is named in the message, because two settings share this
   // parser and a message naming the wrong one sends the operator hunting.
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error(
-      `${name} must be a non-negative number of seconds (got ${value})`,
-    );
+  const wrong = outsideBound(INTERVAL_SECONDS_BOUND, parsed);
+  if (wrong !== null) {
+    throw new Error(`${name} must be ${wrong} (got ${value})`);
   }
   return parsed;
 }
@@ -257,9 +313,10 @@ function parseSeconds(
 function parseConcurrency(value: string | undefined, fallback: number): number {
   if (value === undefined || value.trim() === "") return fallback;
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) {
+  const wrong = outsideBound(CONCURRENCY_LIMIT_BOUND, parsed);
+  if (wrong !== null) {
     throw new Error(
-      `PLOTROOM_CONCURRENCY_LIMIT must be a whole number of sessions, at least 1 (got ${value})`,
+      `PLOTROOM_CONCURRENCY_LIMIT must be ${wrong} (got ${value})`,
     );
   }
   return parsed;

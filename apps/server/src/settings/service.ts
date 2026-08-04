@@ -1,6 +1,6 @@
 import type { Author, SettingChange } from "@plotroom/core";
 import type { SettingsStore } from "@plotroom/db";
-import type { ServerConfig } from "../config.js";
+import { outsideBound, type ServerConfig } from "../config.js";
 import type { EventBus } from "../events/bus.js";
 import { badRequest, notFound } from "../http/errors.js";
 import {
@@ -196,6 +196,16 @@ function validateValue(entry: SettingDefinition, raw: unknown): unknown {
     case "number": {
       if (typeof raw !== "number" || !Number.isFinite(raw)) {
         throw badRequest(`"${entry.key}" must be a finite number`);
+      }
+      // The same bound the environment variable is parsed against, pointed at
+      // rather than restated (`config.ts`'s `NumericBound`): a settings write
+      // must not be able to store a value a boot would have refused — a stored
+      // `concurrencyLimit` of zero refused every admission for ever, and
+      // survived restarts, because only the env path knew the rule.
+      const wrong =
+        entry.bound === undefined ? null : outsideBound(entry.bound, raw);
+      if (wrong !== null) {
+        throw badRequest(`"${entry.key}" must be ${wrong}`);
       }
       return raw;
     }

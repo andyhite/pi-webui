@@ -142,6 +142,72 @@ describe("settings (§11, Epic 8.3)", () => {
     expect(malformed.status).toBe(400);
   });
 
+  it("refuses a concurrency limit of zero, the same bound the environment variable refuses", async () => {
+    const harness = await boot();
+
+    // Zero is the one that matters: it is not merely out of range, it would
+    // refuse every admission for ever, which is the failure the limit exists to
+    // prevent (AGENTS.md's recorded decision).
+    for (const value of [0, -1, 2.5]) {
+      const refused = await harness.call("/settings/concurrencyLimit", {
+        method: "PUT",
+        body: { value },
+      });
+      expect(refused.status, String(value)).toBe(400);
+      expect(String(at(refused.body, "error.message"))).toContain("at least 1");
+    }
+
+    // Nothing was stored, so the queue still admits work under the default.
+    const read = await harness.ok("/settings/concurrencyLimit");
+    expect(at(read, "setting.overridden")).toBe(false);
+    expect(at(await harness.ok("/fleet"), "concurrency.limit")).toBe(4);
+  });
+
+  it("refuses a negative interval, and still allows zero where zero means 'no schedule'", async () => {
+    const harness = await boot();
+
+    const refused = await harness.call("/settings/compactionIntervalSeconds", {
+      method: "PUT",
+      body: { value: -1 },
+    });
+    expect(refused.status).toBe(400);
+
+    // Zero disables the schedule and leaves the on-demand sweep available; it is
+    // a legal value, not a lower bound violation.
+    const disabled = await harness.call("/settings/compactionIntervalSeconds", {
+      method: "PUT",
+      body: { value: 0 },
+    });
+    expect(disabled.status).toBe(200);
+  });
+
+  it("ignores a stored value outside its bound rather than booting wedged under it", async () => {
+    const first = await boot();
+    const stateDir = first.stateDir;
+    await first.handle.close();
+
+    // Exactly what an older build's accepted write left behind: a stored zero,
+    // which no current write could produce. Written under the store's own key,
+    // because the point is that this process must survive reading it back.
+    const { openDatabase, SettingsStore } = await import("@plotroom/db");
+    const state = openDatabase({ stateDir });
+    new SettingsStore(state).set("concurrencyLimit", JSON.stringify(0));
+    state.close();
+
+    // The boot succeeds and runs the env-derived default; the queue admits work.
+    const second = await boot({ logLevel: "warn" }, { stateDir });
+    expect(at(await second.ok("/fleet"), "concurrency.limit")).toBe(4);
+
+    // And it says so rather than dropping it quietly.
+    const logs = list(await second.ok("/logs?level=warn"), "entries");
+    const ignored = logs.find(
+      (entry) => at(entry, "msg") === "ignored a stored setting",
+    );
+    expect(ignored).toBeDefined();
+    expect(at(ignored, "key")).toBe("concurrencyLimit");
+    expect(String(at(ignored, "reason"))).toContain("at least 1");
+  });
+
   it("a persisted override survives a restart of the same state directory", async () => {
     const first = await boot();
     await first.ok("/settings/concurrencyLimit", {

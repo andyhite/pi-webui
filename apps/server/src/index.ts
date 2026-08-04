@@ -64,7 +64,8 @@ export function startServer(config = loadServerConfig()) {
   // setting this store has no override for changes nothing — the env-derived
   // default still applies, exactly as §11 requires.
   const settingsStore = new SettingsStore(db);
-  const effectiveConfig = applyStoredSettings(config, settingsStore.list());
+  const { config: effectiveConfig, ignored: ignoredSettings } =
+    applyStoredSettings(config, settingsStore.list());
 
   // The bind check reads the *effective* values — a stored `host`,
   // `allowNonLoopbackBind`, or `credential` override is exactly as visible
@@ -112,6 +113,14 @@ export function startServer(config = loadServerConfig()) {
       },
     }),
   );
+
+  // Reported here rather than where they were skipped, because that happens
+  // before there is a logger: an override this process is not running under is
+  // named, never dropped quietly (a store written by an older build, or by
+  // hand, is the case this exists for).
+  for (const skipped of ignoredSettings) {
+    logger.warn("ignored a stored setting", { ...skipped });
+  }
 
   const app = new Hono();
   const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });

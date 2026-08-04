@@ -1,4 +1,9 @@
-import { DEFAULT_RUNTIME_ADAPTER } from "../config.js";
+import {
+  CONCURRENCY_LIMIT_BOUND,
+  DEFAULT_RUNTIME_ADAPTER,
+  INTERVAL_SECONDS_BOUND,
+  type NumericBound,
+} from "../config.js";
 import { LOG_LEVELS } from "../logging/logger.js";
 
 /**
@@ -25,6 +30,14 @@ export interface SettingDefinition {
   readonly description: string;
   readonly type: SettingType;
   readonly enumValues?: readonly string[];
+  /**
+   * For a `number`, what it has to be — the same `NumericBound` the environment
+   * parser in `config.ts` applies, pointed at rather than restated, so a write
+   * through this surface cannot store a value a boot would have refused
+   * (`SettingsService` enforces it; `applyStoredSettings` skips a stored value
+   * that violates it).
+   */
+  readonly bound?: NumericBound;
   readonly path: readonly string[];
   /** The environment variable this setting's default comes from, if any. */
   readonly envVar: string | null;
@@ -164,6 +177,10 @@ export const SETTINGS_CATALOG: readonly SettingDefinition[] = [
     description:
       "How many sessions may run at once (§4.1). Initiation beyond it queues; it never refuses.",
     type: "number",
+    // Zero is refused here exactly as `PLOTROOM_CONCURRENCY_LIMIT` refuses it:
+    // a limit of none is spelled by setting it high, and a stored zero would
+    // refuse every admission for ever.
+    bound: CONCURRENCY_LIMIT_BOUND,
     path: ["concurrencyLimit"],
     envVar: "PLOTROOM_CONCURRENCY_LIMIT",
     appliesWithoutRestart: true,
@@ -177,6 +194,7 @@ export const SETTINGS_CATALOG: readonly SettingDefinition[] = [
     description:
       "Seconds between version-compaction sweeps (§15-3). Zero disables the schedule; the on-demand sweep stays available.",
     type: "number",
+    bound: INTERVAL_SECONDS_BOUND,
     path: ["compactionIntervalSeconds"],
     envVar: "PLOTROOM_COMPACTION_INTERVAL_SECONDS",
     appliesWithoutRestart: true,
@@ -190,6 +208,7 @@ export const SETTINGS_CATALOG: readonly SettingDefinition[] = [
     description:
       "Seconds between re-derivations of the attention queue (§7). The queue still re-derives on every observed change; this only affects the two clock-only facts.",
     type: "number",
+    bound: INTERVAL_SECONDS_BOUND,
     path: ["attentionTickSeconds"],
     envVar: "PLOTROOM_ATTENTION_TICK_SECONDS",
     appliesWithoutRestart: true,
@@ -203,6 +222,7 @@ export const SETTINGS_CATALOG: readonly SettingDefinition[] = [
     description:
       "Seconds between scheduled-refresh checks (§9.1). On-demand refresh stays available regardless.",
     type: "number",
+    bound: INTERVAL_SECONDS_BOUND,
     path: ["integrationTickSeconds"],
     envVar: "PLOTROOM_INTEGRATION_TICK_SECONDS",
     appliesWithoutRestart: true,
