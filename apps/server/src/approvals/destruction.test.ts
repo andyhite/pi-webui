@@ -225,6 +225,20 @@ describe("destroying a session", () => {
       role: "session",
       refId: sessionId,
       workstreamId,
+      // §3.7: content wires into a *running* session and nothing else.
+      running: true,
+    });
+    // A real wire into the session, so the cascade has something to take:
+    // injecting into a running session is a context edge like any other (§6.5).
+    const source = stores.graph.place({
+      role: "content",
+      refId: note(),
+      workstreamId,
+    });
+    const edge = stores.graph.addContextEdge({
+      from: source.id,
+      to: node.id,
+      author: humanAuthor,
     });
 
     await performDestruction(
@@ -236,13 +250,58 @@ describe("destroying a session", () => {
       { stopSession: stopper().stop },
     );
     expect(stores.graph.node(node.id).deletedAt).not.toBeNull();
+    // The wire goes with the node, or the board draws an edge to nothing.
+    expect(stores.graph.edge(edge.id).deletedAt).not.toBeNull();
 
     stores.sessions.restore(sessionId);
     stores.graph.restoreNode(node.id);
     expect(stores.graph.node(node.id).deletedAt).toBeNull();
+    expect(stores.graph.edge(edge.id).deletedAt).toBeNull();
     expect(
       stores.sessions.get(sessionId).session.deletion.deletedAt,
     ).toBeNull();
+  });
+
+  it("announces the deletion once when two gestures race it", async () => {
+    const sessionId = session();
+    const deletions: string[] = [];
+    stores.bus.subscribe((event) => {
+      if (event.entity === "session" && event.verb === "deleted") {
+        deletions.push(event.sessionId);
+      }
+    });
+
+    // The second gesture lands while the first is suspended in its stop — the
+    // one interleaving the awaited stop makes reachable.
+    const slow = performDestruction(
+      stores,
+      stores.bus,
+      "session",
+      sessionId,
+      humanAuthor,
+      {
+        stopSession: async (id) => {
+          stores.sessions.end(id, {
+            kind: "stopped",
+            by: "user",
+            at: clock.now(),
+          });
+          await performDestruction(
+            stores,
+            stores.bus,
+            "session",
+            sessionId,
+            humanAuthor,
+            { stopSession: stopper().stop },
+          );
+        },
+      },
+    );
+
+    // One deletion happened, so one deletion is announced and only one gesture
+    // reports having changed anything.
+    expect((await slow).changed).toBe(false);
+    expect(deletions).toEqual([sessionId]);
   });
 
   it("is idempotent: a second delete changes nothing and stops nothing", async () => {

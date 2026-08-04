@@ -271,6 +271,9 @@ export function sessionRoutes(
     const stored = stores.sessions.restore(id);
 
     if (wasDeleted) {
+      // Roots before leaves, the order `announceRestoration` itself follows: the
+      // record is back before the node that stands for it, and the node before the
+      // wires that need it to exist.
       stores.bus.publish({
         entity: "session",
         verb: "updated",
@@ -281,16 +284,17 @@ export function sessionRoutes(
         }),
         author,
       });
-    }
 
-    // Roots before leaves: the record is back before anything referring to it is.
-    const node = stores.graph.findNodeFor("session", id);
-    if (node) {
-      announceRestoration(
-        stores.bus,
-        author,
-        stores.graph.restoreNode(node.id),
-      );
+      // Only inside this branch: an undo returns what its own removal removed, so
+      // a node the operator deleted separately stays deleted (principle 10).
+      const placement = stores.graph.findNodeFor("session", id);
+      if (placement) {
+        announceRestoration(
+          stores.bus,
+          author,
+          stores.graph.restoreNode(placement.id),
+        );
+      }
     }
 
     return c.json({

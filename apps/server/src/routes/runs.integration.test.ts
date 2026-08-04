@@ -1431,13 +1431,23 @@ describe("end states are distinct (§3.6, principle 11)", () => {
       ),
     ).toEqual([sessionId]);
 
+    // The card went with the record, so the board matches the model.
+    const sessionNodes = async (): Promise<unknown[]> =>
+      list(await harness.ok("/snapshot"), "nodes").filter(
+        (node) => at(node, "refId") === sessionId,
+      );
+    expect(await sessionNodes()).toHaveLength(0);
+
     const restored = await harness.ok(`/sessions/${sessionId}/restore`, {
       method: "POST",
     });
 
-    // What comes back is a stopped session — readable, resumable, forkable.
+    // What comes back is a stopped session — readable, resumable, forkable — and
+    // its node comes back with it (principle 10: the undo returns what the
+    // deletion took, not only the row).
     expect(at(restored, "session.deletion.deletedAt")).toBeNull();
     expect(at(restored, "end.resumable")).toBe(true);
+    expect(await sessionNodes()).toHaveLength(1);
     expect(list(await harness.ok("/restorable"), "sessions")).toHaveLength(0);
   });
 
@@ -1492,8 +1502,10 @@ describe("end states are distinct (§3.6, principle 11)", () => {
       { method: "POST", body: { decision: "approve-once" } },
     );
 
-    // Approved, the same effect runs — stop included — and it is attributed to
-    // the session that asked, not to the operator who agreed (§15-2).
+    // Approved, the same effect runs — stop included. (The `session deleted`
+    // event is attributed to the session that asked rather than to the operator
+    // who agreed, §15-2; that attribution is asserted where the event is visible,
+    // and the stop half is still recorded as the operator's — issue #64.)
     expect(at(answered, "executed")).toBe(true);
     const read = await harness.ok(`/sessions/${targetId}`);
     expect(at(read, "session.end.kind")).toBe("stopped");

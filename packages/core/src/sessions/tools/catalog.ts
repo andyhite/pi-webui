@@ -1170,8 +1170,14 @@ const sessionTools: readonly AgentTool[] = [
     input: { id: ID },
     // §3.6 says a session record is "deletable, always", which includes a live
     // one — so this stops it rather than refusing, and the stop is announced.
-    // The lineage check still applies for `session_stop`'s reason: a session must
-    // not take work in its own chain off the board to escape a gate.
+    //
+    // The lineage class is declared for `session_stop`'s reason — a session must
+    // not take work in its own chain off the board to escape a gate — and it binds
+    // wherever a call goes through `checkToolCall`. Over HTTP the enforcement is
+    // the destruction guard: every session-authored delete raises §6.6 whoever the
+    // target is. The gap that leaves is a *pre-granted* destruction, which pre-
+    // grants match by tool and never by target, so it would cover a session's own
+    // chain: see issue #75.
     requires: {
       reflexivity: "target-session",
       approval: "always",

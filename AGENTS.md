@@ -767,7 +767,9 @@ Decided (recorded as they were made):
   its own record with its own provenance — one gesture destroying an unnamed subtree is not
   a recoverable gesture in any useful sense (principle 10). `session_delete` is
   destruction-class (`destroys: "session"`, the seventh kind), so a session asking for one
-  raises §6.6's approval through the guard that already exists and needs no new channel,
+  raises §6.6's approval through the guard that already exists and needs no new channel
+  (the deletion is attributed to the session that asked, not to the operator who agreed —
+  though the stop it performs is still recorded as the operator's, which is issue #64),
   while `session_restore` is an ordinary verb like every other `_restore`. No migration:
   `sessions.deleted_at` has been there since migration 7, and there is deliberately no
   purge policy behind it (nothing in the spec says a deleted record expires).

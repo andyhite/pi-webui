@@ -220,15 +220,22 @@ export async function destroySession(
   author: Author,
   stopSession: LiveSessionStop,
 ): Promise<DestructionOutcome & { readonly stopped: boolean }> {
-  const stored = stores.sessions.get(sessionId);
-  const wasLive = stored.session.end === null;
-  const wasDeleted = stored.session.deletion.deletedAt !== null;
+  const before = stores.sessions.get(sessionId);
+  const wasLive = before.session.end === null;
 
   // Ordered: the record's own end is written before it leaves the board, so a
   // restore gives back a session that says how it ended rather than one still
   // claiming to be live.
-  if (wasLive && !wasDeleted) await stopSession(sessionId);
+  const stopped = wasLive && before.session.deletion.deletedAt === null;
+  if (stopped) await stopSession(sessionId);
 
+  // Re-read, because the stop suspended this function and a concurrent delete of
+  // the same session can have landed in the meantime. Whether *this* call is the
+  // one that removed the record decides what is announced, so it is read from the
+  // record immediately before the write rather than from a flag taken before the
+  // await — otherwise two gestures both announce one deletion.
+  const changed =
+    stores.sessions.get(sessionId).session.deletion.deletedAt === null;
   stores.sessions.delete(sessionId);
 
   // The placement goes with it, so the board matches the model; restoring the
@@ -238,7 +245,7 @@ export async function destroySession(
   const node = stores.graph.findNodeFor("session", sessionId);
   if (node) announceRemoval(bus, author, stores.graph.removeNode(node.id));
 
-  if (!wasDeleted) {
+  if (changed) {
     bus.publish({
       entity: "session",
       verb: "deleted",
@@ -247,12 +254,7 @@ export async function destroySession(
     });
   }
 
-  return {
-    kind: "session",
-    targetId: sessionId,
-    changed: !wasDeleted,
-    stopped: wasLive && !wasDeleted,
-  };
+  return { kind: "session", targetId: sessionId, changed, stopped };
 }
 
 /**
