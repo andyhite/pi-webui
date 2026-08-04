@@ -580,9 +580,10 @@ export type DomainEventBody =
 /**
  * What a Settings surface needs to render one row live (Epic 8.3): the
  * catalog says the rest (group, label, description, type). `value` is
- * `null` for a sensitive setting with a credential set — never echoed, on
- * the wire any more than in a read (§9.3's rule for integration credentials,
- * applied here for the same reason).
+ * `"[redacted]"` for a sensitive setting that has one set, and `null` only
+ * when it genuinely has none — never the real value, on the wire any more
+ * than in a read (§9.3's rule for integration credentials, applied here for
+ * the same reason).
  */
 export interface SettingChange {
   readonly key: string;

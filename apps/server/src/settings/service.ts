@@ -59,7 +59,11 @@ export interface SettingReport {
   readonly restartReason?: string;
   /** A session may not read or write this setting (principle 1); enforced by the route. */
   readonly humanOnly: boolean;
-  /** `null` for a sensitive setting with a value set — never echoed (§9.3's rule, applied here). */
+  /**
+   * `"[redacted]"` for a sensitive setting that has a value set, `null` only
+   * when it genuinely has none — never the real value (§9.3's rule, applied
+   * here).
+   */
   readonly value: unknown;
   readonly defaultValue: unknown;
   readonly overridden: boolean;
