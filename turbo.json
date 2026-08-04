@@ -6,6 +6,12 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**"]
     },
+    // `compile` ends by running what it built, and the artifact is ~400MB: a
+    // cache hit would replay a stale smoke test and store the binary twice.
+    "compile": {
+      "dependsOn": ["^build"],
+      "cache": false
+    },
     "typecheck": {
       "dependsOn": ["^build"],
       "outputs": []
