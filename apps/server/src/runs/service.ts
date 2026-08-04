@@ -1849,12 +1849,16 @@ export class RunService {
    * The transcript half of a session end PlotRoom itself wrote (§3.6).
    *
    * The driver does this for an end a *runtime* reported — publish the version
-   * the checkpoint rule now calls for, announce it, and reindex — but the two
-   * ends PlotRoom writes on its own (a restart finding a session in flight, and
-   * a shutdown ending one) never reach that path, because there is no
-   * observation to drive them. Without this they leave the published transcript
-   * and the search index at the last checkpoint, describing a session that has
-   * ended as if it were still mid-flight.
+   * the checkpoint rule now calls for, announce it, and reindex. PlotRoom writes
+   * several ends itself (a proven completion, a stop, an out-of-budget stop, an
+   * operator ending an open session) and every one of those still reaches the
+   * driver, because the runtime is asked to stop and reports it. The two ends
+   * this exists for are the ones where **the runtime is going away without
+   * being asked**: a restart finding a session in flight (there is no runtime
+   * left to report anything) and a shutdown (the process itself is leaving).
+   * Without this they leave the published transcript and the search index at the
+   * last checkpoint, describing a session that has ended as if it were still
+   * mid-flight.
    *
    * `publishTranscript` returns `null` when nothing is pending, so a session
    * interrupted with no unpublished turn writes no empty version (the rule's
