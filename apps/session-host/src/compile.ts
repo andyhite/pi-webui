@@ -1,5 +1,15 @@
-import { copyFileSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+
+import { WORKER_SELECTOR_PREFIX } from "./worker-dispatch.js";
 
 /**
  * Produce the session host as one standalone per-platform binary (issue #93,
@@ -12,18 +22,21 @@ import { dirname, join } from "node:path";
  * would be one missing the half that does the work. One runner per platform is
  * the constraint, not a preference.
  *
- * Two things a bare `bun build --compile src/main.ts` gets wrong, both of which
- * produce a binary rather than an error, which is why they are handled here and
- * not in a CI shell line:
+ * Three things a bare `bun build --compile src/main.ts` gets wrong. The first
+ * fails loudly; the other two hand you a binary, which is why they are handled
+ * here and not in a CI shell line:
  *
  *  1. **The legacy-Pi module registry does not resolve.** The SDK's legacy
  *     extension shim imports {@link LEGACY_PI_MODULES}, a specifier that exists
  *     only inside the SDK's own build plugin, so bundling PlotRoom's entry fails
  *     outright. It is externalized rather than supplied: PlotRoom disables
- *     extension discovery and loads no legacy Pi extension, so the import is
- *     unreachable for us, and externalizing it leaves that path exactly as it
- *     already is when the session host runs under a host Bun — a rejected
- *     promise on a path nothing takes.
+ *     extension discovery and loads no legacy Pi extension, so nothing reaches
+ *     the import. Both distributions reject on that path, though not
+ *     identically — under a host Bun the shim short-circuits before importing
+ *     ("bundled modules are only available in compiled mode"), while compiled it
+ *     attempts the import and fails to resolve it. Same unreachable path, two
+ *     rejections, and the difference is the `isCompiledBinary()` flip that (3)
+ *     is entirely about.
  *  2. **The native addon does not survive compilation.** `pi_natives` is
  *     `require`d at runtime from a computed path, so the bundler never sees it,
  *     and the SDK's embedded-addon table is `null` in the published package —
@@ -33,12 +46,16 @@ import { dirname, join } from "node:path";
  *     lone file, and a compile that produced no addon is a failure
  *     ({@link stageNativeAddon} refuses) rather than a binary that dies on its
  *     first launch with a resolution error.
+ *  3. **The binary becomes the runtime's worker host.** Compiled, the SDK
+ *     re-execs `process.execPath` for the subprocesses its tools need, so the
+ *     session host must dispatch those launches instead of refusing them as
+ *     unknown arguments — see `worker-dispatch.ts`.
  *
  * The compile then runs what it built ({@link smokeTest}) before reporting
- * success, because every failure above is one a green build step hides: the
- * binary exists, and it cannot start. The check belongs to the verb that
- * produces the artifact rather than to the workflow that calls it, so it also
- * holds for a release build and for a compile on a laptop.
+ * success, because each of (2) and (3) is a failure a green build step hides:
+ * the binary exists, and a session on it is broken. The check belongs to the
+ * verb that produces the artifact rather than to the workflow that calls it, so
+ * a release build and a compile on a laptop are held to it too.
  */
 
 /** The SDK's build-plugin-only specifier; see (1) above. */
@@ -47,37 +64,13 @@ export const LEGACY_PI_MODULES = "omp-legacy-pi-modules";
 /** Where the artifact lands. Not `dist/`: that is `tsc -b`'s, and turbo caches it. */
 export const OUT_DIR = "out";
 
-/**
- * The platforms the SDK publishes a native addon for. Named here so an
- * unsupported host is refused by name — a compile that skipped the addon
- * because there was none to copy is the failure this list exists to prevent.
- */
-const NATIVE_ADDON_PLATFORMS: readonly string[] = [
-  "darwin-arm64",
-  "darwin-x64",
-  "linux-arm64",
-  "linux-x64",
-  "win32-x64",
-];
-
 export class SessionHostCompileError extends Error {}
 
-/** The package holding this platform's `pi_natives` addon. */
-export function nativeAddonPackage(platform: string, arch: string): string {
-  const tag = `${platform}-${arch}`;
-  if (!NATIVE_ADDON_PLATFORMS.includes(tag)) {
-    throw new SessionHostCompileError(
-      `the session runtime publishes no native addon for ${tag}: ` +
-        `compile on one of ${NATIVE_ADDON_PLATFORMS.join(", ")}`,
-    );
-  }
-  return `@oh-my-pi/pi-natives-${tag}`;
-}
-
 /**
- * The artifact's name — what a packaged install points `PLOTROOM_SESSION_HOST`
- * at, so the release wiring reads it here rather than restating it. Windows
- * needs the extension to be executable at all.
+ * The artifact's name and directory — what a packaged install points
+ * `PLOTROOM_SESSION_HOST` at. Exported through the package (`./compile`) so the
+ * installer staging reads them instead of restating them; Windows needs the
+ * extension to be executable at all.
  */
 export const BINARY_NAME =
   process.platform === "win32"
@@ -113,12 +106,27 @@ export function addonFilesIn(directory: string): string[] {
  * makes them the same version by construction.
  */
 export function stageNativeAddon(outDir: string): string[] {
-  const packageName = nativeAddonPackage(process.platform, process.arch);
+  const tag = `${process.platform}-${process.arch}`;
   const sdk = Bun.resolveSync("@oh-my-pi/pi-coding-agent", import.meta.dir);
   const natives = Bun.resolveSync("@oh-my-pi/pi-natives", dirname(sdk));
-  const addonDir = dirname(
-    Bun.resolveSync(`${packageName}/package.json`, dirname(natives)),
-  );
+  let addonDir;
+  try {
+    addonDir = dirname(
+      Bun.resolveSync(
+        `@oh-my-pi/pi-natives-${tag}/package.json`,
+        dirname(natives),
+      ),
+    );
+  } catch {
+    // Which platforms have an addon is the SDK's `pi-natives` optional
+    // dependencies and nothing else's; a list here would be a third copy that
+    // refuses a host the SDK supports the day it gains one. The refusal is
+    // named rather than a resolver stack, which is all the list was for.
+    throw new SessionHostCompileError(
+      `the session runtime publishes no native addon for ${tag}, ` +
+        `so a compiled session host cannot load one here: compile on a platform it supports`,
+    );
+  }
 
   const staged: string[] = [];
   for (const file of addonFilesIn(addonDir)) {
@@ -133,32 +141,130 @@ export function stageNativeAddon(outDir: string): string[] {
 }
 
 /**
- * Prove the artifact runs. An unknown argument is the cheapest launch that
- * exercises everything compilation can break — the binary starts, the SDK's
- * module graph loads, the native addon resolves, PlotRoom's own parser refuses,
- * and a frame reaches stdout and is flushed — while needing no credentials, no
- * model and no workspace.
+ * A launch of the artifact, as the checks below read it.
+ */
+export interface SmokeLaunch {
+  readonly code: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/**
+ * Did the artifact start? PlotRoom's parser refusing an unknown argument is the
+ * cheapest proof — the binary ran, the SDK's module graph loaded, the native
+ * addon resolved, our own code decided, and a frame reached stdout and was
+ * flushed — and it needs no credentials, model or workspace. `null` code means
+ * the launch was killed on the timeout, which is a failure to start too.
+ */
+export function startedAndRefused(launch: SmokeLaunch): boolean {
+  return launch.code === 2 && firstFrame(launch.stdout)?.type === "fatal";
+}
+
+/**
+ * Did a hidden worker selector reach the session parser? Compilation is what
+ * makes the SDK re-exec this binary for its own worker subprocesses, so this is
+ * the one defect a compiled artifact can have and a host-Bun run cannot
+ * (`worker-dispatch.ts`). The parser's refusal is the symptom, and it is exactly
+ * what the check above accepts as health, so the two must be read separately.
+ */
+export function refusedTheWorkerSelector(launch: SmokeLaunch): boolean {
+  return launch.stdout.includes("unknown session-host argument");
+}
+
+/** Long enough for a cold 124MB binary on a contended runner, short enough to fail. */
+const START_TIMEOUT_MS = 120_000;
+
+/**
+ * The worker probe's bound. A *healthy* dispatch does not exit: the worker waits
+ * for the IPC peer this launch deliberately does not give it, so being alive at
+ * the bound is the pass. The failure it looks for — the session parser answering
+ * a worker launch — happens in the first moments, and the launch before this one
+ * has already paid for the cold start.
+ */
+const WORKER_PROBE_MS = 15_000;
+
+/**
+ * Run the artifact twice: once as a session launch it must refuse, once as the
+ * worker the runtime will re-exec it as.
+ *
+ * Both launches get a **throwaway home**. The loader searches `~/.omp/natives/`
+ * and the platform user-data directory *before* the executable's own directory,
+ * so on any machine that has run omp's own compiled binary this check would pass
+ * for an artifact with nothing staged beside it — green here, broken on the
+ * operator's machine. Isolating the home leaves the staged copy as the only
+ * candidate that can satisfy the load.
  */
 export async function smokeTest(binary: string): Promise<void> {
-  const child = Bun.spawn([binary, "--not-a-session-host-flag"], {
+  const home = mkdtempSync(join(tmpdir(), "plotroom-session-host-smoke-"));
+  try {
+    const session = await launch(binary, ["--not-a-session-host-flag"], home);
+    if (!startedAndRefused(session)) {
+      throw new SessionHostCompileError(
+        `the compiled session host did not start${describe(session)}`,
+      );
+    }
+
+    const worker = await launch(
+      binary,
+      [`${WORKER_SELECTOR_PREFIX}js_eval_process`],
+      home,
+      WORKER_PROBE_MS,
+    );
+    if (refusedTheWorkerSelector(worker)) {
+      throw new SessionHostCompileError(
+        `the compiled session host refused the runtime's own worker selector, ` +
+          `so a session on it loses every tool that needs a subprocess${describe(worker)}`,
+      );
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+async function launch(
+  binary: string,
+  args: readonly string[],
+  home: string,
+  bound: number = START_TIMEOUT_MS,
+): Promise<SmokeLaunch> {
+  const child = Bun.spawn([binary, ...args], {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
+    // A binary that hangs at module init is this check's whole point; without a
+    // bound it would hang the build rather than report one.
+    timeout: bound,
+    env: {
+      ...environment(),
+      HOME: home,
+      USERPROFILE: home,
+      XDG_DATA_HOME: join(home, "share"),
+      LOCALAPPDATA: join(home, "AppData", "Local"),
+    },
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
     child.exited,
   ]);
+  return { code: child.signalCode === null ? code : null, stdout, stderr };
+}
 
-  const refusal = firstFrame(stdout);
-  if (code !== 2 || refusal?.type !== "fatal") {
-    throw new SessionHostCompileError(
-      `the compiled session host did not start: exit ${code.toString()}\n` +
-        `stdout: ${stdout.trim() || "(empty)"}\n` +
-        `stderr: ${stderr.trim() || "(empty)"}`,
-    );
+/** `Bun.spawn` rejects the `undefined` slots `process.env` can carry. */
+function environment(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value;
   }
+  return env;
+}
+
+function describe(launch: SmokeLaunch): string {
+  return (
+    `: exit ${launch.code === null ? "timed out" : launch.code.toString()}\n` +
+    `stdout: ${launch.stdout.trim() || "(empty)"}\n` +
+    `stderr: ${launch.stderr.trim() || "(empty)"}`
+  );
 }
 
 function firstFrame(stdout: string): { type?: string } | null {
