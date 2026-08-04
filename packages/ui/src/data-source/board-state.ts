@@ -206,6 +206,9 @@ export function applyEvent(state: BoardState, event: DomainEvent): BoardState {
     // are the same: §3.8 is deliberately **not** a fan-out of context edges, so
     // nothing on the board changes when one is declared or opted into — they reach
     // a run through assembly, and the standing-instructions surface reads them.
+    // A setting (Epic 8.3) and the log sink's drop notice (§8) are the same:
+    // neither is board state, and each has its own future surface (a Settings
+    // panel, a Logs panel) to read the event through.
     case "version":
     case "session_observation":
     case "session_transcript":
@@ -226,6 +229,8 @@ export function applyEvent(state: BoardState, event: DomainEvent): BoardState {
     case "notification_route":
     case "integration":
     case "plugin":
+    case "setting":
+    case "log":
       return next;
   }
 }
