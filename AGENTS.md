@@ -6,8 +6,8 @@ Canonical operating rules for any agent (or human) working in this repository. R
 
 **PlotRoom** — a context-authoring canvas for operating a fleet of AI agents. A single operator composes context (tickets, PRs, documents, files, notes, prior agent output) as a spatial node graph, wires that context into commands, and runs many agent sessions against it simultaneously.
 
-- **Work tracking:** the **PlotRoom Trello board** (https://trello.com/b/Jm8Kz5II/plotroom) — all development work is tracked there as cards moving through the workflow. Check the board before starting work; see "Work tracking — Trello" below for the rules. The spec wins when a card and the spec disagree.
-- **Historical record:** the development plan that carried the rebuild through Phase 8 (with its per-epic landed notes — the best written account of _why_ things are shaped as they are) has been removed from the working tree and lives in **git history**: `git show d336340:docs/development-plan.md`. The board's Done cards' "Record:" pointers resolve there.
+- **Work tracking:** **GitHub Issues + the PlotRoom project board** (https://github.com/users/andyhite/projects/1, on the `andyhite/plotroom` repo) — all development work is tracked there as issues moving through the workflow. Check the board before starting work; see "Work tracking — GitHub Projects" below for the rules. The spec wins when an issue and the spec disagree.
+- **Historical record:** the development plan that carried the rebuild through Phase 8 (with its per-epic landed notes — the best written account of _why_ things are shaped as they are) has been removed from the working tree and lives in **git history**: `git show d336340:docs/development-plan.md`. Issues #1–#41 are the closed historical record; their landed-note pointers resolve there.
 - **Source of truth for behavior:** [`docs/product-spec.md`](docs/product-spec.md) ("North Star v1"). It describes _what_ the product does and never _how_. Treat its 12 governing principles and §15 ("What must exist in the first cut") as binding constraints, not suggestions.
 - **Status:** greenfield rebuild. The stack is decided (see "Stack" below); no application code exists yet.
 - **Explicit non-goals** are listed in spec §14. Do not implement workflow control flow, schedulers/triggers that start work, inbound webhooks, inferred relationships, multi-user, or silent truncation.
@@ -455,56 +455,66 @@ Non-negotiables at this seam:
   tool layer cannot enforce them, adapter order reverts to the Claude Agent
   SDK (see the decision record's risks).
 
-## Work tracking — Trello
+## Work tracking — GitHub Projects
 
-All development work — features, bugs, follow-ups, decisions — is tracked on the
-**PlotRoom Trello board**: https://trello.com/b/Jm8Kz5II/plotroom (board id
-`6a6ce4d2581c9fe080535db3`). Agents interact with it through the Trello MCP
-connection (`mcp` tools, server `trello`).
+All development work — features, bugs, follow-ups, decisions — is tracked as
+**GitHub Issues** on `andyhite/plotroom`, organized on the **PlotRoom project
+board**: https://github.com/users/andyhite/projects/1 (Projects v2, project
+number 1, owner `andyhite`). Agents drive it with the `gh` CLI; the active
+`gh` account must be one with repo access and the `project` scope (note: a
+`GH_TOKEN` env var overrides stored `gh` logins — use `env -u GH_TOKEN gh …`
+if the ambient token is the wrong account).
 
-**Lists (the workflow, in order):**
+**Board Status columns (the workflow, in order):**
 
-| List                   | Meaning                                                      |
+| Status                 | Meaning                                                      |
 | ---------------------- | ------------------------------------------------------------ |
-| `Backlog`              | Captured, not committed to — includes open `decision` cards  |
+| `Backlog`              | Captured, not committed to — includes open `decision` issues |
 | `To Do`                | Committed; next up. Ordered top-down by priority             |
 | `In Progress`          | Someone (human or agent) is actively working it              |
 | `Review`               | Implementation complete, awaiting independent review         |
 | `Done`                 | Reviewed and merged to `main`                                |
 | `Directional (icebox)` | Spec §13 intentions — pulled in deliberately, never by drift |
 
+Closed issues are the permanent Done record; the board tracks **open** work
+(a finished item is closed with `Fixes #N` / `gh issue close`, and its board
+item moves to `Done` or is archived off the board).
+
 **Rules (binding, for humans and agents alike):**
 
-1. **Every unit of work has a card** before its branch exists. Starting work on
-   something with no card means creating the card first (list it in `To Do` or
-   `Backlog`, whichever is honest).
-2. **Move the card as the work moves** — to `In Progress` when you start, to
-   `Review` when implementation is complete and `pnpm verify` is green, to
-   `Done` only after review passes and the branch ff-merges to `main`. A card
-   is not `Done` while its worktree still exists (same rule as AGENTS.md's
-   worktree cleanup).
-3. **Reference the card** in the branch name where practical
-   (`feat/<short-slug>` stays the shape; put the card's short link or number in
-   the card itself and the PR/commit body, e.g. `Trello: https://trello.com/c/xyz`).
-4. **Discovered work becomes a card, not a detour.** A bug found mid-task, a
-   review's non-blocking findings, a deferral — each gets a card (label `bug`
-   or `follow-up`) rather than silently expanding the current task's scope.
-   This is the board-shaped form of the old "deferred, honestly" convention.
-5. **Decisions are cards too** (label `decision`, in `Backlog` until decided).
-   Deciding one still requires recording the answer in AGENTS.md in the same
-   PR that lands it — the card tracks the state; AGENTS.md remains the record
-   of the answer.
+1. **Every unit of work has an issue** before its branch exists. Starting work
+   on something with no issue means creating the issue first (Status `To Do`
+   or `Backlog`, whichever is honest).
+2. **Move the issue as the work moves** — Status `In Progress` when you start,
+   `Review` when implementation is complete and `pnpm verify` is green, `Done`
+   only after review passes and the branch ff-merges to `main` (close the
+   issue then, ideally via `Fixes #N` in the landing commit/PR). An issue is
+   not done while its worktree still exists (same rule as the worktree
+   cleanup).
+3. **Reference the issue everywhere:** `#N` in the commit body or PR
+   description (`Fixes #N` on the landing change), and in the branch name
+   where practical (e.g. `feat/42-session-delete`).
+4. **Discovered work becomes an issue, not a detour.** A bug found mid-task, a
+   review's non-blocking findings, a deferral — each gets an issue (label
+   `bug` or `follow-up`) rather than silently expanding the current task's
+   scope. This is the board-shaped form of the old "deferred, honestly"
+   convention.
+5. **Decisions are issues too** (label `decision`, Status `Backlog` until
+   decided). Deciding one still requires recording the answer in AGENTS.md in
+   the same PR that lands it — the issue tracks the state; AGENTS.md remains
+   the record of the answer.
 6. **Labels:** `epic` (large multi-task efforts), `follow-up`, `bug`,
-   `decision`, `directional`. Use card checklists for a card's task breakdown.
-7. **Orchestrators** (fleet runs): create/move cards for each track as part of
-   spawn/merge duties; a track's final report links its cards. Subagents
-   without Trello access report status to the orchestrator, who updates the
+   `decision`, `directional`. Use task-list checkboxes in the issue body for a
+   breakdown; sub-issues for real child work.
+7. **Orchestrators** (fleet runs): create/move issues for each track as part
+   of spawn/merge duties; a track's final report links its issues. Subagents
+   without `gh` access report status to the orchestrator, who updates the
    board.
 8. The rebuild's development plan and batch reports were removed from the
-   working tree so the board is the single tracker; the deep per-epic landed
-   notes remain readable in git history
-   (`git show d336340:docs/development-plan.md`), which is where Done cards'
-   "Record:" pointers resolve.
+   working tree so the tracker is the single source; issues #1–#41 are the
+   closed historical record of the rebuild, and the deep per-epic landed notes
+   remain readable in git history
+   (`git show d336340:docs/development-plan.md`).
 
 ## Git rules
 
