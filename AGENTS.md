@@ -7,7 +7,7 @@ Canonical operating rules for any agent (or human) working in this repository. R
 **PlotRoom** — a context-authoring canvas for operating a fleet of AI agents. A single operator composes context (tickets, PRs, documents, files, notes, prior agent output) as a spatial node graph, wires that context into commands, and runs many agent sessions against it simultaneously.
 
 - **Work tracking:** the **PlotRoom Trello board** (https://trello.com/b/Jm8Kz5II/plotroom) — all development work is tracked there as cards moving through the workflow. Check the board before starting work; see "Work tracking — Trello" below for the rules. The spec wins when a card and the spec disagree.
-- **Historical sequencing record:** [`docs/development-plan.md`](docs/development-plan.md) — the phases → epics → tasks plan that carried the rebuild through Phase 8, now a **historical record** with per-epic landed notes (the best written account of _why_ things are shaped as they are). New work is not added there; it becomes a Trello card. Deep landed-note context for a card usually lives here.
+- **Historical record:** the development plan that carried the rebuild through Phase 8 (with its per-epic landed notes — the best written account of _why_ things are shaped as they are) has been removed from the working tree and lives in **git history**: `git show d336340:docs/development-plan.md`. The board's Done cards' "Record:" pointers resolve there.
 - **Source of truth for behavior:** [`docs/product-spec.md`](docs/product-spec.md) ("North Star v1"). It describes _what_ the product does and never _how_. Treat its 12 governing principles and §15 ("What must exist in the first cut") as binding constraints, not suggestions.
 - **Status:** greenfield rebuild. The stack is decided (see "Stack" below); no application code exists yet.
 - **Explicit non-goals** are listed in spec §14. Do not implement workflow control flow, schedulers/triggers that start work, inbound webhooks, inferred relationships, multi-user, or silent truncation.
@@ -500,9 +500,11 @@ connection (`mcp` tools, server `trello`).
    spawn/merge duties; a track's final report links its cards. Subagents
    without Trello access report status to the orchestrator, who updates the
    board.
-8. `docs/development-plan.md` is frozen as the historical record of the
-   rebuild (Phases 0–8). Do not add new work items to it; per-epic landed
-   notes there remain the deep context cards can point at.
+8. The rebuild's development plan and batch reports were removed from the
+   working tree so the board is the single tracker; the deep per-epic landed
+   notes remain readable in git history
+   (`git show d336340:docs/development-plan.md`), which is where Done cards'
+   "Record:" pointers resolve.
 
 ## Git rules
 
@@ -679,7 +681,7 @@ Decided (recorded as they were made):
   worse than no declaration.
 
 - **Electron packaging/updater tooling: electron-builder** (with electron-updater). Decided W6–7 under the operator's standing autonomous-judgment directive; applied in Epic 8.4. Rationale: mature updater story and config-driven multi-platform targets fit Epic 8.4's "installers per platform + updater" scope with the least assembly.
-- Retention policy defaults: last 20 runs per definition, 30-day version window (Epic 1.4, recorded in the development plan's Epic 1.4 note).
+- Retention policy defaults: last 20 runs per definition, 30-day version window (Epic 1.4).
 - **A second, scripted session runtime ships beside the pi adapter** (Epic 4.1/4.2). It replays a declared script of observations and is registered only when the operator selects it (`PLOTROOM_RUNTIME=scripted`), so a default installation has no such adapter to name. It exists because the run spine — observation log, phase reducer, accounting, WS events, completion loop — must be provable without a model, and it exercises that exact path rather than a parallel one. The Playwright milestone gate scripts it (`apps/server/src/runtime/scripted.ts` documents the format, including the bounded `delay` step that paces a session so a streaming assertion cannot be satisfied by a refetch, and the `call` step that raises a gated tool call and **waits** for PlotRoom's answer, which is what makes §6.6's blocked-call loop provable without a model).
 - **A submission is a tool call**, not a private channel, and PlotRoom answers by checking the declared world conditions itself — so completion is proven identically however it was asked for. There are two entry points into that one path, deliberately: `plotroom_submit_outcome` is what a _runtime_ calls (the scripted runtime emits it and the driver recognises it as an observation), and `session_submit` is the agent tool over `POST /api/sessions/:id/submit` in Epic 4.5's catalog. Same service call, same proof; the earlier note here claimed one shared name, which is not what landed.
 - **Cost estimates are priced per definition, from priced runs only, and never rendered as a bare number** (Epic 4.2, §4.1). `estimateRunCost` returns a basis, a range, and a sentence; the range is `null` — not zero — when nothing in that definition's history recorded a cost, and a run whose runtime reported none contributes no evidence about money. The suggested spend cap is the most expensive prior run, and there is no suggestion at all without history.

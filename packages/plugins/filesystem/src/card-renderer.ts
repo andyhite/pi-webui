@@ -1,8 +1,9 @@
 /**
  * The Filesystem plugin's card renderer (§10.1, §5, §9.4's "drag").
  *
- * Mechanics only, per the standing design gate (AGENTS.md, `development-plan.
- * md`'s "Design gate (Track B)"): a declarative `CardView` the host draws —
+ * Mechanics only, per the standing design gate (AGENTS.md — no visual
+ * styling until the design package lands in docs/design/): a declarative
+ * `CardView` the host draws —
  * no colors, no icons, no layout, nothing beyond what `title`/`lines`/
  * `actions` already are. Visual design is a separate, later epic.
  *

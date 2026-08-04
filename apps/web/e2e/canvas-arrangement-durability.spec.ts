@@ -13,9 +13,10 @@
  * and "reset arrangement" both write there and nowhere else. It never reads
  * `PlacedNode.position` off `/api/snapshot`, and never calls the server's
  * own `PATCH /api/nodes/:id/position` / `PATCH /api/arrangement`. This is
- * `docs/development-plan.md`'s own recorded deferral under Epic 3.1's
- * landed note ("the renderer still writes to localStorage until it adopts
- * those endpoints"), not a new finding — but it does mean this file
+ * Epic 3.1's own recorded deferral ("the renderer still writes to
+ * localStorage until it adopts those endpoints" — see the Epic 3.1 card on
+ * the PlotRoom Trello board, or docs/development-plan.md in git history),
+ * not a new finding — but it does mean this file
  * deliberately does **not** contain a "drag a node in the browser, restart
  * the *server*, reload, assert the position survived" test: as things
  * stand today that would either (a) pass for the wrong reason purely off
