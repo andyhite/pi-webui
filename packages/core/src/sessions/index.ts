@@ -35,4 +35,8 @@ export * from "./stop.js";
 export * from "./transcript.js";
 export * from "./triage.js";
 export * from "./tools/index.js";
+export * from "./adapters/jsonl.js";
+export * from "./adapters/observation-queue.js";
+export * from "./adapters/seeded-prompt.js";
+export * from "./adapters/omp/index.js";
 export * from "./adapters/pi/index.js";
