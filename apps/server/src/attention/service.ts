@@ -3,8 +3,6 @@ import {
   DEFAULT_HEALTH_THRESHOLDS,
   deriveAttention,
   deriveHealthAlerts,
-  type Approval,
-  type ApprovalAttention,
   type AttentionItem,
   type AttentionSources,
   type AttentionTarget,
@@ -23,7 +21,6 @@ import {
   type PendingAsk,
   type SessionBroadcastCategory,
   type SessionId,
-  type SessionQuestion,
   type TriageLedger,
   type TriageVerb,
   type VersionId,
@@ -129,16 +126,6 @@ const TRIGGERING_ENTITIES: ReadonlySet<EventEntity> = new Set<EventEntity>([
    */
   "integration",
 ]);
-
-/**
- * An approval row the queue may speak about, paired with the sentence §7.1 shows.
- * Named because two readers below return it and one of them must never reach
- * `pendingAsks`.
- */
-interface VisibleApproval {
-  readonly approval: Approval;
-  readonly attention: ApprovalAttention;
-}
 
 export class AttentionService {
   readonly #config: AttentionConfig;
@@ -298,21 +285,68 @@ export class AttentionService {
     });
   }
 
-  /* ------------------------------------------------------------- the sources */
-
+  /**
+   * The six feeds, with one rule over the ones that speak **about a session**:
+   * a session that is not on the board is not asked about (issue #77).
+   *
+   * A deleted session's node went off the board with its record, so a row naming
+   * one asked the operator to answer something on a card that is not there — and
+   * any §7.3 route said the same thing outbound. The four feeds below whose rows
+   * are about one session carry that session on the target they are about, so the
+   * rule is stated once here rather than remembered by each of them: questions and
+   * approvals (§7.1), the health alerts timed from them and from the session's own
+   * state (§7.2), and completions.
+   *
+   * **Hidden, not withdrawn.** A question and an approval are still answerable
+   * facts and a deleted session is restorable, so the session's own restore is all
+   * it takes to have them asked again — nothing has to undo a withdrawal, which is
+   * what makes this recoverable in the sense principle 10 means. Hiding at the
+   * source rather than in a surface, because that is where AGENTS.md puts it: a
+   * muted item never leaves the server again, and no surface holds a ledger of its
+   * own. `session` is already a triggering entity, so it takes effect when the
+   * deletion is announced rather than at the slow tick.
+   *
+   * Two feeds are deliberately **not** filtered, because neither is about a
+   * session's state:
+   *
+   * - **Drift** consumes what a *command's* newest run read (`deriveBoardDrift`),
+   *   so its rows name no session at all.
+   * - **A broadcast is a fact about what was said** (§6.5). Deleting the sender
+   *   does not un-send it, and the row is there to tell the operator that an agent
+   *   told everyone in a repository something — which is still true, and still
+   *   theirs to know, after they delete the session that said it. Hiding it would
+   *   lose the fact rather than hide a stale question.
+   *
+   * An **ended** session keeps everything: it is still on the board, and an
+   * unanswered question about work that stopped is exactly what §7.1 is for.
+   */
   private sources(now: number, triage: TriageLedger): AttentionSources {
+    const hidden = new Set<string>();
+    for (const stored of this.deps.stores.sessions.deleted()) {
+      hidden.add(stored.session.id);
+    }
+
+    const onTheBoard = <T extends { readonly target: AttentionTarget }>(
+      rows: readonly T[],
+    ): readonly T[] =>
+      rows.filter(
+        (row) =>
+          row.target.sessionId === undefined ||
+          !hidden.has(row.target.sessionId),
+      );
+
     return {
-      questions: this.questionSources(),
-      approvals: this.approvalSources(),
+      questions: onTheBoard(this.questionSources()),
+      approvals: onTheBoard(this.approvalSources()),
       drift: this.driftSources(triage, now),
-      health: this.healthSources(now),
-      completions: this.completionSources(now),
+      health: onTheBoard(this.healthSources(now)),
+      completions: onTheBoard(this.completionSources(now)),
       broadcasts: this.broadcastSources(now),
     };
   }
 
   private questionSources(): AttentionSources["questions"] {
-    return this.askingQuestions().map((question) => ({
+    return this.deps.stores.questions.unanswered().map((question) => ({
       question,
       target: this.sessionTarget(question.sessionId),
     }));
@@ -320,75 +354,18 @@ export class AttentionService {
 
   /**
    * Both approval facts (§7.1): what is still asking, and what the operator
-   * answered whose effect then failed. Two readers rather than one, because
-   * `pendingAsks` may only see the first — it reads its list as "nobody has
-   * answered this yet", and an answered row in there becomes a health alert
-   * saying something false.
+   * answered whose effect then failed. Two calls rather than one, because
+   * `pendingAsks` below reads the first list as "nobody has answered this yet" and
+   * an answered row in it becomes a health alert saying something false.
    */
   private approvalSources(): AttentionSources["approvals"] {
-    return [...this.askingApprovals(), ...this.failedEffectApprovals()].map(
-      (row) => ({
-        attention: row.attention,
-        target: this.sessionTarget(row.approval.sessionId),
-      }),
-    );
-  }
-
-  /**
-   * The sessions that are off the board: deleted, so the node every item about one
-   * targets went with it (§3.6, principle 10).
-   *
-   * **Hidden at the source, and hidden rather than withdrawn.** A deleted session
-   * used to keep its §7.1 rows, pointing the operator at a node that no longer
-   * exists — and the fix belongs here rather than in whatever renders the queue,
-   * because hiding is the source's job and no surface holds a ledger of its own.
-   * Nothing is withdrawn: a question and an approval are still answerable facts, a
-   * deleted session is restorable, and a restore brings its rows back into the
-   * queue with nothing having to undo a withdrawal. `session` is already a
-   * triggering entity, so this takes effect when the deletion is announced rather
-   * than at the slow tick.
-   *
-   * An **ended** session keeps its rows on purpose: it is still on the board, and
-   * an unanswered question about work that stopped is exactly the kind of thing
-   * §7.1 exists to surface.
-   */
-  private offTheBoard(): ReadonlySet<string> {
-    const hidden = new Set<string>();
-    for (const stored of this.deps.stores.sessions.deleted()) {
-      hidden.add(stored.session.id);
-    }
-    return hidden;
-  }
-
-  /**
-   * The unanswered questions the queue may speak about (§6.4, §7.1) — read here
-   * rather than at each use, so the §7.1 row and the §7.2 `unanswered` alert cannot
-   * disagree about which ones exist.
-   */
-  private askingQuestions(): readonly SessionQuestion[] {
-    const hidden = this.offTheBoard();
-    return this.deps.stores.questions
-      .unanswered()
-      .filter((question) => !hidden.has(question.sessionId));
-  }
-
-  /** The approvals still asking that the queue may speak about (§7.1). */
-  private askingApprovals(): readonly VisibleApproval[] {
-    const hidden = this.offTheBoard();
-    return this.deps.approvals
-      .attention()
-      .filter((row) => !hidden.has(row.approval.sessionId));
-  }
-
-  /**
-   * The approvals the operator answered whose effect then failed (§7.1) — a row
-   * that reports rather than asks, which is why it is never in `pendingAsks`.
-   */
-  private failedEffectApprovals(): readonly VisibleApproval[] {
-    const hidden = this.offTheBoard();
-    return this.deps.approvals
-      .effectFailureAttention()
-      .filter((row) => !hidden.has(row.approval.sessionId));
+    return [
+      ...this.deps.approvals.attention(),
+      ...this.deps.approvals.effectFailureAttention(),
+    ].map((row) => ({
+      attention: row.attention,
+      target: this.sessionTarget(row.approval.sessionId),
+    }));
   }
 
   private driftSources(
@@ -592,18 +569,14 @@ export class AttentionService {
   }
 
   /**
-   * What nobody has answered yet, for §7.2's `unanswered` alert. The same two
-   * readers §7.1's rows come from, so an alert cannot claim nobody answered
-   * something the queue is no longer showing.
-   *
-   * `askingApprovals` includes the effect-failure rows, which ask for nothing —
-   * harmless here, because an alert about one is timed from its raise and the row
-   * itself is a row §7.1 tells the operator rather than asks them.
+   * What nobody has answered yet, for §7.2's `unanswered` alert. Unfiltered here:
+   * the alerts these produce carry the same target the row does, and `sources`
+   * drops the ones about a session off the board — one rule, one place.
    */
   private pendingAsks(): readonly PendingAsk[] {
     const asks: PendingAsk[] = [];
 
-    for (const question of this.askingQuestions()) {
+    for (const question of this.deps.stores.questions.unanswered()) {
       asks.push({
         kind: "question",
         id: question.id,

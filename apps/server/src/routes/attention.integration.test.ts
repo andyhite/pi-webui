@@ -160,6 +160,44 @@ describe("the queue (§7.1)", () => {
     expect(at(back, "id")).toBe(`question:${questionId}`);
   });
 
+  it("keeps a broadcast after its sender is deleted: the telling still happened (#77)", async () => {
+    const harness = await boot(repository());
+    const sender = await command(harness, { lifecycle: "open", name: "A" });
+    const senderId = str(
+      await run(harness, sender.commandId, staysOpen),
+      "session.id",
+    );
+    const peer = await command(harness, { lifecycle: "open", name: "B" });
+    await run(harness, peer.commandId, staysOpen);
+
+    // The repository the server derived, read rather than guessed — two workstreams
+    // over one checkout are one repository, which is what §6.5's scope means.
+    const repositoryId = String(
+      list(await harness.ok("/broadcast-world"), "members")
+        .filter((member) => at(member, "sessionId") === senderId)
+        .flatMap((member) => list(member, "repositoryIds"))[0],
+    );
+    await harness.ok("/broadcasts", {
+      method: "POST",
+      body: {
+        text: "I rebased the shared branch",
+        scope: { kind: "everyone-in-repository", repositoryId },
+        category: "material-state-changed",
+      },
+      actor: `session:${senderId}`,
+    });
+    const row = await itemOfFeed(harness, "broadcast");
+
+    await harness.ok(`/sessions/${senderId}`, { method: "DELETE" });
+
+    // Deleting the sender does not un-send it. This row exists so the operator
+    // knows an agent told everyone in a repository something, and that is still
+    // true — and still theirs to know — after they delete the session that said
+    // it, which is why the broadcast feed is deliberately outside the hide.
+    const after = await items(harness);
+    expect(after.map((item) => at(item, "id"))).toContain(at(row, "id"));
+  });
+
   it("keeps every id stable across a re-read, so nothing looks new twice", async () => {
     const harness = await boot(repository());
     await askingSession(harness);
