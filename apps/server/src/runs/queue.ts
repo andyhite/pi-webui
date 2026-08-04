@@ -129,9 +129,39 @@ export class RunQueueService {
     this.#concurrencyLimit = deps.concurrencyLimit;
   }
 
-  /** Epic 8.3's live setting: applies to the next admission decision, not retroactively. */
+  /**
+   * Epic 8.3's live setting.
+   *
+   * A **raise** frees slots, and a freed slot is drained for exactly the reason
+   * every other freed slot is: the entries waiting were already initiated by
+   * somebody's gesture, so admitting them is §4.1's "deciding *when*, never
+   * *whether*" — not a schedule, and nothing here starts work nobody asked for
+   * (principle 2). Without it the raise took effect only at the next session
+   * event, which for an idle fleet is never: the operator raises the limit to
+   * let queued work through and watches it not go through.
+   *
+   * A lowering admits nothing (`drain` stops the moment running meets the
+   * limit) and stops nothing either — it "applies to the next admission
+   * decision, not retroactively", so a session already running is not what a
+   * settings write ends.
+   */
   setConcurrencyLimit(limit: number): void {
+    const raised = limit > this.#concurrencyLimit;
     this.#concurrencyLimit = limit;
+    if (!raised) return;
+
+    // The caller is a synchronous settings applier, so this cannot be awaited:
+    // the drain is fire-and-forget, and a failure inside it is logged like any
+    // other drain's, never thrown at whoever changed a setting.
+    void this.drain().catch((error: unknown) => {
+      this.deps.logger.error(
+        "draining after a concurrency-limit raise failed",
+        {
+          limit,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      );
+    });
   }
 
   /** The limit currently in force — the fleet read's own source (§8, §11). */

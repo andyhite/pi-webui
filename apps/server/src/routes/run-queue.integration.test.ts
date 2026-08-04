@@ -315,6 +315,52 @@ describe("the concurrency limit (§4.1)", () => {
 
     expect(at(admitted, "sessionId")).not.toBeNull();
   });
+
+  it("admits what was waiting the moment the operator raises the limit, with no session event to wait for", async () => {
+    const harness = await bootWithScript(staysOpen, 1);
+    const workstream = str(
+      await harness.ok("/workstreams", { method: "POST", body: {} }),
+      "workstream.id",
+    );
+    const holder = await command(harness, {
+      workstreamId: workstream,
+      name: "Holder",
+    });
+    const waiter = await command(harness, {
+      workstreamId: workstream,
+      name: "Waiter",
+    });
+
+    await scope(harness, {
+      scope: "one",
+      scopeId: holder.commandId,
+      initiationKey: "raise-holder",
+    });
+    const waiting = await scope(harness, {
+      scope: "one",
+      scopeId: waiter.commandId,
+      initiationKey: "raise-waiter",
+    });
+    expect(at(waiting, "queued.0.state")).toBe("queued");
+
+    // The raise is the only thing that happens: the holder is still running, so
+    // nothing frees a slot, and nothing publishes a session event the queue
+    // could drain from. Before this, the operator's raise did nothing visible
+    // until the next session event — on an idle fleet, never.
+    await harness.ok("/settings/concurrencyLimit", {
+      method: "PUT",
+      body: { value: 2 },
+    });
+
+    const admitted = await waitFor(async () => {
+      const entry = list(await harness.ok("/run-queue"), "queued").find(
+        (candidate) => at(candidate, "commandId") === waiter.commandId,
+      );
+      return at(entry, "state") === "running" ? entry : null;
+    }, "the queued run to be admitted once the limit rose");
+
+    expect(at(admitted, "sessionId")).not.toBeNull();
+  });
 });
 
 describe("the preview is the contract (§4.1)", () => {
