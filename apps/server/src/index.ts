@@ -407,10 +407,23 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     // still connecting — so it needs its own report. Without this it is an
     // unhandled rejection: the same exit, minus the one line saying the port was
     // already taken.
-    startServer().listening.catch((err: unknown) => {
-      console.error(`${SERVER_NAME}: failed to start: ${String(err)}`);
-      process.exit(1);
-    });
+    startServer()
+      .listening.then((bound) => {
+        // Reported over IPC to whatever spawned this process, if anything did
+        // (`apps/desktop/src/main.ts`'s `spawnServer`) — `process.send` exists
+        // only when the parent asked for an `"ipc"` stdio channel, so this is a
+        // no-op everywhere else (a bare `node dist/index.js`, a test harness).
+        // A stored `host`/`port` override can differ from what this process
+        // was asked to bind (#87), and can even change which one of the two it
+        // ended up on after falling back — the actual address is the one fact
+        // only this process has, and the parent that assumed the port it chose
+        // has no other way to learn it (#88).
+        process.send?.({ type: "listening", ...bound });
+      })
+      .catch((err: unknown) => {
+        console.error(`${SERVER_NAME}: failed to start: ${String(err)}`);
+        process.exit(1);
+      });
   } catch (err) {
     console.error(`${SERVER_NAME}: failed to start: ${String(err)}`);
     process.exit(1);

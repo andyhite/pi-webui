@@ -77,7 +77,8 @@ describe("spawnServer + healthProbe against the real built server", () => {
     try {
       handle = await spawnOrAttach(
         {
-          probe: healthProbe(port),
+          port,
+          probeFor: healthProbe,
           spawn: () =>
             spawnServer(port, (code) => {
               unexpectedExitCode = code;
@@ -124,7 +125,8 @@ describe("spawnServer + healthProbe against the real built server", () => {
     try {
       first = await spawnOrAttach(
         {
-          probe: healthProbe(port),
+          port,
+          probeFor: healthProbe,
           spawn: () => spawnServer(port, () => {}),
           waitUntilHealthy: createPollingWaiter(100),
         },
@@ -134,7 +136,8 @@ describe("spawnServer + healthProbe against the real built server", () => {
 
       let spawnCalledAgain = false;
       second = await spawnOrAttach({
-        probe: healthProbe(port),
+        port,
+        probeFor: healthProbe,
         spawn: () => {
           spawnCalledAgain = true;
           return spawnServer(port, () => {});
@@ -142,7 +145,7 @@ describe("spawnServer + healthProbe against the real built server", () => {
         waitUntilHealthy: createPollingWaiter(100),
       });
 
-      expect(second.result).toEqual({ mode: "attached" });
+      expect(second.result).toEqual({ mode: "attached", port });
       expect(spawnCalledAgain).toBe(false);
     } finally {
       first?.stop();
@@ -154,4 +157,95 @@ describe("spawnServer + healthProbe against the real built server", () => {
       }
     }
   }, 20_000);
+
+  it("reports the port it actually bound when a stored override moves it, rather than the one it was asked for (#87, #88)", async () => {
+    const askedPort = await ephemeralPort();
+    const storedPort = await ephemeralPort();
+    const stateDir = tempStateDir();
+    let handle: SpawnOrAttachHandle | undefined;
+
+    const originalEnv = process.env.PLOTROOM_STATE_DIR;
+    process.env.PLOTROOM_STATE_DIR = stateDir;
+    try {
+      handle = await spawnOrAttach(
+        {
+          port: askedPort,
+          probeFor: healthProbe,
+          spawn: () => spawnServer(askedPort, () => {}),
+          waitUntilHealthy: createPollingWaiter(100),
+        },
+        15_000,
+      );
+      expect(handle.result).toEqual({
+        mode: "spawned",
+        pid: expect.any(Number),
+        port: askedPort,
+      });
+      const firstBoundPort =
+        handle.result.mode === "spawned" ? handle.result.port : askedPort;
+
+      const write = await fetch(
+        `http://127.0.0.1:${firstBoundPort}/api/settings/port`,
+        {
+          method: "PUT",
+          headers: {
+            origin: `http://localhost:${firstBoundPort}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ value: storedPort }),
+        },
+      );
+      expect(write.status).toBe(200);
+      handle.stop();
+      // Let the kill actually land before spawning a second real process on
+      // the same `askedPort` — a still-shutting-down first process holding
+      // it would make the second boot's own bind race rather than exercise
+      // the override.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      handle = undefined;
+
+      // Asked for `askedPort` again (free, since the first process released
+      // it) — the stored override should win at boot, and this call must
+      // learn the real port from the child's own report rather than
+      // assuming the one it asked for.
+      handle = await spawnOrAttach(
+        {
+          port: askedPort,
+          probeFor: healthProbe,
+          spawn: () => spawnServer(askedPort, () => {}),
+          waitUntilHealthy: createPollingWaiter(100),
+        },
+        15_000,
+      );
+
+      expect(handle.result).toEqual({
+        mode: "spawned",
+        pid: expect.any(Number),
+        port: storedPort,
+      });
+
+      const response = await fetch(
+        `http://127.0.0.1:${storedPort}/api/health`,
+        {
+          headers: { origin: `http://localhost:${storedPort}` },
+        },
+      );
+      expect(response.ok).toBe(true);
+
+      // Nothing is listening on the port this call asked for — the second
+      // process bound the stored override instead, not both.
+      await expect(
+        fetch(`http://127.0.0.1:${askedPort}/api/health`, {
+          headers: { origin: `http://localhost:${askedPort}` },
+        }),
+      ).rejects.toBeDefined();
+    } finally {
+      handle?.stop();
+      if (originalEnv === undefined) {
+        delete process.env.PLOTROOM_STATE_DIR;
+      } else {
+        process.env.PLOTROOM_STATE_DIR = originalEnv;
+      }
+    }
+  }, 30_000);
 });
