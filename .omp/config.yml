@@ -8,3 +8,10 @@ autolearn:
 # gh; the github tool adds pr_create, run_watch and search on top of it.
 github:
   enabled: true
+
+# Skills live namespaced under .omp/skills/plotroom/. Native discovery only
+# scans one level (<skills-root>/<skill>/SKILL.md), so the nested parent is
+# registered as a custom directory; skill names are unchanged (skill://dev-loop).
+skills:
+  customDirectories:
+    - ./.omp/skills/plotroom
