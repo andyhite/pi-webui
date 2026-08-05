@@ -72,10 +72,30 @@ Found something that is not this item? `/plotroom:triage` files it on the right 
 rather than growing this change. Needed a convention nobody had written?
 `/plotroom:decide` puts it where it belongs.
 
-Use subagents inside the item wherever the work genuinely splits: `scout` to map
-files you do not know yet, `librarian` for a vendor API's real behavior, several
-`plotroom-review` dispatches in one batch when a change has independent seams. Only
-one of them writes in your worktree — you.
+Use subagents inside the item wherever the work genuinely splits, and dispatch every
+independent one in the same batch — never serialise slices that don't depend on each
+other. Match the agent type to the work rather than reaching for the general-purpose
+worker by default: `scout` to map files you do not know yet, `librarian` for a
+vendor API's real behavior, `sonic` for a strictly mechanical fan-out (data
+collection, uniform edits across many files), several `plotroom-review` dispatches
+in one batch when a change has independent seams. Only one of them writes in your
+worktree — you.
+
+A dispatched subagent that genuinely needs another dispatched subagent's mid-flight
+finding messages it directly over `hub` rather than waiting for the whole batch to
+return and you relaying between them: delivery is fire-and-forget, the recipient
+sees it as a non-interrupting aside and can act on it at its own next turn, and
+`await: true` blocks for a reply if the sender needs one before continuing.
+
+Dispatch chooses an agent type, not a worker model — a subagent's model comes from
+that agent's own configuration, never something this call picks.
+Do not spend a heavier type on work a lighter one covers, and skip straight
+to that type instead of routing everything through the general-purpose worker.
+The same discipline applies to your own one-shot `completion()` calls:
+`model="smol"` for a cheap, narrow lookup or classification, `model="slow"` for a
+verification whose cost of missing something is high, and the session default for
+everything in between. Reserve `slow` for the judgment calls this cycle actually
+turns on — a plan's shape, a review's verdict — not routine lookups.
 
 Anything another session needs to know goes on the issue: a shared seam you had to
 touch, a bug you found (file it, with a kind label and a `Track`), a convention you
