@@ -17,7 +17,8 @@
  *
  * `ProducedObject` is `kind` + `externalId` + `title` + three renderings. It carries no
  * members, no references, and no relationship channel of any kind — and core's
- * `collection` kind has **no membership model** (an open decision in `AGENTS.md`). So
+ * `collection` kind has **no membership model yet** (settled by decision 0004,
+ * `docs/decisions/0004-collection-membership.md`; implemented by #95). So
  * the least-inventive representation the contract can express is used, and nothing is
  * invented in core:
  *
@@ -31,11 +32,12 @@
  *
  * That is enough for §3.1's gesture — "the epic's children arrive as a collection, the
  * human expands it, prunes it, and drags four tickets out" — because everything
- * draggable already exists as an object. When the membership model lands, these same
- * external ids are the join key, so nothing has to be re-read and no plugin-local
- * membership schema has to be migrated away. Packing a member list into a structured
- * side-channel would have been a second membership model that core would later have to
- * honour, which is exactly the invention the open decision is waiting to avoid.
+ * draggable already exists as an object. When #95 lands, these same external
+ * ids are the join key, so nothing has to be re-read and no plugin-local
+ * membership schema has to be migrated away. Packing a member list into a
+ * structured side-channel would have been a second membership model that
+ * core would later have to honour, which is exactly the invention decision
+ * 0004 settled to avoid.
  */
 import type { ProducedObject } from "@plotroom/plugin-sdk";
 
