@@ -8,10 +8,10 @@ argument, where it sits in the lifecycle, which skills it reads, what it
 leaves behind (board moves, branches, PRs), and show one worked invocation.
 
 Ground everything in the live tree, never from memory: list
-`.omp/commands/plotroom/*.md` and take each command's `description`
-frontmatter; list `.omp/skills/plotroom/*/SKILL.md` and `.omp/agents/*.md`
-the same way; read the Documentation table in `AGENTS.md`. If anything this
-file implies disagrees with what is on disk, disk wins — present what exists.
+`.omp/commands/*.md` and take each command's `description` frontmatter; list
+`.omp/skills/*/SKILL.md` and `.omp/agents/*.md` the same way; read the
+Documentation table in `AGENTS.md`. If anything this file implies disagrees
+with what is on disk, disk wins — present what exists.
 
 Present, compactly — tables over prose, one screen if you can:
 
