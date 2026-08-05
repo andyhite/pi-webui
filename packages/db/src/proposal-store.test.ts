@@ -66,15 +66,15 @@ afterEach(() => {
 function propose(
   rationale = "every session keeps rediscovering this",
 ): ToolProposal {
-  return store.create(
-    proposeStandingInstruction({
-      id: newProposalId(),
-      proposedBy: sessionId,
-      objectId: OBJECT,
-      rationale,
-      at: clock.now(),
-    }),
-  );
+  const built = proposeStandingInstruction({
+    id: newProposalId(),
+    proposedBy: sessionId,
+    objectId: OBJECT,
+    rationale,
+    at: clock.now(),
+  });
+  if (!built.ok) throw new Error(built.refusal.message);
+  return store.create(built.value);
 }
 
 describe("a session's proposal (principle 1)", () => {
@@ -95,13 +95,16 @@ describe("a session's proposal (principle 1)", () => {
 
   it("is idempotent in its own id: a replayed gesture writes one row (principle 9)", () => {
     const id = newProposalId();
-    const build = () =>
-      proposeStandingInstruction({
+    const build = () => {
+      const built = proposeStandingInstruction({
         id,
         proposedBy: sessionId,
         objectId: OBJECT,
         at: clock.now(),
       });
+      if (!built.ok) throw new Error(built.refusal.message);
+      return built.value;
+    };
 
     store.create(build());
     store.create(build());

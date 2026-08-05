@@ -113,6 +113,14 @@ export const STANDING_INSTRUCTION_REFUSAL_REASONS = [
   "human_only",
   /** One gesture, one thing (principle 9): this object is already standing. */
   "already_standing",
+  /**
+   * Discovery is a read a session may run as often as it likes (§3.8's own
+   * justification is that parallel sessions stop rediscovering the same fact at a
+   * paid turn each) — but a fresh proposal on every rediscovery would turn that into
+   * a fresh approval-queue row every time, for a question the operator already has
+   * pending. One object, one open ask at a time.
+   */
+  "already_proposed",
 ] as const;
 
 export type StandingInstructionRefusalReason =
@@ -163,16 +171,9 @@ export function markStandingInstruction(
   if (!check.ok) {
     return check;
   }
-  const already = (input.existing ?? []).find(
-    (instruction) =>
-      instruction.objectId === input.object.objectId &&
-      instruction.retiredAt === null,
-  );
+  const already = liveStandingFor(input.existing ?? [], input.object.objectId);
   if (already !== undefined) {
-    return refuse(
-      "already_standing",
-      `${input.object.objectId} is already a standing instruction (${already.id})`,
-    );
+    return refuseAlreadyStanding(already);
   }
   return {
     ok: true,
@@ -343,6 +344,17 @@ export interface StandingInstructionProposalInput {
   readonly objectId: ObjectId;
   readonly rationale?: string;
   readonly at: number;
+  /**
+   * Whatever is already standing, so a rediscovery of the same object is refused
+   * rather than asked about twice (mirrors {@link MarkStandingInstructionInput}'s
+   * `existing`).
+   */
+  readonly existingStanding?: readonly StandingInstruction[];
+  /**
+   * Every pending proposal, so a second proposal for an object already awaiting an
+   * answer is refused instead of raising a second, redundant approval.
+   */
+  readonly pendingProposals?: readonly ToolProposal[];
 }
 
 /**
@@ -352,10 +364,41 @@ export interface StandingInstructionProposalInput {
  * one record, one acceptance verb (`decideProposal`), one queue row. A standing
  * instruction with a proposal type of its own would be a second acceptance path, and the
  * second one is always the one that forgets to check who is accepting.
+ *
+ * Refused rather than built when the object is already standing or already has a
+ * pending proposal — the same two facts {@link markStandingInstruction} checks at
+ * acceptance time, checked here as well because a proposal a session can run as a
+ * bare read (discovering a repository's own instructions, for instance) must not
+ * flood the queue with an ask the operator has already answered or is already
+ * holding.
  */
 export function proposeStandingInstruction(
   input: StandingInstructionProposalInput,
-): ToolProposal {
+): StandingInstructionResult<ToolProposal> {
+  // Checked before "already proposed": an object already standing is the
+  // terminal fact, and a caller told "let the operator answer" about a proposal
+  // that would resolve to a fact already settled is being told the wrong thing.
+  const alreadyStanding = liveStandingFor(
+    input.existingStanding ?? [],
+    input.objectId,
+  );
+  if (alreadyStanding !== undefined) {
+    return refuseAlreadyStanding(alreadyStanding);
+  }
+  const alreadyPending = (input.pendingProposals ?? []).find(
+    (proposal) =>
+      proposal.state === "pending" &&
+      proposal.tool === STANDING_INSTRUCTION_DECLARE_TOOL &&
+      proposal.input["objectId"] === input.objectId,
+  );
+  if (alreadyPending !== undefined) {
+    // No proposal id in the message: it names a fact about the caller's own
+    // objectId, never another session's proposal identity.
+    return refuse(
+      "already_proposed",
+      `${input.objectId} already has a pending standing-instruction proposal; propose once and let the operator answer (§3.8)`,
+    );
+  }
   // No `target`: a `ToolTarget` exists so the lineage check can resolve which sessions
   // a call would author into, and a standing instruction's answer is "all of them,
   // including the caller's own" — which is why this is a proposal rather than a call
@@ -365,13 +408,16 @@ export function proposeStandingInstruction(
     tool: STANDING_INSTRUCTION_DECLARE_TOOL,
     input: { objectId: input.objectId },
   };
-  return proposeToolCall({
-    id: input.id,
-    proposedBy: input.proposedBy,
-    call,
-    ...(input.rationale === undefined ? {} : { rationale: input.rationale }),
-    at: input.at,
-  });
+  return {
+    ok: true,
+    value: proposeToolCall({
+      id: input.id,
+      proposedBy: input.proposedBy,
+      call,
+      ...(input.rationale === undefined ? {} : { rationale: input.rationale }),
+      at: input.at,
+    }),
+  };
 }
 
 /** The sentence every surface uses for a pending proposal (§7.1). */
@@ -487,4 +533,28 @@ function refuse<T>(
   message: string,
 ): StandingInstructionResult<T> {
   return { ok: false, refusal: { reason, message } };
+}
+
+/**
+ * The live standing instruction for one object, if any — one gesture, one thing
+ * (principle 9). Shared so "is this object already standing" is stated once and
+ * checked identically whether it is asked at propose time or at accept time.
+ */
+function liveStandingFor(
+  existing: readonly StandingInstruction[],
+  objectId: ObjectId,
+): StandingInstruction | undefined {
+  return existing.find(
+    (instruction) =>
+      instruction.objectId === objectId && instruction.retiredAt === null,
+  );
+}
+
+function refuseAlreadyStanding<T>(
+  instruction: StandingInstruction,
+): StandingInstructionResult<T> {
+  return refuse(
+    "already_standing",
+    `${instruction.objectId} is already a standing instruction (${instruction.id})`,
+  );
 }

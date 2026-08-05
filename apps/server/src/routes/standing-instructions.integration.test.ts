@@ -286,6 +286,63 @@ describe("a session proposes and the operator accepts (principle 1, §3.8)", () 
     ).toContain("pnpm");
   });
 
+  it("refuses a second proposal for an object with one already pending", async () => {
+    const harness = await boot(repository());
+    const objectId = await note(harness);
+    const { sessionId } = await session(harness);
+
+    await harness.ok("/proposals", {
+      method: "POST",
+      body: { tool: "standing_instruction_declare", input: { objectId } },
+      actor: `session:${sessionId}`,
+    });
+
+    // A second session rediscovering the same file must not raise a second ask.
+    const other = await session(harness);
+    const refused = await harness.call("/proposals", {
+      method: "POST",
+      body: { tool: "standing_instruction_declare", input: { objectId } },
+      actor: `session:${other.sessionId}`,
+    });
+    expect(refused.status).toBe(409);
+    expect(at(refused.body, "error.details.reason")).toBe("already_proposed");
+
+    // Only the first proposal's row is in the queue.
+    const items = list(await harness.ok("/attention"), "items");
+    expect(
+      items.filter(
+        (item) =>
+          at(item, "feed") === "approval" &&
+          at(item, "payload.capability") === "standing_instruction_declare",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("refuses a proposal for an object that is already standing", async () => {
+    const harness = await boot(repository());
+    const objectId = await note(harness);
+    const { sessionId } = await session(harness);
+
+    const proposed = await harness.ok("/proposals", {
+      method: "POST",
+      body: { tool: "standing_instruction_declare", input: { objectId } },
+      actor: `session:${sessionId}`,
+    });
+    await harness.ok(`/proposals/${str(proposed, "proposal.id")}/accept`, {
+      method: "POST",
+    });
+
+    // Rediscovering the same file, once it is standing, gets nothing new to ask.
+    const other = await session(harness);
+    const refused = await harness.call("/proposals", {
+      method: "POST",
+      body: { tool: "standing_instruction_declare", input: { objectId } },
+      actor: `session:${other.sessionId}`,
+    });
+    expect(refused.status).toBe(409);
+    expect(at(refused.body, "error.details.reason")).toBe("already_standing");
+  });
+
   it("applies nothing when the operator answers the queue row directly, until they approve it", async () => {
     const harness = await boot(repository());
     const objectId = await note(harness);
