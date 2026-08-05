@@ -14,32 +14,18 @@ export interface ApiSearchDataSourceOptions {
 }
 
 /**
- * `GET /api/search` passes `q` straight into an FTS5 `MATCH` expression
- * (`packages/db/src/search.ts`) — that is FTS5's own *query grammar*, not a
- * plain full-text term: an unquoted `-` is its NOT-operator and `:` starts
- * a column filter, so an ordinary hyphenated word (a ticket id, a branch
- * name) either changes what the query means or, for some inputs, raises a
- * raw SQLite error the route surfaces as a 500. Nothing in §6.8 asks an
- * operator typing a search box to know FTS5's grammar, so every word this
- * client sends is wrapped as its own quoted phrase (`"word"`, embedded
- * quotes doubled per FTS5's own escaping rule) — literal text, adjacent
- * quoted phrases still AND together exactly like bare terms would, and a
- * hyphen or colon inside one is just a character again.
- */
-function toFts5MatchQuery(q: string): string {
-  return q
-    .split(/\s+/)
-    .filter((word) => word.length > 0)
-    .map((word) => `"${word.replace(/"/g, '""')}"`)
-    .join(" ");
-}
-
-/**
  * Always `/api/search` — a fixed, same-origin literal — with every dynamic
  * part carried as a `URLSearchParams` value, never concatenated into the
  * path or the host: exactly the shape `HttpClient`'s own contract requires
  * (`transport/http.ts`'s "never a full URL"), so there is nothing here for a
  * caller-supplied query string to redirect.
+ *
+ * `q` travels as the operator typed it. It used to be re-quoted here as an
+ * FTS5 phrase before the route's own sanitization existed at the source
+ * (`toLiteralFtsQuery` in `packages/db/src/search.ts`) — the same rule
+ * stated twice is exactly the drift principle 8 exists to prevent (#68), and
+ * the route is every caller's gate (curl, this client, agents later), so it
+ * is the one place that has to get FTS5's grammar right.
  */
 export function createApiSearchDataSource(
   options: ApiSearchDataSourceOptions,
@@ -60,7 +46,7 @@ export function createApiSearchDataSource(
         });
       }
       const params = new URLSearchParams();
-      params.set("q", toFts5MatchQuery(q));
+      params.set("q", q);
       if (query.kinds && query.kinds.length > 0) {
         params.set("kinds", query.kinds.join(","));
       }

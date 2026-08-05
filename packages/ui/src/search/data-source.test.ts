@@ -23,9 +23,9 @@ describe("createApiSearchDataSource", () => {
     expect(result).toEqual({ query: "", hits: [], limit: 0, truncated: false });
   });
 
-  it("quotes the query as an FTS5 phrase (never a bare MATCH grammar term) and returns the response untouched, in the server's own order", async () => {
+  it("sends the query as the operator typed it, and returns the response untouched, in the server's own order", async () => {
     const get = vi.fn(async (path: string) => {
-      expect(path).toBe("/api/search?q=%22migrate%22");
+      expect(path).toBe("/api/search?q=migrate");
       return {
         query: "migrate",
         hits: [
@@ -97,9 +97,9 @@ describe("createApiSearchDataSource", () => {
     });
   });
 
-  it("quotes a hyphenated word instead of letting FTS5 read it as NOT — the crash a raw ticket id or branch name used to cause", async () => {
+  it("passes a hyphenated word through unquoted, trusting the route's own sanitization (#68)", async () => {
     const get = vi.fn(async (path: string) => {
-      expect(path).toBe("/api/search?q=%22OXY-2982%22");
+      expect(path).toBe("/api/search?q=OXY-2982");
       return { query: "OXY-2982", hits: [] };
     });
     const source = createApiSearchDataSource({ http: fakeHttp(get) });
@@ -109,9 +109,9 @@ describe("createApiSearchDataSource", () => {
     expect(get).toHaveBeenCalledTimes(1);
   });
 
-  it("quotes each word of a multi-word query separately, so terms still AND together rather than becoming one exact phrase", async () => {
+  it("passes a multi-word query through as one string, not one phrase per word", async () => {
     const get = vi.fn(async (path: string) => {
-      expect(path).toBe("/api/search?q=%22flaky%22+%22login%22");
+      expect(path).toBe("/api/search?q=flaky+login");
       return { query: "flaky login", hits: [] };
     });
     const source = createApiSearchDataSource({ http: fakeHttp(get) });
@@ -123,7 +123,7 @@ describe("createApiSearchDataSource", () => {
 
   it("carries kinds and limit as query parameters, never into the path", async () => {
     const get = vi.fn(async (path: string) => {
-      expect(path).toBe("/api/search?q=%22x%22&kinds=session%2Cnote&limit=10");
+      expect(path).toBe("/api/search?q=x&kinds=session%2Cnote&limit=10");
       return { query: "x", hits: [] };
     });
     const source = createApiSearchDataSource({ http: fakeHttp(get) });
