@@ -82,8 +82,10 @@ export const SETTINGS_CATALOG: readonly SettingDefinition[] = [
     type: "number",
     // The one setting a bad stored value can make the product *unbootable*
     // with no in-app way back (a stored port beats the environment variable,
-    // and deleting the row needs a running server), so it is bounded on every
-    // path rather than trusted.
+    // and deleting the row needs a running server), so what can be stored here
+    // is bounded rather than trusted — this row and `parsePort` are the two
+    // places `PORT_BOUND` is enforced, and its own doc says why `port: 0` is
+    // legal for a caller inside the process and refused as configuration.
     bound: PORT_BOUND,
     path: ["port"],
     envVar: "PLOTROOM_PORT",

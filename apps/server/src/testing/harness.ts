@@ -42,7 +42,9 @@ export interface CallResult {
 }
 
 /**
- * A port the OS says is free, rather than one this module guessed.
+ * A port the OS says is free, rather than one this module guessed — for the few
+ * callers that need a port *before* something binds it (a webhook receiver of
+ * their own, or an assertion about a configured port).
  *
  * Per-worker bands were the previous answer and they were not enough: a band is
  * still a static range, so a leaked server from an earlier run, another suite's
@@ -51,12 +53,12 @@ export interface CallResult {
  * other server*, which surfaces as an unrelated refusal somewhere far away.
  *
  * Binding a throwaway socket to port 0 and reading back what the OS assigned cannot
- * collide with anything already listening, leaked or not. It is the same probe
- * `apps/web`'s e2e harness uses, and its own comment names the reason PlotRoom's
- * server cannot simply be told to bind 0 itself: `startServer` reports the
- * *configured* port, so a caller asking for 0 would not learn which port it got.
- * There is a narrow window between closing the probe and the child binding;
- * acceptable for test tooling, and strictly safer than a counter.
+ * collide with anything already listening, leaked or not — but it does not close
+ * the window between this probe closing and the caller binding, and that window is
+ * real: CI has produced `EADDRINUSE` in one suite and `ECONNREFUSED` on the same
+ * port in another, in one run. **Anything booting a PlotRoom server asks for port
+ * 0 and reads `handle.listening` instead** (`boot` below); this stays for the
+ * cases that cannot.
  */
 export function ephemeralPort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -127,7 +129,8 @@ export async function boot(
   overrides: ServerConfigOverrides = {},
   options: { readonly stateDir?: string } = {},
 ): Promise<Harness> {
-  const thisPort = await ephemeralPort();
+  // Port 0: the OS picks, and `handle.listening` says which. Probing for a free
+  // port first and binding it second is a race — see `ephemeralPort` above.
   const stateDir =
     options.stateDir ?? mkdtempSync(join(tmpdir(), "plotroom-int-test-"));
   if (options.stateDir === undefined) scratch.push(stateDir);
@@ -140,7 +143,7 @@ export async function boot(
       {},
       {
         host: "127.0.0.1",
-        port: thisPort,
+        port: 0,
         stateDir,
         credential: null,
         allowNonLoopbackBind: false,
@@ -162,6 +165,10 @@ export async function boot(
       },
     ),
   );
+  // Before `recovered`, because a bind that failed is the more interesting
+  // failure and this is where it surfaces: without it an `EADDRINUSE` is an
+  // unhandled `error` event and the suite reports whatever timed out next.
+  const { port: thisPort } = await handle.listening;
   await handle.recovered;
   // Whatever plugins this boot was given have loaded and reported their health, so
   // a test reads a settled `/api/plugins` rather than racing the workers.

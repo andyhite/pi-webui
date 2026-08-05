@@ -7,27 +7,27 @@ import { GraphStore } from "@plotroom/db";
 import type { DomainEvent } from "@plotroom/core";
 import { loadServerConfig } from "../config.js";
 import { startServer } from "../index.js";
-import { ephemeralPort } from "../testing/harness.js";
 
 type Handle = ReturnType<typeof startServer>;
 
 let handle: Handle;
 let base: string;
 let origin: string;
-/** Assigned per test by the bind probe below; the WS helpers read it. */
+/** The port the socket actually bound, read back per test; the WS helpers use it. */
 let port: number;
 
 beforeEach(async () => {
-  // From the OS rather than a counter: a static band collides with a leaked server
-  // or another suite, and the failure can be requests landing on the other one.
-  port = await ephemeralPort();
+  // Port 0, and the bound one comes back from the socket. A static band collides
+  // with a leaked server or another suite, and probing for a free port then
+  // binding it leaves a window in which something else can take it — the failure
+  // can be requests landing on that other server.
   const stateDir = mkdtempSync(join(tmpdir(), "plotroom-api-test-"));
   handle = startServer(
     loadServerConfig(
       {},
       {
         host: "127.0.0.1",
-        port,
+        port: 0,
         stateDir,
         credential: null,
         allowNonLoopbackBind: false,
@@ -41,6 +41,9 @@ beforeEach(async () => {
       },
     ),
   );
+  // Before anything calls the API: a bind failure is this line's error rather
+  // than an unhandled `error` event surfacing as whatever times out next.
+  ({ port } = await handle.listening);
   base = `http://127.0.0.1:${port}/api`;
   origin = `http://localhost:${port}`;
 });

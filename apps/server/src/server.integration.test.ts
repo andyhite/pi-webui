@@ -2,38 +2,22 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { humanAuthor } from "@plotroom/core";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { loadServerConfig, type ServerConfig } from "./config.js";
 import { startServer } from "./index.js";
-import { ephemeralPort } from "./testing/harness.js";
 
 /**
- * Ports the OS assigned, reserved up front.
+ * Every boot here asks for port 0 and reads back the port it actually bound, so
+ * the config these tests assert against is the one the socket is on.
  *
- * `boot()` here is synchronous and called from fifteen places, so the bind probe runs
- * once in a `beforeAll` and hands out what it found: a static band collides with a
- * leaked server or another suite, and the failure is not always a clean EADDRINUSE —
- * it can be requests landing on the other server, surfacing far away as something
- * else. Pre-reserving keeps the call sites synchronous without keeping the guess.
+ * The pool of probed ports this replaced could not be right: a probe has to close
+ * its socket before the server can bind, and in that window a leaked server or a
+ * parallel suite can take the port — and the failure is not always a clean
+ * EADDRINUSE, it can be requests landing on the other server, surfacing far away
+ * as something else. Reserving twenty-four of them up front only widened the
+ * window to the whole file.
  */
-const reserved: number[] = [];
-
-beforeAll(async () => {
-  for (let index = 0; index < 24; index += 1) {
-    reserved.push(await ephemeralPort());
-  }
-});
-
-function nextPort(): number {
-  const port = reserved.shift();
-  if (port === undefined) {
-    throw new Error(
-      "the reserved port pool is empty; raise the count in this file's beforeAll",
-    );
-  }
-  return port;
-}
 
 function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
   const stateDir = mkdtempSync(join(tmpdir(), "plotroom-server-test-"));
@@ -41,7 +25,7 @@ function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
     {},
     {
       host: "127.0.0.1",
-      port: nextPort(),
+      port: 0,
       stateDir,
       credential: null,
       allowNonLoopbackBind: false,
@@ -59,14 +43,19 @@ function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
 type Handle = ReturnType<typeof startServer>;
 const handles: Handle[] = [];
 
-function boot(overrides: Partial<ServerConfig> = {}): {
+async function boot(overrides: Partial<ServerConfig> = {}): Promise<{
   handle: Handle;
   config: ServerConfig;
-} {
+}> {
   const config = testConfig(overrides);
   const handle = startServer(config);
   handles.push(handle);
-  return { handle, config };
+  // The config is returned with the *bound* port in it, not the `0` that was
+  // asked for — so `config.port` still means "where this server is", which is
+  // what every call site below reads it as. Awaiting it also puts a bind failure
+  // on this line rather than leaving it an unhandled `error` event.
+  const { port } = await handle.listening;
+  return { handle, config: { ...config, port } };
 }
 
 afterEach(async () => {
@@ -82,7 +71,7 @@ const loopbackOrigin = (port: number) => `http://localhost:${port}`;
 
 describe("server integration (Epic 2.1)", () => {
   it("answers /api/health from a loopback origin", async () => {
-    const { config } = boot();
+    const { config } = await boot();
     const res = await fetch(`http://127.0.0.1:${config.port}/api/health`, {
       headers: { origin: loopbackOrigin(config.port) },
     });
@@ -91,8 +80,45 @@ describe("server integration (Epic 2.1)", () => {
     expect(body.status).toBe("ok");
   });
 
+  it("reports the port it actually bound, not the one it was asked for", async () => {
+    // The whole reason `listening` exists: a caller asking for 0 has no way to
+    // learn the port from its own config, and every test harness in this repo
+    // needs it. A `startServer` that echoed the request back would report `0`.
+    const config = testConfig();
+    expect(config.port).toBe(0);
+
+    const handle = startServer(config);
+    handles.push(handle);
+    const bound = await handle.listening;
+
+    // The port, and only the port: for a loopback boot the socket's own
+    // `address` and the configured host are the same string, so asserting the
+    // host here could not tell the two apart and would pass either way.
+    expect(bound.port).toBeGreaterThan(0);
+    expect(bound.port).not.toBe(config.port);
+    const res = await fetch(`http://127.0.0.1:${bound.port}/api/health`, {
+      headers: { origin: loopbackOrigin(bound.port) },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("reports a port it could not bind, rather than dying of an unwatched error", async () => {
+    // A bind failure lands after `startServer` has returned, so it cannot be
+    // thrown: before `listening` it was an `error` event with no listener, which
+    // takes the whole process down with a stack trace pointing at nothing the
+    // caller did. Under `port: 0` this is unreachable — which is why every
+    // harness now asks for 0 — but a configured port can always be taken.
+    const occupied = await boot();
+    const collision = startServer(testConfig({ port: occupied.config.port }));
+    handles.push(collision);
+
+    await expect(collision.listening).rejects.toMatchObject({
+      code: "EADDRINUSE",
+    });
+  });
+
   it("refuses a non-loopback, non-allow-listed origin with the consistent error shape", async () => {
-    const { config } = boot();
+    const { config } = await boot();
     const res = await fetch(`http://127.0.0.1:${config.port}/api/health`, {
       headers: { origin: "https://evil.example.com" },
     });
@@ -106,7 +132,7 @@ describe("server integration (Epic 2.1)", () => {
   });
 
   it("requires the operator credential once one is configured", async () => {
-    const { config } = boot({ credential: "s3cret" });
+    const { config } = await boot({ credential: "s3cret" });
     const noAuth = await fetch(`http://127.0.0.1:${config.port}/api/health`, {
       headers: { origin: loopbackOrigin(config.port) },
     });
@@ -122,7 +148,7 @@ describe("server integration (Epic 2.1)", () => {
   });
 
   it("404s an unknown route with the consistent error shape", async () => {
-    const { config } = boot();
+    const { config } = await boot();
     const res = await fetch(`http://127.0.0.1:${config.port}/api/nope`, {
       headers: { origin: loopbackOrigin(config.port) },
     });
@@ -133,7 +159,7 @@ describe("server integration (Epic 2.1)", () => {
   });
 
   it("reports 503 with a clear message when the renderer has not been built", async () => {
-    const { config } = boot();
+    const { config } = await boot();
     const res = await fetch(`http://127.0.0.1:${config.port}/`, {
       headers: { origin: loopbackOrigin(config.port) },
     });
@@ -143,7 +169,7 @@ describe("server integration (Epic 2.1)", () => {
   });
 
   it("adjusts the log level at runtime via PATCH /api/log-level, validated", async () => {
-    const { handle, config } = boot();
+    const { handle, config } = await boot();
 
     const bad = await fetch(`http://127.0.0.1:${config.port}/api/log-level`, {
       method: "PATCH",
@@ -171,7 +197,7 @@ describe("server integration (Epic 2.1)", () => {
   });
 
   it("keeps the log level the operator's own (§8)", async () => {
-    const { handle, config } = boot();
+    const { handle, config } = await boot();
 
     // Both verbs are declared `humanOnly`, and the actor is what enforces that.
     // What a session would do with it is the point: turning the log down is how you
@@ -199,7 +225,7 @@ describe("server integration (Epic 2.1)", () => {
   });
 
   it("streams a published domain event to a connected WS client", async () => {
-    const { handle, config } = boot();
+    const { handle, config } = await boot();
 
     const ws = new WebSocket(`ws://127.0.0.1:${config.port}/ws`, {
       headers: { origin: loopbackOrigin(config.port) },
@@ -238,7 +264,7 @@ describe("server integration (Epic 2.1)", () => {
   });
 
   it("refuses a WS upgrade from an untrusted origin", async () => {
-    const { config } = boot();
+    const { config } = await boot();
 
     const rejection = await new Promise<number | undefined>((resolve) => {
       const ws = new WebSocket(`ws://127.0.0.1:${config.port}/ws`, {
@@ -255,7 +281,7 @@ describe("server integration (Epic 2.1)", () => {
   });
 
   it("refuses a WS upgrade missing the required credential", async () => {
-    const { config } = boot({ credential: "s3cret" });
+    const { config } = await boot({ credential: "s3cret" });
 
     const rejection = await new Promise<number | undefined>((resolve) => {
       const ws = new WebSocket(`ws://127.0.0.1:${config.port}/ws`, {
@@ -272,7 +298,7 @@ describe("server integration (Epic 2.1)", () => {
   });
 
   it("accepts a WS upgrade carrying the credential as a query param", async () => {
-    const { config } = boot({ credential: "s3cret" });
+    const { config } = await boot({ credential: "s3cret" });
 
     const opened = await new Promise<boolean>((resolve) => {
       const ws = new WebSocket(

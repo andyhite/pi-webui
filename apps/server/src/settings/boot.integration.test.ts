@@ -37,8 +37,14 @@ function stateDir(): string {
 async function boot(overrides: ServerConfigOverrides) {
   const handle = startServer(loadServerConfig({}, overrides));
   handles.push(handle);
+  // The bound port, awaited before anything fetches: under `port: 0` it is the
+  // only way to know where to send a request, and for the one test that must name
+  // its ports up front it is what turns a port something else took between the
+  // probe and the bind into a failure here, rather than an unhandled `error`
+  // event for a later assertion to trip over.
+  const { port } = await handle.listening;
   await handle.recovered;
-  return handle;
+  return { handle, port };
 }
 
 function baseOverrides(dir: string, port: number): ServerConfigOverrides {
@@ -60,10 +66,13 @@ function baseOverrides(dir: string, port: number): ServerConfigOverrides {
 describe("persisted host/port/allowNonLoopbackBind take effect on the next boot (§12, §11)", () => {
   it("binds the stored port, not the one the caller's config asked for", async () => {
     const dir = stateDir();
+    // The one place in this file that cannot ask for port 0: a *stored* port
+    // beating the caller's config is the behaviour under test, so both numbers
+    // have to exist before either server boots.
     const firstPort = await ephemeralPort();
     const storedPort = await ephemeralPort();
 
-    const first = await boot(baseOverrides(dir, firstPort));
+    const { handle: first } = await boot(baseOverrides(dir, firstPort));
     const written = await fetch(
       `http://127.0.0.1:${firstPort}/api/settings/port`,
       {
@@ -82,7 +91,7 @@ describe("persisted host/port/allowNonLoopbackBind take effect on the next boot 
     // The second boot is asked for `firstPort` again — a free port, since
     // the first server just released it — but the stored override should
     // win, and the server should actually be listening on `storedPort`.
-    const second = await boot(baseOverrides(dir, firstPort));
+    const { handle: second } = await boot(baseOverrides(dir, firstPort));
 
     const onStoredPort = await fetch(
       `http://127.0.0.1:${storedPort}/api/health`,
@@ -103,9 +112,11 @@ describe("persisted host/port/allowNonLoopbackBind take effect on the next boot 
 
   it("sees a stored allowNonLoopbackBind and credential together, exactly as the running app does (§12)", async () => {
     const dir = stateDir();
-    const firstPort = await ephemeralPort();
-
-    const first = await boot(baseOverrides(dir, firstPort));
+    // Nothing here names a port: both boots take whatever the OS has, and say
+    // which they got. What is under test is the *other* three stored settings.
+    const { handle: first, port: firstPort } = await boot(
+      baseOverrides(dir, 0),
+    );
     for (const [key, value] of [
       ["allowNonLoopbackBind", true],
       ["credential", "s3cret"],
@@ -131,9 +142,8 @@ describe("persisted host/port/allowNonLoopbackBind take effect on the next boot 
     // which `checkBindPolicy` refuses on its own. If the bind check reads
     // the stored values (the fix), it does not throw; if it reads this raw
     // config instead (the bug), `startServer` throws before returning.
-    const secondPort = await ephemeralPort();
-    const second = await boot({
-      ...baseOverrides(dir, secondPort),
+    const { handle: second, port: secondPort } = await boot({
+      ...baseOverrides(dir, 0),
       host: "0.0.0.0",
       allowNonLoopbackBind: false,
       credential: null,
@@ -171,7 +181,9 @@ describe("a refused boot creates no state (§12)", () => {
     const parent = mkdtempSync(join(tmpdir(), "plotroom-refused-boot-"));
     scratch.push(parent);
     const dir = join(parent, "state");
-    const port = await ephemeralPort();
+    // No port at all: this boot is refused before it reaches the socket, so a
+    // probed one would only be a port taken off the machine for nothing.
+    const port = 0;
 
     // Non-loopback with neither the opt-in nor a credential: refused by
     // `checkBindPolicy` on its own, and no stored setting could say otherwise
@@ -194,10 +206,10 @@ describe("a refused boot creates no state (§12)", () => {
 
   it("still refuses on the effective config once a state directory exists, and leaves it as it found it", async () => {
     const dir = stateDir();
-    const port = await ephemeralPort();
+    const port = 0;
 
     // A first, legal boot creates the state directory.
-    const first = await boot(baseOverrides(dir, port));
+    const { handle: first } = await boot(baseOverrides(dir, port));
     await first.close();
     handles.pop();
     expect(existsSync(join(dir, "plotroom.db"))).toBe(true);

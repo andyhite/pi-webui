@@ -33,13 +33,15 @@ const WEB_DIST = fileURLToPath(new URL("../dist", import.meta.url));
  * every assertion after that would run against the wrong server entirely.
  * Binding a throwaway socket to port 0 and reading back what the OS
  * assigned cannot collide with anything already listening, leaked or not.
- * `apps/server` cannot itself be asked to bind port 0 and report the real
- * port back (its own "server started" log line only ever echoes the
- * *configured* port, and that file is out of this track's scope) — this is
- * the bind-probe alternative the review named for exactly that reason.
- * There is a narrow TOCTOU window between closing the probe and the child
- * actually binding; acceptable for test tooling, and still strictly safer
- * than a static counter.
+ *
+ * The server *can* now be asked to bind port 0 and report what it got —
+ * `startServer(...).listening`, and its startup line names the bound port
+ * rather than the configured one — but that is a value inside the server's own
+ * process, and this harness spawns the server as a **child** it has to reach
+ * over HTTP before it can read anything the child says. So the probe stays, and
+ * with it a narrow TOCTOU window between closing it and the child binding;
+ * acceptable for test tooling, and still strictly safer than a static counter.
+ * `apps/server`'s own in-process suites ask for 0 instead.
  */
 export function ephemeralPort(): Promise<number> {
   return new Promise((resolve, reject) => {

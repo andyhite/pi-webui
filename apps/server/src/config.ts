@@ -280,21 +280,30 @@ export const INTERVAL_SECONDS_BOUND: NumericBound = {
 };
 
 /**
- * A TCP port the operator must be able to reach.
+ * The bound every port that arrives as *configuration* is held to — the
+ * environment variable and the stored setting.
  *
- * Zero is **refused**, unlike in most port parsers: it means "let the OS pick",
- * and a product nobody can find is worse than one that refused the value. A
- * stored `0` bound an ephemeral port, logged `0` as the port, and left the
- * desktop probing 4600 for ever — recoverable only by reading `ss -ltnp` or
- * editing the database by hand.
+ * Zero is **refused** there, unlike in most port parsers: it means "let the OS
+ * pick", and a product nobody can find is worse than one that refused the value.
+ * A stored `0` bound an ephemeral port and left the desktop probing 4600 for
+ * ever — recoverable only by reading `ss -ltnp` or editing the database by hand.
+ * The startup line now names the port the socket actually bound rather than the
+ * configured one, so a `0` would at least be *findable*; the desktop still could
+ * not attach to it, which is the reason that stands.
+ *
+ * **`port: 0` in a `ServerConfigOverrides` is legal, and load-bearing.** A caller
+ * inside this process reads `startServer(...).listening` and is told what it got,
+ * so nothing is unfindable — that is how every in-process test harness boots,
+ * because probing for a free port and binding it second is a race. Overrides are
+ * a programmatic argument rather than input to be validated, which is why they do
+ * not pass through here at all; `parsePort` is the environment path.
  *
  * That is the shape of every rule here: a stored port beats the environment
  * variable, `serve()` refuses what it cannot use, and the settings API that
- * would delete the row needs a running server. So this is bounded on every path
- * rather than trusted. `apps/desktop/src/config.ts` states the same rule for its
- * own process, because Electron's main cannot import this package (the same
- * reason `DEFAULT_PLOTROOM_PORT` is duplicated there) — the two are kept in
- * step by hand.
+ * would delete the row needs a running server. `apps/desktop/src/config.ts`
+ * states the same rule for its own `PLOTROOM_PORT`, because Electron's main
+ * cannot import this package (the same reason `DEFAULT_PLOTROOM_PORT` is
+ * duplicated there) — the two are kept in step by hand.
  */
 export const PORT_BOUND: NumericBound = {
   min: 1,
