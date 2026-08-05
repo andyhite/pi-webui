@@ -1,9 +1,43 @@
 name: CI
 
+# The code checks. Documentation cannot break a typecheck, a browser test or a Bun
+# binary, so a change confined to prose does not run any of them — a docs-only pull
+# request was compiling on three platforms to prove that prose still built.
+#
+# `checks.yml` holds what every change runs (formatting, commit messages, history
+# shape) and has no path filter. The split is by workflow because `paths-ignore` is a
+# trigger filter rather than a per-job one.
+#
+# The filter is deliberately narrow, because a wrong "documentation" skips real checks:
+# `docs/**`, root-level Markdown, `.omp/**`, and Markdown under `.github/`. **Markdown
+# anywhere else is code.** Nothing under `apps/`, `packages/` or `scripts/` is read by a
+# test or at runtime today — the one Markdown file there,
+# `apps/server/src/plugins/test-fixtures/README.md`, describes fixtures that every
+# loader resolves as `.ts` — and the point of the narrow axis is that it stays true
+# without anyone re-checking: a fixture, a snapshot or a generated table under those
+# trees is code the day it appears.
+#
+# `docs/**` is a directory rather than a genre, and it is about to hold executable
+# files: #214 checks design exports, including JavaScript, in under `docs/design/`.
+# Nothing lints those today either, so nothing is lost — but if `docs/` becomes a place
+# code lives, this filter is what has to be revisited.
+#
+# A skipped job reports neither success nor failure, so if branch protection is ever
+# enabled here, only `checks.yml`'s jobs can be *required* checks.
+
 on:
   push:
     branches: [main]
+    # One list, aliased below: Actions supports YAML anchors (merge keys, `<<:`, are
+    # the part it still does not), and the classification is the one rule here that
+    # must not drift between the two triggers.
+    paths-ignore: &documentation
+      - "docs/**"
+      - "*.md"
+      - ".omp/**"
+      - ".github/**/*.md"
   pull_request:
+    paths-ignore: *documentation
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -35,8 +69,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Format
-        run: pnpm format:check
+      # Formatting is `checks.yml`'s: it is the one check a documentation-only change
+      # can fail, so it cannot live behind this workflow's path filter.
 
       # `scripts/**` is repository tooling, not a workspace package, so turbo
       # does not reach it and the `:scripts` passes are separate steps rather
@@ -225,45 +259,3 @@ jobs:
           const got=d.prepare('select x from t').get().x;
           if (got !== 42) { throw new Error('round trip returned ' + got); }
           console.log('sqlite ok via', require.resolve('better-sqlite3'));"
-
-  commits:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Commitlint
-        run: >-
-          pnpm commitlint
-          --from ${{ github.event.pull_request.base.sha }}
-          --to ${{ github.event.pull_request.head.sha }}
-          --verbose
-
-  linear-history:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Reject merge commits
-        run: |
-          merges=$(git rev-list --merges \
-            ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }})
-          if [ -n "$merges" ]; then
-            echo "merge commits are not allowed (see AGENTS.md):"
-            echo "$merges"
-            exit 1
-          fi
