@@ -116,6 +116,25 @@ export class SettingsService {
     this.#ignored.set(key, reason);
   }
 
+  /**
+   * Clears a stored row for a key this build's catalog no longer declares —
+   * the operator's own data, otherwise unreachable once a build retires the
+   * key: `applyStoredSettings` reports it at every boot forever, and
+   * `remove()` 404s before it ever touches the store, because `require()`
+   * has nothing to resolve the key against (#89). A no-op when nothing is
+   * stored under `key`. Refuses a key the catalog still declares — that
+   * key's real path is `remove()`, with the live-applier and report this
+   * cannot produce for a key with no catalog entry.
+   */
+  clearRetired(key: string): void {
+    if (findSetting(key) !== undefined) {
+      throw badRequest(
+        `"${key}" is a setting this build still declares; remove it, don't clear it as retired`,
+      );
+    }
+    this.deps.store.remove(key);
+  }
+
   list(): SettingReport[] {
     return SETTINGS_CATALOG.map((entry) => this.reportFor(entry));
   }
