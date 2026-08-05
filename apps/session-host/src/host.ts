@@ -2,6 +2,7 @@ import {
   parseSessionHostCommand,
   splitJsonLines,
   type EpochMillis,
+  type InjectionId,
   type SessionHostEvent,
 } from "@plotroom/core";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent";
@@ -22,6 +23,18 @@ export interface HostedSession {
     text: string,
     options?: { streamingBehavior?: "steer" },
   ): Promise<boolean>;
+  /** A snapshot of what the runtime is holding, read at a turn boundary (§6.5). */
+  getQueuedMessages(): {
+    readonly steering: readonly string[];
+    readonly followUp: readonly string[];
+  };
+  /** Aggregate accounting, including context-window occupancy when the SDK reports it. */
+  getSessionStats(): {
+    readonly contextUsage?: {
+      readonly tokens: number;
+      readonly contextWindow: number;
+    };
+  };
   /**
    * Winds the current turn down. Disposal is deliberately not here: the process
    * entry owns the session's lifetime, so the loop cannot end a session it did
@@ -56,7 +69,16 @@ export async function runSessionHost(
   const translator = createObservationTranslator();
 
   const unsubscribe = session.subscribe((event) => {
-    for (const observation of translator.translate(event, now())) {
+    const extras =
+      event.type === "turn_start"
+        ? { queuedSteering: session.getQueuedMessages().steering }
+        : event.type === "turn_end"
+          ? (() => {
+              const contextUsage = session.getSessionStats().contextUsage;
+              return contextUsage === undefined ? undefined : { contextUsage };
+            })()
+          : undefined;
+    for (const observation of translator.translate(event, now(), extras)) {
       writeFrame({ type: "observation", observation });
     }
   });
@@ -91,7 +113,14 @@ export async function runSessionHost(
 
         switch (command.type) {
           case "prompt":
-            deliver(session, command.text, undefined, writeFrame, now);
+            deliver(
+              session,
+              command.text,
+              undefined,
+              undefined,
+              writeFrame,
+              now,
+            );
             writeFrame({ type: "ack", id: command.id });
             break;
 
@@ -100,11 +129,22 @@ export async function runSessionHost(
             // both states a live session can be in: queued at the next turn
             // boundary while streaming, and consumed as a turn when idle.
             //
-            // Acceptance is all that is acknowledged. Delivery is a separate
-            // observed fact — `getQueuedMessages()` is what will report it, and
-            // that is issue #82; `injectionId` rides the wire now so the frame
-            // does not change when it lands.
-            deliver(session, command.text, "steer", writeFrame, now);
+            // Acceptance is all that is acknowledged. Delivery is the separate
+            // observed fact `getQueuedMessages()` reports at the next turn
+            // boundary (issue #82) — tracked here so the translator has
+            // something to diff its snapshot against.
+            translator.trackInjection({
+              id: command.injectionId,
+              text: command.text,
+            });
+            deliver(
+              session,
+              command.text,
+              "steer",
+              command.injectionId,
+              writeFrame,
+              now,
+            );
             writeFrame({ type: "ack", id: command.id });
             break;
 
@@ -146,19 +186,24 @@ function deliver(
   session: HostedSession,
   text: string,
   streamingBehavior: "steer" | undefined,
+  injectionId: InjectionId | undefined,
   writeFrame: (frame: SessionHostEvent) => void,
   now: () => EpochMillis,
 ): void {
   const options = streamingBehavior === undefined ? {} : { streamingBehavior };
   void session.prompt(text, options).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
     writeFrame({
       type: "observation",
-      observation: {
-        kind: "runtime-error",
-        message: error instanceof Error ? error.message : String(error),
-        fatal: false,
-        at: now(),
-      },
+      observation:
+        injectionId === undefined
+          ? { kind: "runtime-error", message, fatal: false, at: now() }
+          : {
+              kind: "injection-refused",
+              injectionId,
+              reason: message,
+              at: now(),
+            },
     });
   });
 }

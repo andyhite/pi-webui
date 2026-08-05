@@ -15,6 +15,11 @@ class FakeSession implements HostedSession {
   aborts = 0;
   /** Set to reject the next `prompt()`, the way a failed turn does. */
   promptFailure: Error | null = null;
+  /** What `getQueuedMessages()` reports until a test changes it. */
+  queuedSteering: string[] = [];
+  /** What `getSessionStats().contextUsage` reports until a test sets it. */
+  contextUsage: { tokens: number; contextWindow: number } | undefined =
+    undefined;
 
   #listener: ((event: AgentSessionEvent) => void) | null = null;
   #turn: (() => void) | null = null;
@@ -50,6 +55,24 @@ class FakeSession implements HostedSession {
         resolve(true);
       };
     });
+  }
+
+  getQueuedMessages(): {
+    readonly steering: readonly string[];
+    readonly followUp: readonly string[];
+  } {
+    return { steering: this.queuedSteering, followUp: [] };
+  }
+
+  getSessionStats(): {
+    readonly contextUsage?: {
+      readonly tokens: number;
+      readonly contextWindow: number;
+    };
+  } {
+    return this.contextUsage === undefined
+      ? {}
+      : { contextUsage: this.contextUsage };
   }
 
   finishTurn(): void {
@@ -186,6 +209,109 @@ describe("the session host loop", () => {
       { text: "also this", steering: true },
     ]);
     expect(harness.frames).toContainEqual({ type: "ack", id: "c1" });
+
+    harness.input.end();
+    await harness.run;
+  });
+
+  it("reports an injection delivered once the queue no longer holds it (issue #82)", async () => {
+    const harness = host();
+    harness.input.send({
+      type: "inject",
+      id: "c1",
+      injectionId: "inj-1",
+      text: "also this",
+    });
+    await settle();
+
+    // Idle when it arrived: nothing ever held it queued, so the next turn
+    // boundary is the first moment its delivery is observable.
+    harness.session.emit({ type: "turn_start" });
+    await settle();
+
+    expect(harness.frames).toContainEqual({
+      type: "observation",
+      observation: {
+        kind: "injection-delivered",
+        injectionId: "inj-1",
+        at: 1_000,
+      },
+    });
+
+    harness.input.end();
+    await harness.run;
+  });
+
+  it("keeps an injection pending while the runtime still holds it queued", async () => {
+    const harness = host();
+    harness.input.send({
+      type: "inject",
+      id: "c1",
+      injectionId: "inj-1",
+      text: "also this",
+    });
+    await settle();
+
+    // Streaming when it arrived: the runtime is still holding it at this
+    // boundary, so it must not be reported delivered yet.
+    harness.session.queuedSteering = ["also this"];
+    harness.session.emit({ type: "turn_start" });
+    await settle();
+
+    expect(harness.frames).not.toContainEqual(
+      expect.objectContaining({
+        type: "observation",
+        observation: expect.objectContaining({ kind: "injection-delivered" }),
+      }),
+    );
+
+    // Consumed by the next boundary.
+    harness.session.queuedSteering = [];
+    harness.session.emit({ type: "turn_start" });
+    await settle();
+
+    expect(harness.frames).toContainEqual({
+      type: "observation",
+      observation: {
+        kind: "injection-delivered",
+        injectionId: "inj-1",
+        at: 1_000,
+      },
+    });
+
+    harness.input.end();
+    await harness.run;
+  });
+
+  it("reports a rejected injection against its own id, not as an anonymous error (issue #107)", async () => {
+    const harness = host();
+    harness.session.promptFailure = new Error("the session was disposed");
+    harness.input.send({
+      type: "inject",
+      id: "c1",
+      injectionId: "inj-1",
+      text: "also this",
+    });
+    await settle();
+
+    expect(harness.frames).toContainEqual({ type: "ack", id: "c1" });
+    expect(harness.frames).toContainEqual({
+      type: "observation",
+      observation: {
+        kind: "injection-refused",
+        injectionId: "inj-1",
+        reason: "the session was disposed",
+        at: 1_000,
+      },
+    });
+    // Never as the anonymous shape a bare prompt's rejection uses — that would
+    // make the ledger's `refused` state unreachable (issue #107).
+    expect(harness.frames).not.toContainEqual(
+      expect.objectContaining({
+        type: "observation",
+        observation: expect.objectContaining({ kind: "runtime-error" }),
+      }),
+    );
 
     harness.input.end();
     await harness.run;

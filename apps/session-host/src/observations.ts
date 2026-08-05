@@ -1,5 +1,6 @@
 import type {
   EpochMillis,
+  InjectionId,
   RuntimeObservation,
   TurnUsage,
 } from "@plotroom/core";
@@ -22,24 +23,106 @@ import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent";
  * (decision 0001) — so this file says what the runtime reported, never what the
  * session is doing.
  */
+
+/** An injection the session host has acknowledged but not yet seen delivered. */
+export interface PendingInjection {
+  readonly id: InjectionId;
+  readonly text: string;
+}
+
+/**
+ * Snapshots the caller reads off the live session at the moment of an event —
+ * the translator itself holds no reference to the SDK session, only
+ * `runSessionHost` does, and only it knows which event needs which query
+ * (issue #82).
+ */
+export interface ObservationExtras {
+  /**
+   * `getQueuedMessages().steering` as of a `turn_start`: the observed fact
+   * delivery is read against, in place of the queue-acceptance heuristic
+   * `inject()`'s ack used to stand in for.
+   */
+  readonly queuedSteering?: readonly string[];
+  /** `getSessionStats().contextUsage` as of a `turn_end`. */
+  readonly contextUsage?: {
+    readonly tokens: number;
+    readonly contextWindow: number;
+  };
+}
+
 export interface ObservationTranslator {
+  /**
+   * Record an injection the session host accepted, so its delivery can be
+   * recognized later (§6.5) rather than assumed from acceptance.
+   */
+  trackInjection(injection: PendingInjection): void;
   translate(
     event: AgentSessionEvent,
     at: EpochMillis,
+    extras?: ObservationExtras,
   ): readonly RuntimeObservation[];
+}
+
+/**
+ * `getQueuedMessages()` is a query, not a push feed — this SDK has no
+ * `queue_update` event — so delivery is read at the one checkpoint that
+ * matters: a tracked injection whose text is no longer in the steering
+ * queue by the next `turn_start` was consumed as that turn's input. Matched
+ * by text, because the queue knows nothing of PlotRoom's own injection ids.
+ */
+function diffDeliveredAtTurnStart(
+  pending: readonly PendingInjection[],
+  steering: readonly string[],
+): {
+  readonly delivered: readonly InjectionId[];
+  readonly remaining: readonly PendingInjection[];
+} {
+  const held = [...steering];
+  const delivered: InjectionId[] = [];
+  const remaining: PendingInjection[] = [];
+
+  for (const injection of pending) {
+    const index = held.indexOf(injection.text);
+    if (index === -1) {
+      delivered.push(injection.id);
+      continue;
+    }
+    held.splice(index, 1);
+    remaining.push(injection);
+  }
+
+  return { delivered, remaining };
 }
 
 export function createObservationTranslator(): ObservationTranslator {
   let turn = 0;
   let turnOpen = false;
+  let pending: readonly PendingInjection[] = [];
 
   return {
-    translate(event, at) {
+    trackInjection(injection) {
+      pending = [...pending, injection];
+    },
+
+    translate(event, at, extras) {
       switch (event.type) {
         case "turn_start": {
           turn += 1;
           turnOpen = true;
-          return [{ kind: "turn-started", turn, at }];
+          const started: RuntimeObservation[] = [
+            { kind: "turn-started", turn, at },
+          ];
+
+          const { delivered, remaining } = diffDeliveredAtTurnStart(
+            pending,
+            extras?.queuedSteering ?? [],
+          );
+          pending = remaining;
+          for (const injectionId of delivered) {
+            started.push({ kind: "injection-delivered", injectionId, at });
+          }
+
+          return started;
         }
 
         case "turn_end": {
@@ -49,12 +132,21 @@ export function createObservationTranslator(): ObservationTranslator {
           if (!turnOpen) return [];
           turnOpen = false;
           const usage = "usage" in event.message ? event.message.usage : null;
+          const contextUsage = extras?.contextUsage;
           const turnUsage: TurnUsage = {
             inputTokens: usage?.input ?? 0,
             outputTokens: usage?.output ?? 0,
             ...(usage === null ? {} : { cacheReadTokens: usage.cacheRead }),
             ...(usage === null ? {} : { cacheWriteTokens: usage.cacheWrite }),
             ...(usage === null ? {} : { costUsd: usage.cost.total }),
+            ...(contextUsage === undefined
+              ? {}
+              : {
+                  contextWindow: {
+                    usedTokens: contextUsage.tokens,
+                    maxTokens: contextUsage.contextWindow,
+                  },
+                }),
           };
           return [{ kind: "turn-ended", turn, usage: turnUsage, at }];
         }
