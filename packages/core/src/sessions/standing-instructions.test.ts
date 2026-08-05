@@ -179,13 +179,15 @@ describe("a session proposes; a human accepts (principle 1, §3.8)", () => {
   it("produces one ordinary proposal, with the sentence a queue row shows", () => {
     const object = note();
     const sessionId = newSessionId();
-    const proposal = proposeStandingInstruction({
+    const built = proposeStandingInstruction({
       id: newProposalId(),
       proposedBy: sessionId,
       objectId: object.objectId,
       rationale: "every session keeps rediscovering that this repo uses pnpm",
       at: 10,
     });
+    if (!built.ok) throw new Error(built.refusal.message);
+    const proposal = built.value;
     expect(proposal.tool).toBe(STANDING_INSTRUCTION_DECLARE_TOOL);
     expect(proposal.state).toBe("pending");
     // No target: the answer would be "every session, the caller's own included",
@@ -197,14 +199,58 @@ describe("a session proposes; a human accepts (principle 1, §3.8)", () => {
     expect(sentence).toContain("rediscovering");
   });
 
-  it("will not apply a pending or rejected proposal (never applied silently)", () => {
+  it("refuses a second proposal for an object that already has a pending one", () => {
     const object = note();
-    const proposal = proposeStandingInstruction({
+    const first = proposeStandingInstruction({
       id: newProposalId(),
       proposedBy: newSessionId(),
       objectId: object.objectId,
       at: 10,
     });
+    if (!first.ok) throw new Error(first.refusal.message);
+    const second = proposeStandingInstruction({
+      id: newProposalId(),
+      proposedBy: newSessionId(),
+      objectId: object.objectId,
+      at: 11,
+      pendingProposals: [first.value],
+    });
+    expect(second.ok).toBe(false);
+    if (second.ok) throw new Error("expected a refusal");
+    expect(second.refusal.reason).toBe("already_proposed");
+  });
+
+  it("refuses a proposal for an object that is already standing", () => {
+    const object = note();
+    const standing: StandingInstruction = {
+      id: newStandingInstructionId(),
+      objectId: object.objectId,
+      declaredBy: humanAuthor,
+      declaredAt: 5,
+      retiredAt: null,
+    };
+    const result = proposeStandingInstruction({
+      id: newProposalId(),
+      proposedBy: newSessionId(),
+      objectId: object.objectId,
+      at: 10,
+      existingStanding: [standing],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a refusal");
+    expect(result.refusal.reason).toBe("already_standing");
+  });
+
+  it("will not apply a pending or rejected proposal (never applied silently)", () => {
+    const object = note();
+    const built = proposeStandingInstruction({
+      id: newProposalId(),
+      proposedBy: newSessionId(),
+      objectId: object.objectId,
+      at: 10,
+    });
+    if (!built.ok) throw new Error(built.refusal.message);
+    const proposal = built.value;
     const pending = acceptedStandingInstruction({
       id: newStandingInstructionId(),
       proposal,
@@ -229,12 +275,14 @@ describe("a session proposes; a human accepts (principle 1, §3.8)", () => {
 
   it("refuses a session accepting its own proposal (principle 1)", () => {
     const sessionId = newSessionId();
-    const proposal = proposeStandingInstruction({
+    const built = proposeStandingInstruction({
       id: newProposalId(),
       proposedBy: sessionId,
       objectId: newObjectId(),
       at: 10,
     });
+    if (!built.ok) throw new Error(built.refusal.message);
+    const proposal = built.value;
     const decided = decideProposal(
       proposal,
       "accept",
@@ -248,12 +296,14 @@ describe("a session proposes; a human accepts (principle 1, §3.8)", () => {
 
   it("records the accepting human as the author, never the proposing session", () => {
     const object = note();
-    const proposal = proposeStandingInstruction({
+    const built = proposeStandingInstruction({
       id: newProposalId(),
       proposedBy: newSessionId(),
       objectId: object.objectId,
       at: 10,
     });
+    if (!built.ok) throw new Error(built.refusal.message);
+    const proposal = built.value;
     const accepted = decideProposal(proposal, "accept", humanAuthor, 15);
     if (!accepted.ok) throw new Error(accepted.refusal.message);
     const applied = acceptedStandingInstruction({
@@ -271,12 +321,14 @@ describe("a session proposes; a human accepts (principle 1, §3.8)", () => {
 
   it("refuses an accepted proposal applied to some other object, or another tool", () => {
     const object = note();
-    const proposal = proposeStandingInstruction({
+    const built = proposeStandingInstruction({
       id: newProposalId(),
       proposedBy: newSessionId(),
       objectId: object.objectId,
       at: 10,
     });
+    if (!built.ok) throw new Error(built.refusal.message);
+    const proposal = built.value;
     const accepted = decideProposal(proposal, "accept", humanAuthor, 15);
     if (!accepted.ok) throw new Error(accepted.refusal.message);
 
@@ -307,12 +359,14 @@ describe("a session proposes; a human accepts (principle 1, §3.8)", () => {
       kind: "note",
       scope: "local",
     };
-    const proposal = proposeStandingInstruction({
+    const built = proposeStandingInstruction({
       id: newProposalId(),
       proposedBy: newSessionId(),
       objectId: local.objectId,
       at: 10,
     });
+    if (!built.ok) throw new Error(built.refusal.message);
+    const proposal = built.value;
     const accepted = decideProposal(proposal, "accept", humanAuthor, 15);
     if (!accepted.ok) throw new Error(accepted.refusal.message);
     const applied = acceptedStandingInstruction({

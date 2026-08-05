@@ -110,7 +110,7 @@ export class ProposalService {
     const rationale =
       input.rationale === undefined ? {} : { rationale: input.rationale };
 
-    const proposal = this.deps.proposals.create(
+    const built =
       input.tool === STANDING_INSTRUCTION_DECLARE_TOOL
         ? proposeStandingInstruction({
             id,
@@ -118,18 +118,26 @@ export class ProposalService {
             objectId: objectId as ObjectId,
             ...rationale,
             at,
+            existingStanding: this.deps.instructions.live(),
+            pendingProposals: this.deps.proposals.pending(),
           })
         : // The retire verb has no builder of its own in core, and does not need
           // one: it is the same proposal record naming the other tool, which is
-          // exactly what `proposeToolCall` produces.
-          proposeToolCall({
-            id,
-            proposedBy,
-            call: { tool: input.tool, input: { objectId } },
-            ...rationale,
-            at,
-          }),
-    );
+          // exactly what `proposeToolCall` produces. It has no propose-time dedup
+          // either: retiring is not something rediscovery ever proposes.
+          {
+            ok: true as const,
+            value: proposeToolCall({
+              id,
+              proposedBy,
+              call: { tool: input.tool, input: { objectId } },
+              ...rationale,
+              at,
+            }),
+          };
+    if (!built.ok) throw refused(built.refusal);
+
+    const proposal = this.deps.proposals.create(built.value);
 
     this.raise(proposal);
     return proposal;
