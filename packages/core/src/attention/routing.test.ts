@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { APPROVAL_ANSWER_OPTIONS } from "../sessions/approvals/approval.js";
+
 import {
   decideRouteFires,
   NEW_ROUTE_HEALTH,
@@ -38,6 +40,8 @@ const blockedApproval: DerivedAttentionItem = {
       kind: "approval",
       approvalId: "appr-1",
       capability: "git_force_push",
+      answers: APPROVAL_ANSWER_OPTIONS,
+      effectFailure: null,
     },
     raisedAt: 1000,
     snoozeUntil: null,
@@ -58,6 +62,8 @@ const failedApprovalEffect: DerivedAttentionItem = {
       kind: "approval",
       approvalId: "appr-1",
       capability: "git_force_push",
+      answers: [],
+      effectFailure: "the remote refused it",
     },
     raisedAt: 1200,
     snoozeUntil: null,

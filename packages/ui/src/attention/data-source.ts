@@ -10,6 +10,7 @@
  */
 
 import {
+  APPROVAL_ANSWER_OPTIONS,
   EMPTY_TRIAGE,
   humanAuthor,
   type ApprovalDecision,
@@ -61,6 +62,8 @@ export const FIXTURE_ATTENTION_ITEMS: readonly AttentionItem[] = [
       kind: "approval",
       approvalId: "approval-1",
       capability: "git:force-push",
+      answers: APPROVAL_ANSWER_OPTIONS,
+      effectFailure: null,
     },
     raisedAt: 1_000,
     snoozeUntil: null,

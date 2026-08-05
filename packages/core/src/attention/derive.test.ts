@@ -212,6 +212,28 @@ describe("the attention derivation", () => {
     expect(row?.item.raisedAt).toBe(1200);
     // It blocks nobody and asks for no decision: the answer was given.
     expect(row?.states).toEqual(["failed", "anything"]);
+    // Issue #115: no option this row could offer would succeed
+    // (`answerApproval` refuses every one), so a surface rendering exactly
+    // these draws no buttons at all, and the failure message is the row's
+    // own "could not be carried out" treatment.
+    expect(row?.item.payload).toMatchObject({
+      kind: "approval",
+      answers: [],
+      effectFailure: "the runtime would not stop the session",
+    });
+    // The still-being-asked row, by contrast, offers its real options —
+    // derived from the *un*answered approval, since the failed attention
+    // above only ever produces its own effect-failed row, never both.
+    const askRow = attentionItems(
+      deriveAttention(sources(), { now: 2000 }),
+    ).find((item) => item.id === "approval:appr-1");
+    expect(askRow?.payload).toMatchObject({
+      kind: "approval",
+      effectFailure: null,
+    });
+    expect(
+      askRow?.payload.kind === "approval" ? askRow.payload.answers : [],
+    ).not.toEqual([]);
 
     // Its own way out, and the only one: nothing clears a failure, so the operator
     // muting the row is what takes it off the queue (§4.5).

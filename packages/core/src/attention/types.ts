@@ -1,3 +1,4 @@
+import type { ApprovalAnswerOption } from "../sessions/approvals/approval.js";
 import type { SessionEnd } from "../sessions/end-states.js";
 
 /**
@@ -72,6 +73,16 @@ export type AttentionAnswerPayload =
       readonly kind: "approval";
       readonly approvalId: string;
       readonly capability: string;
+      /**
+       * The row's own options, verbatim from `ApprovalAttention.answers`
+       * (issue #115) — empty for the effect-failure row, which asks for no
+       * decision (`answerApproval` refuses every option), so a surface that
+       * renders exactly these buttons draws the right ones without a second,
+       * feed-shaped rule about which row gets which.
+       */
+      readonly answers: readonly ApprovalAnswerOption[];
+      /** Non-null only for the effect-failure row: why the authorized effect did not happen. */
+      readonly effectFailure: string | null;
     }
   | {
       readonly kind: "drift";
