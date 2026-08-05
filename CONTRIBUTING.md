@@ -88,7 +88,7 @@ directory. A worktree you did not create is another session's: never write to on
    moved while you waited. Nothing reaches `main` any other way.
    ```sh
    gh pr checks --watch
-   gh pr merge --squash --subject "type(scope): description"   # --rebase when every commit stands alone
+   gh pr merge --squash          # --rebase when every commit stands alone
    ```
 7. **Clean up** your worktree and local branch — GitHub deletes the remote one on
    merge. Yours only: leave every other worktree alone.
@@ -168,16 +168,18 @@ pnpm verify
 git push -u origin HEAD
 gh pr create
 gh pr checks --watch
-gh pr merge --squash --subject "type(scope): description"   # --rebase when every commit stands alone
+gh pr merge --squash          # --rebase when every commit stands alone
 
 # then bring the primary checkout forward without ever switching its branch
 git -C ../plotroom pull --ff-only
 ```
 
-**Pass the squash subject yourself.** It becomes the permanent record and nothing lints
-it: commitlint runs over the branch's commits before the squash, and the default
-subject is the pull-request title with ` (#N)` appended, which is over 72 characters
-more often than not.
+**The pull-request title is the permanent record's subject.** A squash merge writes it
+with ` (#N)` appended, and CI's `pr-title` check lints exactly that string, suffix
+included — so write the title as the Conventional Commit subject you want. The commit's
+body is the branch's own commit messages, which `commits` has already linted. Pass
+`gh pr merge --subject` only when the record should differ from the title, and know that
+nothing lints what you pass.
 
 The one thing that does not go through a pull request is a release: `pnpm release` cuts
 from `main` and commits there (decision 0003).

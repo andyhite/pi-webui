@@ -79,8 +79,11 @@ Husky hooks run locally and CI repeats them:
 - `pre-commit` — refuses commits on `main`, checks branch naming, runs
   `format:check`. Override the `main` guard only with `ALLOW_MAIN_COMMIT=1`.
 - `commit-msg` — commitlint against Conventional Commits.
-- `.github/workflows/ci.yml` — format, typecheck, lint, test; plus commitlint
-  over the PR range and a job that rejects merge commits.
+- `.github/workflows/checks.yml` — what every change runs, documentation included:
+  format, commitlint over the pull request's range, the subject a squash merge will
+  write, and a job that rejects merge commits.
+- `.github/workflows/ci.yml` — the code checks (typecheck, lint, test, e2e, the compile
+  matrix, the Windows install), skipped for a change confined to prose.
 
 The renderer is one web app. Desktop and browser are two ways to load it; never fork the UI per target.
 
@@ -250,12 +253,13 @@ writes to `main` without a pull request. Nothing else is.
   request, so the rule is enforced rather than remembered.
 - Merge with **squash** when the branch is one logical change, or **rebase** when its
   commits each stand alone and each is a valid Conventional Commit.
-- **A squashed subject is the permanent record, and nothing lints it.** CI runs
-  commitlint over the branch's own commits, before the squash; the release script later
-  refuses any range containing a commit commitlint rejects. So pass the subject
-  yourself — `gh pr merge --squash --subject "<type>(<scope>): <description>"` — rather
-  than accepting the default, which is the pull-request title with ` (#N)` appended and
-  is over 72 characters more often than not.
+- **The squash message is the permanent record, and both halves are linted — in
+  different places.** Its subject is the pull-request title with ` (#N)` appended, which
+  the `pr-title` check lints (suffix included: it counts against the 72-character
+  limit). Its body is the branch's own commit messages, which `commits` has already
+  linted. So **write the title as the Conventional Commit subject you want on `main`**
+  and `gh pr merge --squash` needs no override. A `--subject` you pass by hand is linted
+  by nothing — that is the deviation, and it is yours to get right.
 - Rebase onto `main` to integrate upstream work — never merge `main` into a branch —
   and rebase **immediately** before merging, because another agent may have landed
   while your checks were running.
