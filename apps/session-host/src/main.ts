@@ -191,6 +191,28 @@ async function main(): Promise<number> {
       });
       return 4;
     }
+    // Not just "some extension loaded without errors": a future change that
+    // dropped the gate factory from `extensions` while keeping the ask tool's
+    // would still pass both checks above and run every call ungated. This
+    // checks the *exact* function reference the SDK's own loader stores
+    // (`ExtensionAPI.on` pushes the handler verbatim, no wrapping), so only
+    // this gate — the one about to be probed below — counts as loaded.
+    const gateWired = created.extensionsResult.extensions.some((ext) =>
+      // `HandlerFn` is `(...args: unknown[]) => Promise<unknown>` and not
+      // exported — the cast is to that shape, not away from type safety: the
+      // check is identity (`includes`), which needs no narrower type.
+      (ext.handlers.get("tool_call") ?? []).includes(
+        gateHandler as unknown as (...args: unknown[]) => Promise<unknown>,
+      ),
+    );
+    if (!gateWired) {
+      writeFrame({
+        type: "fatal",
+        message:
+          "the session host's own permission gate did not register its tool_call handler",
+      });
+      return 4;
+    }
     const probe = await gateHandler({
       type: "tool_call",
       toolName: BOOT_ASSERTION_TOOL_NAME,

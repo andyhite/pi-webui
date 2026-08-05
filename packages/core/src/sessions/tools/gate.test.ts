@@ -571,6 +571,22 @@ describe("omp write intents (issue #81)", () => {
     expect(intent.kind).toBe("unbounded");
   });
 
+  it("matches xd:// the same way the SDK's own parseXdUrl does — trimmed, case-insensitive", () => {
+    // A narrower check here (bare `startsWith`) would call `"XD://ast_edit"`
+    // or `" xd://ast_edit"` a workspace path, a claim would bind text nothing
+    // writes, and the device would still dispatch with arbitrary effect
+    // ungated — the silent allow a review caught.
+    expect(intents.intentOf("write", { path: "XD://ast_edit" }).kind).toBe(
+      "unbounded",
+    );
+    expect(intents.intentOf("write", { path: " xd://ast_edit" }).kind).toBe(
+      "unbounded",
+    );
+    expect(intents.intentOf("write", { path: "Xd://Debug" }).kind).toBe(
+      "unbounded",
+    );
+  });
+
   it("falls back to unbounded when the declared path field is absent or not a string", () => {
     expect(intents.intentOf("write", { content: "x" }).kind).toBe("unbounded");
     expect(intents.intentOf("write", { path: "" }).kind).toBe("unbounded");

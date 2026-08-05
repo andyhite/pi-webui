@@ -75,8 +75,11 @@ export function createOmpWriteIntents(
       // xd://<device> dispatches a mounted tool device whose write extent is
       // unrelated to the literal string: it is not a workspace path, so a
       // claim over it would bind text nothing writes and check nothing the
-      // device might touch.
-      if (path.startsWith("xd://")) {
+      // device might touch. Matched exactly as the SDK's own `parseXdUrl`
+      // does (trim, then case-insensitive) — a narrower check here would
+      // silently allow the same call the SDK dispatches as a device write,
+      // which is the exact fail-open issue #81 exists to rule out.
+      if (isXdUrl(path)) {
         return {
           kind: "unbounded",
           reason: `${toolName} targets a tool device (${path}), not a workspace path`,
@@ -96,4 +99,17 @@ function readPath(input: unknown, field: string): string | null {
   if (typeof input !== "object" || input === null) return null;
   const value = (input as Record<string, unknown>)[field];
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * Whether a `write` target is an `xd://` tool-device URL, matched exactly as
+ * the SDK's own `internal-urls/xd-protocol.ts#parseXdUrl` does: trimmed, then
+ * case-insensitive. A narrower check (bare `startsWith`, as this once was)
+ * would miss `" xd://ast_edit"` or `"XD://ast_edit"`, both of which the SDK
+ * still dispatches as a device write while this declaration called them a
+ * workspace path — a silent allow through a claim that binds text nothing
+ * writes (issue #81's own callout, and the gap a review caught).
+ */
+function isXdUrl(path: string): boolean {
+  return path.trim().toLowerCase().startsWith("xd://");
 }
