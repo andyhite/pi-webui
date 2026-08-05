@@ -218,6 +218,39 @@ export interface TurnUsage {
 }
 
 /**
+ * One task in the runtime's plan, as omp's `todo` tool models it
+ * (`omp://tools/todo.md`).
+ *
+ * Tasks have no id: omp's own tools reference one by exact `content` string,
+ * and `findTaskByContent` matches the first occurrence across phases — a
+ * duplicate content makes a later targeted op ambiguous on omp's side, not
+ * PlotRoom's. PlotRoom never looks a task up by content; it keeps its own
+ * ordinals (array position) and folds whole snapshots (see
+ * {@link TodoPhaseSnapshot}), never individual ops.
+ */
+export interface TodoTaskSnapshot {
+  readonly content: string;
+  readonly status:
+    "pending" | "in_progress" | "completed" | "abandoned" | "blocked";
+  readonly blocker?: string;
+}
+
+/**
+ * One phase of the runtime's plan. `plan-updated` carries the authoritative
+ * snapshot after a successful `todo` op — an error is atomic (the whole op is
+ * discarded, so no observation for it) and `view` is read-only (no
+ * observation at all), both refused before this reaches PlotRoom.
+ *
+ * The normalization that runs once after every successful op may leave every
+ * phase without an `in_progress` task when every open task is `blocked` —
+ * that is a legitimate state, not a fault a consumer should flag.
+ */
+export interface TodoPhaseSnapshot {
+  readonly name: string;
+  readonly tasks: readonly TodoTaskSnapshot[];
+}
+
+/**
  * Why a native session's stream ended, as far as the adapter can observe.
  *
  * Reconciled with the end-state taxonomy (§3.6, principle 11): the draft in
@@ -488,6 +521,10 @@ export type RuntimeObservation = { readonly at: EpochMillis } & (
       readonly kind: "runtime-error";
       readonly message: string;
       readonly fatal: boolean;
+    }
+  | {
+      readonly kind: "plan-updated";
+      readonly phases: readonly TodoPhaseSnapshot[];
     }
 );
 

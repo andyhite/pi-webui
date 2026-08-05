@@ -248,6 +248,168 @@ describe("phase derivation (§3.6, principle 7)", () => {
   });
 });
 
+describe("the runtime's plan (§3.6, principle 7)", () => {
+  it("folds a plan-updated snapshot, replacing what it names", () => {
+    const state = replay([
+      {
+        kind: "plan-updated",
+        at: T0,
+        phases: [
+          {
+            name: "Implementation",
+            tasks: [
+              { content: "wire the route", status: "in_progress" },
+              { content: "write the test", status: "pending" },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    expect(state.phases).toEqual([
+      {
+        name: "Implementation",
+        tasks: [
+          { content: "wire the route", status: "in_progress" },
+          { content: "write the test", status: "pending" },
+        ],
+      },
+    ]);
+  });
+
+  it("does not treat every task being blocked as a fault", () => {
+    const state = replay([
+      {
+        kind: "plan-updated",
+        at: T0,
+        phases: [
+          {
+            name: "Implementation",
+            tasks: [{ content: "wire the route", status: "blocked" }],
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      state.phases[0]?.tasks.every((task) => task.status === "blocked"),
+    ).toBe(true);
+  });
+
+  it("carries a completed task forward when a resumed snapshot drops it", () => {
+    const state = replay([
+      {
+        kind: "plan-updated",
+        at: T0,
+        phases: [
+          {
+            name: "Implementation",
+            tasks: [
+              { content: "wire the route", status: "completed" },
+              { content: "write the test", status: "in_progress" },
+            ],
+          },
+        ],
+      },
+      // A resume's first snapshot has already had "wire the route" stripped —
+      // the runtime's own cache never carries completed/abandoned tasks.
+      {
+        kind: "plan-updated",
+        at: T0 + 1,
+        phases: [
+          {
+            name: "Implementation",
+            tasks: [{ content: "write the test", status: "in_progress" }],
+          },
+        ],
+      },
+    ]);
+
+    expect(state.phases).toEqual([
+      {
+        name: "Implementation",
+        tasks: [
+          { content: "wire the route", status: "completed" },
+          { content: "write the test", status: "in_progress" },
+        ],
+      },
+    ]);
+  });
+
+  it("drops a non-terminal task the fresh snapshot no longer names (a real rm)", () => {
+    const state = replay([
+      {
+        kind: "plan-updated",
+        at: T0,
+        phases: [
+          {
+            name: "Implementation",
+            tasks: [
+              { content: "wire the route", status: "pending" },
+              { content: "write the test", status: "pending" },
+            ],
+          },
+        ],
+      },
+      {
+        kind: "plan-updated",
+        at: T0 + 1,
+        phases: [
+          {
+            name: "Implementation",
+            tasks: [{ content: "write the test", status: "pending" }],
+          },
+        ],
+      },
+    ]);
+
+    expect(state.phases).toEqual([
+      {
+        name: "Implementation",
+        tasks: [{ content: "write the test", status: "pending" }],
+      },
+    ]);
+  });
+
+  it("keeps a whole phase a fresh snapshot omits, rather than dropping it", () => {
+    const state = replay([
+      {
+        kind: "plan-updated",
+        at: T0,
+        phases: [
+          {
+            name: "Planning",
+            tasks: [{ content: "read", status: "completed" }],
+          },
+          {
+            name: "Implementation",
+            tasks: [{ content: "wire the route", status: "in_progress" }],
+          },
+        ],
+      },
+      // The runtime's resumed cache only reports one phase back.
+      {
+        kind: "plan-updated",
+        at: T0 + 1,
+        phases: [
+          {
+            name: "Implementation",
+            tasks: [{ content: "wire the route", status: "completed" }],
+          },
+        ],
+      },
+    ]);
+
+    expect(state.phases).toEqual([
+      { name: "Planning", tasks: [{ content: "read", status: "completed" }] },
+      {
+        name: "Implementation",
+        tasks: [{ content: "wire the route", status: "completed" }],
+      },
+    ]);
+  });
+});
+
 describe("the silence timeout", () => {
   const busy = replay([
     { kind: "turn-started", turn: 1, at: T0 },
