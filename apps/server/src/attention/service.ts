@@ -19,6 +19,7 @@ import {
   type HealthThresholds,
   type IntegrationHealthObservation,
   type PendingAsk,
+  type PlanBlockObservation,
   type SessionBroadcastCategory,
   type SessionId,
   type TriageLedger,
@@ -467,6 +468,7 @@ export class AttentionService {
       claimWaits: this.claimWaits(now),
       workstreams: this.workstreamActivity(),
       integrations: this.integrationHealth(),
+      planBlocks: this.planBlocks(),
       thresholds: this.#config.thresholds,
     });
   }
@@ -496,6 +498,39 @@ export class AttentionService {
         since: integration.lastBrokenAt ?? this.deps.stores.clock(),
         reason: integration.lastBrokenReason ?? "connection broken",
       }));
+  }
+
+  /**
+   * Tasks the runtime itself says it cannot advance (§7.2, #150, #155).
+   * Read live off the observation log (`SessionStore.blockedTasks`), not the
+   * last checkpointed plan document — a block is visible the moment it
+   * happens, the same way `sessionObservations` below reads the log
+   * directly rather than waiting for a publish. Ended sessions are excluded:
+   * nothing will ever unblock a task in a session that is already done.
+   */
+  private planBlocks(): readonly PlanBlockObservation[] {
+    const stores = this.deps.stores;
+    const blocks: PlanBlockObservation[] = [];
+
+    for (const stored of stores.sessions.list()) {
+      if (stored.session.end !== null) continue;
+      for (const blocked of stores.sessions.blockedTasks(stored.session.id)) {
+        blocks.push({
+          sessionId: stored.session.id,
+          target: this.sessionTarget(stored.session.id),
+          // blocked.since is EpochMillis (decision 0001: observations are
+          // stamped in ms); every other health input and the attention
+          // pipeline's own clock are Unix seconds (sessionObservations
+          // above does the same conversion for lastOutputAt).
+          since: Math.floor(blocked.since / 1000),
+          phaseName: blocked.phaseName,
+          taskContent: blocked.content,
+          blocker: blocked.blocker,
+        });
+      }
+    }
+
+    return blocks;
   }
 
   private sessionObservations(): readonly HealthSessionObservation[] {

@@ -46,6 +46,42 @@ const staysOpen: RuntimeScript = {
   ],
 };
 
+const staysOpenBlocked: RuntimeScript = {
+  acts: [
+    {
+      on: "start",
+      steps: [
+        {
+          observation: {
+            kind: "plan-updated",
+            phases: [
+              {
+                name: "Implementation",
+                tasks: [
+                  {
+                    content: "ship it",
+                    status: "blocked",
+                    blocker: "waiting on review",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        { observation: { kind: "turn-started", turn: 1 } },
+        { observation: { kind: "output-delta", text: "working" } },
+        {
+          observation: {
+            kind: "turn-ended",
+            turn: 1,
+            usage: { inputTokens: 8, outputTokens: 2, costUsd: 0.002 },
+          },
+        },
+      ],
+    },
+  ],
+};
+
 const finishes: RuntimeScript = {
   acts: [
     {
@@ -443,6 +479,33 @@ describe("health alerts, from observation only (§7.2)", () => {
     const early = await items(harness);
     expect(early.some((item) => at(item, "feed") === "health")).toBe(false);
     expect(sessionId).toBeDefined();
+  });
+
+  it("reports a task the runtime itself says it cannot advance, with no threshold to wait out (#150, #155)", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness, { lifecycle: "open" });
+    await run(harness, fixture.commandId, staysOpenBlocked);
+
+    const found = await itemOfFeed(harness, "health");
+    expect(at(found, "payload.alert")).toBe("plan-blocked");
+    expect(String(at(found, "summary"))).toContain("waiting on review");
+  });
+
+  it("acknowledges like every other item (§4.5) — the raisedAt clock agrees with the operator's", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness, { lifecycle: "open" });
+    await run(harness, fixture.commandId, staysOpenBlocked);
+
+    const id = str(await itemOfFeed(harness, "health"), "id");
+
+    await harness.ok(`/attention/${id}/acknowledge`, {
+      method: "POST",
+      body: {},
+    });
+
+    expect((await items(harness)).some((item) => at(item, "id") === id)).toBe(
+      false,
+    );
   });
 });
 

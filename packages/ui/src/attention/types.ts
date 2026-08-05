@@ -122,7 +122,10 @@ export type AttentionAnswerPayload =
         | "blocked-on-you"
         /** A broken integration connection (§9.3, Epic 7.2): present-or-absent
          * data, never degraded — this alert is the health-not-data half. */
-        | "integration-broken";
+        | "integration-broken"
+        /** A task the runtime itself says it cannot advance (§7.2, #150,
+         * #155) — never blocked-on-you, whose own definition is a human. */
+        | "plan-blocked";
     }
   | { readonly kind: "completion"; readonly sessionId: string }
   | {

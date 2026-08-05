@@ -128,6 +128,27 @@ export interface IntegrationHealthObservation {
   readonly reason: string;
 }
 
+/**
+ * One task a session's own runtime says it cannot advance (§7.2, #150,
+ * #155) — as the health deriver needs it. `since` is the observed moment the
+ * block began (`blockedTasksSince`), never inferred from how long the row
+ * has looked stuck, the same principle 7 discipline `IntegrationHealthObservation`
+ * follows above.
+ */
+export interface PlanBlockObservation {
+  readonly sessionId: string;
+  readonly target: AttentionTarget;
+  readonly since: number;
+  /**
+   * Task content is an identity only within its phase (`reconcilePhases`'s
+   * own rule) — two phases in one session can each hold a task named the
+   * same thing, and both must reach the queue as two facts, never one.
+   */
+  readonly phaseName: string;
+  readonly taskContent: string;
+  readonly blocker: string;
+}
+
 export interface HealthObservations {
   readonly now: number;
   readonly sessions: readonly HealthSessionObservation[];
@@ -136,6 +157,8 @@ export interface HealthObservations {
   readonly workstreams: readonly WorkstreamPathActivity[];
   /** Broken integrations (§9.3). Absent reads as "none broken", not "unknown". */
   readonly integrations?: readonly IntegrationHealthObservation[];
+  /** Blocked tasks (§7.2, #155). Absent reads as "none blocked", not "unknown". */
+  readonly planBlocks?: readonly PlanBlockObservation[];
   readonly thresholds?: HealthThresholds;
 }
 
@@ -173,6 +196,7 @@ export function deriveHealthAlerts(
     ...unansweredAlerts(observations, thresholds, now),
     ...blockedOnYouAlerts(observations, thresholds, now),
     ...integrationBrokenAlerts(observations),
+    ...planBlockedAlerts(observations),
   ];
 }
 
@@ -193,6 +217,34 @@ function integrationBrokenAlerts(
     target: integration.target,
     summary: `${integration.name} (${integration.system}) is disconnected: ${integration.reason}`,
     since: integration.since,
+  }));
+}
+
+/**
+ * A task blocked is the runtime's own statement that it has nothing it can
+ * advance right now (§7.2, #150, #155) — never `blocked-on-you`, whose own
+ * definition is time spent waiting on a human specifically. No threshold,
+ * for the same reason `integrationBrokenAlerts` has none: the block is
+ * already an observed fact, and waiting further would sit on it.
+ */
+function planBlockedAlerts(
+  observations: HealthObservations,
+): readonly HealthAlert[] {
+  return (observations.planBlocks ?? []).map((block) => ({
+    alert: "plan-blocked" as const,
+    // Scoped to the session and the phase, not the content alone: two
+    // sessions can each have a task literally named the same thing, and
+    // reconcilePhases' own rule is that content is an identity only within
+    // its phase — two phases in one session can share a task name too.
+    // healthItemId's rule is that an id names its subject; here that is one
+    // session's one task in one phase, nothing looser.
+    id: healthItemId(
+      "plan-blocked",
+      `${block.sessionId}:${block.phaseName}:${block.taskContent}`,
+    ),
+    target: block.target,
+    summary: `${block.taskContent}: ${block.blocker}`,
+    since: block.since,
   }));
 }
 

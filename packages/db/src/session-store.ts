@@ -9,6 +9,7 @@ import {
   sql,
 } from "drizzle-orm";
 import {
+  blockedTasksSince,
   classifyEnd,
   deriveSessionStatus,
   endSession,
@@ -28,6 +29,7 @@ import {
   NOT_DELETED,
   type AccountingContext,
   type Author,
+  type BlockedTask,
   type Clock,
   type CommandId,
   type InjectionEntry,
@@ -646,6 +648,11 @@ export class SessionStore {
       this.observations(sessionId),
       delivered,
     );
+  }
+
+  /** Every task presently blocked, with the moment its current block began (§7.2, #155). */
+  blockedTasks(sessionId: string): readonly BlockedTask[] {
+    return blockedTasksSince(this.observations(sessionId));
   }
 
   publications(sessionId: string): TranscriptPublication[] {
