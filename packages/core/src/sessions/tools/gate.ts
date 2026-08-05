@@ -17,8 +17,9 @@ import type { RequestOutcome, RuntimeRequest } from "../runtime.js";
  *
  * "Sessions get tools to request, yield, and inspect [claims]" — and everything
  * *else* the runtime wants to do to a file is answered here, per call, before it
- * runs. The pi adapter's `tool_call` handler blocks until PlotRoom answers
- * (`adapters/pi/permission-gate.ts`); this is the answer.
+ * runs. The session host's own `tool_call` extension handler blocks until
+ * PlotRoom answers (`apps/session-host/src/permission-gate.ts`, issue #81);
+ * this is the answer.
  *
  * Fail-safe by construction: a tool whose write extent cannot be determined is
  * `unbounded`, and unbounded needs an approval. Nothing is allowed because it was
@@ -55,7 +56,7 @@ import type { RequestOutcome, RuntimeRequest } from "../runtime.js";
  *   a conflict on a path the declaration named. A tool that writes `src/a.ts` while
  *   declaring `docs/b.md` writes outside its claim and nothing here can tell — the
  *   claim ledger records what was declared. That is why an adapter's declaration is
- *   reviewed code (`PI_KNOWN_WRITE_EXTENTS`) rather than configuration, and why an
+ *   reviewed code (`OMP_KNOWN_WRITE_EXTENTS`) rather than configuration, and why an
  *   unknown tool is `unbounded` instead of being trusted.
  * - **A tool mis-declared `none` executes ungated.** `intent.kind === "none"` means
  *   "touches nothing in the workspace", and this gate believes it: no paths are

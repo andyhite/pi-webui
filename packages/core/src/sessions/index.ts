@@ -40,4 +40,3 @@ export * from "./adapters/jsonl.js";
 export * from "./adapters/observation-queue.js";
 export * from "./adapters/seeded-prompt.js";
 export * from "./adapters/omp/index.js";
-export * from "./adapters/pi/index.js";

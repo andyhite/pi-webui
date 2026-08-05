@@ -41,7 +41,7 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
       mode: "open",
       launch: makeLaunchChoices(),
       initiatedBy: humanAuthor,
-      runtime: { adapterId: "pi-coding-agent", ref: "pi-session-1" },
+      runtime: { adapterId: "omp-session-host", ref: "session-1" },
     },
     1_000_000,
   );

@@ -15,7 +15,6 @@ import {
 } from "../../claims/testing.js";
 import type { SessionId } from "../../ids.js";
 import type { RuntimeRequest } from "../runtime.js";
-import { createPiWriteIntents } from "../adapters/pi/write-intents.js";
 import { createOmpWriteIntents } from "../adapters/omp/write-intents.js";
 import { declareToolWorld } from "../outside-world.js";
 import type { PreGrantId } from "../approvals/ids.js";
@@ -489,48 +488,6 @@ describe("decideToolPermission", () => {
         intents: writesFile,
       }).outcome.kind,
     ).toBe("allow");
-  });
-});
-
-describe("pi write intents", () => {
-  const intents = createPiWriteIntents();
-
-  it("treats a shell as unbounded — it can write anything", () => {
-    const intent = intents.intentOf("bash", { command: "echo hi" });
-    expect(intent.kind).toBe("unbounded");
-  });
-
-  it("treats an undeclared tool as unbounded rather than as harmless", () => {
-    expect(
-      intents.intentOf("some_new_pi_tool", { path: "src/a.ts" }).kind,
-    ).toBe("unbounded");
-  });
-
-  it("reads declared path fields, including lists", () => {
-    const declared = createPiWriteIntents([
-      { toolName: "write", extent: { kind: "paths", pathFields: ["path"] } },
-      { toolName: "multi", extent: { kind: "paths", pathFields: ["paths"] } },
-      { toolName: "grep", extent: { kind: "none" } },
-    ]);
-    expect(declared.intentOf("write", { path: "src/a.ts" })).toEqual({
-      kind: "paths",
-      paths: ["src/a.ts"],
-    });
-    expect(declared.intentOf("multi", { paths: ["a", "b"] })).toEqual({
-      kind: "paths",
-      paths: ["a", "b"],
-    });
-    expect(declared.intentOf("grep", { pattern: "x" }).kind).toBe("none");
-  });
-
-  it("falls back to unbounded when a declared path field is absent", () => {
-    const declared = createPiWriteIntents([
-      { toolName: "write", extent: { kind: "paths", pathFields: ["path"] } },
-    ]);
-    expect(declared.intentOf("write", { contents: "x" }).kind).toBe(
-      "unbounded",
-    );
-    expect(declared.intentOf("write", null).kind).toBe("unbounded");
   });
 });
 

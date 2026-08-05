@@ -3,7 +3,6 @@ import { systemMillisClock } from "@plotroom/core";
 import type { ServerConfig } from "../config.js";
 import type { Logger } from "../logging/logger.js";
 import { createOmpRuntime, OMP_ADAPTER_ID } from "./omp.js";
-import { createPiRuntime } from "./pi.js";
 import { RuntimeRegistry } from "./registry.js";
 import {
   createScriptedRuntime,
@@ -28,18 +27,15 @@ export type { RuntimeScript, ScriptedSubmission } from "./scripted.js";
 /**
  * Which runtimes this installation has (decision 0001).
  *
- * The pi coding agent is adapter v1 and is always available. Two others are
- * registered **only** when the operator selects them, for different reasons.
+ * The omp session host is adapter v1 and always available. The scripted
+ * runtime is opt-in because a client-supplied script would otherwise be a way
+ * to fake work in a real installation: with `PLOTROOM_RUNTIME` unset there is
+ * no such adapter to name.
  *
- * The scripted runtime is opt-in because a client-supplied script would
- * otherwise be a way to fake work in a real installation: with
- * `PLOTROOM_RUNTIME` unset there is no such adapter to name.
- *
- * The session host (issue #73) is opt-in while it is still catching up to pi's
- * feature set. Its permission gate (issue #81) is wired and asserted at boot
+ * Its permission gate (issue #81) is wired and asserted at boot
  * (`OMP_CAPABILITIES.enforcesPermissions` is true, and the sidecar refuses to
  * accept a prompt until its own gate handler denies a synthetic call), so a
- * session on it runs gated exactly like one on pi.
+ * session on it runs gated by construction.
  */
 export function createRuntimeRegistry(
   config: ServerConfig,
@@ -62,31 +58,27 @@ export function createRuntimeRegistry(
     return registry;
   }
 
-  if (config.runtime.adapterId === OMP_ADAPTER_ID) {
-    registry.register(
-      createOmpRuntime({
-        stateDir: config.stateDir,
-        program: config.runtime.sessionHostProgram,
-        bunProgram: config.runtime.sessionHostBun,
-        logger,
-      }),
-      { default: true },
+  if (config.runtime.adapterId !== OMP_ADAPTER_ID) {
+    // A stale `PLOTROOM_RUNTIME` naming a retired adapter (issue #83) must
+    // not silently select today's default instead — that is exactly the
+    // quiet degradation principle 12 forbids.
+    throw new Error(
+      `PLOTROOM_RUNTIME names an unknown adapter: "${config.runtime.adapterId}"`,
     );
-    logger.info("session-host runtime selected", {
-      program: config.runtime.sessionHostProgram,
-    });
-    return registry;
   }
 
   registry.register(
-    createPiRuntime({
+    createOmpRuntime({
       stateDir: config.stateDir,
-      program: config.runtime.piProgram,
+      program: config.runtime.sessionHostProgram,
+      bunProgram: config.runtime.sessionHostBun,
       logger,
     }),
     { default: true },
   );
-
+  logger.info("session-host runtime selected", {
+    program: config.runtime.sessionHostProgram,
+  });
   return registry;
 }
 

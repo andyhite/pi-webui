@@ -29,7 +29,7 @@ function session(id: string): Session {
         toolPermissions: INHERIT_APP_TOOLS,
       },
       initiatedBy: humanAuthor,
-      runtime: { adapterId: "pi-coding-agent", ref: "pi-session-1" },
+      runtime: { adapterId: "omp-session-host", ref: "session-1" },
     },
     1_000_000,
   );

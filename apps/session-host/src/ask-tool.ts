@@ -4,11 +4,11 @@ import type { RequestBridge } from "./request-bridge.js";
 
 /**
  * `plotroom_ask` — structured questions from an omp session (§6.4), as a real
- * registered tool rather than generated source: `pi/ask-tool.ts`'s
- * `PI_ASK_TOOL_EXTENSION` was never installed in production, because pi's own
- * extension surface only accepts a tool as a string of source it evaluates
- * inside pi's process. The SDK is already this process, so the tool is
- * written once, typechecked, and registered directly.
+ * registered tool rather than generated source: the pi adapter's own ask-tool
+ * extension (retired with it, issue #83) was never installed in production,
+ * because pi's own extension surface only accepts a tool as a string of
+ * source it evaluates inside pi's process. The SDK is already this process,
+ * so the tool is written once, typechecked, and registered directly.
  *
  * Same shape as the permission gate: the tool blocks on `bridge.raise`, which
  * reaches the operator through PlotRoom's request-raised/respond path (§6.4's

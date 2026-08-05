@@ -1,7 +1,6 @@
 import {
   approvalOutcome,
   createOmpWriteIntents,
-  createPiWriteIntents,
   decideToolPermission,
   isApproved,
   NO_TOOL_WORLD_DECLARATIONS,
@@ -23,7 +22,6 @@ import {
 import type { SessionStore } from "@plotroom/db";
 import type { ClaimService } from "../claims/service.js";
 import type { Logger } from "../logging/logger.js";
-import { PI_ADAPTER_ID } from "../runtime/pi.js";
 import {
   SCRIPTED_ADAPTER_ID,
   scriptedWriteIntents,
@@ -123,9 +121,6 @@ export function defaultWriteIntents(): ReadonlyMap<
   WriteIntentDeclaration
 > {
   return new Map<string, WriteIntentDeclaration>([
-    // What pi's tools write, verified by the C6 spike; everything undeclared is
-    // unbounded there too.
-    [PI_ADAPTER_ID, createPiWriteIntents()],
     [SCRIPTED_ADAPTER_ID, scriptedWriteIntents()],
     // The omp session-host's own declaration (issue #81): a real workspace
     // path bounds to a claim, an `xd://` tool device does not, and an

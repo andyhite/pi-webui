@@ -1,0 +1,90 @@
+name: SDK spike suite
+
+# The pin's own proof (issue #83). `packages/core/src/sessions/adapters/omp` and
+# `apps/session-host` are provable without a model — `omp.test.ts` covers the
+# translator and the loop over real pipes — but a dependency bump can silently
+# change what the *real* SDK does under them, and nothing else in CI runs a real
+# session against a real model. Red here means the SDK moved under the adapter,
+# not a flake to retry past.
+#
+# Runs `apps/server/src/runtime/omp.spike.test.ts`, and only that file: the boot
+# assertion (issue #81) is what makes a single failing case here trustworthy —
+# any test that reaches a `request-raised` observation has already proven the
+# inline gate extension survived `restrictToolNames` and is the exact handler
+# wired to the frame channel, so this suite does not re-derive that separately.
+#
+# Against the **compiled** binary (`bun build --compile`, issue #92), not
+# `bun` + `dist/main.js`: the inline permission-gate extension is a typed
+# callback rather than a legacy extension, so compiling it is the one path the
+# `session-host-binary` job's own smoke test in `ci.yml` cannot reach on its
+# own (see issue #83's #92-narrowing comment).
+#
+# Three triggers, matching "on a schedule and on every pin bump":
+# - `schedule`, so a Claude/Anthropic-side change the SDK didn't cause is still
+#   caught within a day;
+# - `push`/`pull_request` scoped to `apps/session-host/package.json`, the one
+#   file the exact pin lives in;
+# - `workflow_dispatch`, for an operator who wants the answer before either
+#   fires.
+#
+# Needs `ANTHROPIC_API_KEY` as a repository secret — the same variable name the
+# SDK itself reads (`apps/server/src/runtime/omp.ts`'s "authenticates with the
+# operator's own credential store" — nothing PlotRoom injects). No other secret
+# exists for this today; provisioning it is this workflow's one manual
+# prerequisite.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  push:
+    branches: [main]
+    paths:
+      - "apps/session-host/package.json"
+  pull_request:
+    paths:
+      - "apps/session-host/package.json"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spike:
+    name: Spike (against the real SDK)
+    runs-on: ubuntu-latest
+    # A fork's pull request cannot see this repository's secrets, so
+    # `ANTHROPIC_API_KEY` would be empty and every case would fail before
+    # reaching the model — a false "the SDK moved" rather than a true one.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # A hung sidecar the harness itself failed to bound would otherwise burn
+    # the runner's default six hours; the suite's own tests finish in well
+    # under two minutes end to end.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+        with:
+          bun: "true"
+          turbo-cache: spike
+
+      # Turbo, not a filtered pnpm script directly: `compile` and `test` both
+      # `dependsOn: ["^build"]` because `@plotroom/core` resolves through its
+      # package exports to `dist/`, which a fresh runner does not have yet —
+      # `ci.yml`'s `session-host-binary` job builds the same way for the same
+      # reason.
+      - name: Compile the session host
+        run: pnpm compile
+
+      - name: Run the spike suite against the compiled binary
+        env:
+          PLOTROOM_SESSION_HOST_SPIKE: "1"
+          PLOTROOM_SESSION_HOST: ${{ github.workspace }}/apps/session-host/out/plotroom-session-host
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # `vitest run <path>` directly, not `pnpm --filter @plotroom/server
+        # test -- <path>`: that script is already `vitest run`, so appending
+        # `run <path>` makes the extra "run" a second positional filter —
+        # vitest matches it against the relative file path, which every file
+        # under `runtime/` or `routes/runs.*` contains, so it silently ran
+        # the whole suite instead of only this file.
+        run: pnpm --filter @plotroom/server exec vitest run src/runtime/omp.spike.test.ts
