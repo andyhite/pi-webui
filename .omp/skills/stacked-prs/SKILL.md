@@ -82,8 +82,9 @@ after anything lands:
   cascade rebase, force-with-lease push). Non-interactive sync aborts on a
   genuinely diverged stack instead of guessing — resolve divergence
   deliberately (`gh stack unstack` + `gh stack init` to rebuild tracking).
-- **Never `gh stack merge`** — merging is the operator's gesture, on every
-  layer, always.
+- **`gh stack merge` is the operator's decision**, on every layer, always —
+  run it yourself only on the operator's explicit instruction (remember a
+  mid-stack merge takes every layer below it).
 
 ## Restructuring
 

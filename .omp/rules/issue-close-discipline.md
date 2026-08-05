@@ -2,6 +2,7 @@
 description: An issue closes exactly two ways — delivered via merged PR, or declined at grooming with a recorded reason
 condition: 'gh\s+issue\s+close'
 scope: tool
+interruptMode: tool-only
 ---
 
 Closing an issue by hand is almost always wrong — check which of the two

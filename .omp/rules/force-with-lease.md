@@ -2,6 +2,7 @@
 description: Force pushes use --force-with-lease, never bare --force
 condition: 'git\s+push[^\n]*\s(-f\b|--force(?!-with-lease))'
 scope: tool
+interruptMode: tool-only
 ---
 
 Bare `--force` overwrites whatever the remote has — including a push you never

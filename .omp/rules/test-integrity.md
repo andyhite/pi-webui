@@ -2,6 +2,7 @@
 description: Never narrow or soften the test suite to get green — no stray .only/.skip, no retries, no blind snapshot updates
 condition: '\.(only|skip)\s*\(|\bretries:\s*[1-9]|--update-snapshots|\b[xf](it|describe|test)\s*\('
 scope: tool
+interruptMode: tool-only
 ---
 
 That change narrows or softens the test suite. The bar:

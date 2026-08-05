@@ -2,6 +2,7 @@
 description: Skipping git hooks (--no-verify, ALLOW_MAIN_COMMIT) is exceptional and must be justified
 condition: '--no-verify\b|ALLOW_MAIN_COMMIT'
 scope: tool
+interruptMode: tool-only
 ---
 
 The hooks are the gate: branch-name check, repo-wide `format:check`,
