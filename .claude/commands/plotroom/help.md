@@ -1,5 +1,6 @@
 ---
 description: Explain the workflow — every command, skill, agent, and doc, and when to use which
+argument-hint: "[command | skill | agent] (empty = full overview)"
 ---
 
 Orient me. If "$1" names a specific command, skill, or agent, skip the

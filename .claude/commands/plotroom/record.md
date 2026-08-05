@@ -1,5 +1,6 @@
 ---
 description: Record an idea as a GitHub issue (label idea, Backlog)
+argument-hint: "<idea text>"
 ---
 
 Record an idea in the tracker. The idea, as given:

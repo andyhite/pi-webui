@@ -1,5 +1,6 @@
 ---
 description: Groom ideas and the backlog (accept/reject, breakdown, promotions)
+argument-hint: "[issue-number] (empty = full grooming pass)"
 ---
 
 Run a grooming pass. Scope, as given (an issue number to groom one item, or

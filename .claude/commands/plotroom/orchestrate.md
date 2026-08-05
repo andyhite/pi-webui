@@ -1,5 +1,6 @@
 ---
 description: Deliver an epic by orchestrating issue-worker subagents
+argument-hint: "<epic-number>"
 ---
 
 Deliver epic #$1 by orchestration.

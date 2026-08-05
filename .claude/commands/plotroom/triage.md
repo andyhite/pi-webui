@@ -1,5 +1,6 @@
 ---
 description: File and triage a bug (severity label, board routing)
+argument-hint: "<bug report> | <issue-number> (empty = sweep untriaged bugs)"
 ---
 
 Triage a bug report. The report, as given:
