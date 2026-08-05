@@ -266,6 +266,32 @@ jobs:
       - name: E2E
         run: pnpm --filter @plotroom/web e2e
 
+      # What a failed test already wrote, kept: `playwright.config.ts` sets
+      # `trace: "retain-on-failure"`, so each failure leaves a trace (network
+      # log, console, DOM snapshots, screencast) and an `error-context.md` with
+      # the page's accessibility snapshot — the browser side of the run, not the
+      # spawned server's, whose output the harness discards and whose state
+      # directory it removes (#227). Without this it died with the runner and
+      # what reached a human was the assertion alone.
+      #
+      # **Download it before pressing "re-run".** GitHub keeps artifacts for a
+      # run's latest attempt only, so a re-run — this team's habitual response to
+      # a flake — is what destroys the first occurrence's evidence.
+      #
+      # Deliberately not `retries`. Playwright stays at `retries: 0`: a retry
+      # turns a flake into a green check with a note nobody reads, and the point
+      # is to make a failure explicable, not to make it disappear.
+      - name: Keep what the failure left behind
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure
+          path: apps/web/test-results/
+          retention-days: 14
+          # Left at the default `warn`: when `failure()` fires from an earlier
+          # step there is nothing to keep, and saying so is the one fact a reader
+          # of that log wants.
+
   # The packaged session host is one compiled binary per platform (issue #92):
   # `bun build --compile` plus the SDK's native addon staged beside it, which
   # `pnpm compile` produces and then runs. Bun can cross-compile, but the addon
