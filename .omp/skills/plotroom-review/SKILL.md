@@ -1,16 +1,18 @@
 ---
-description: Get an independent review of a branch or pull request, and record it where it belongs
+name: plotroom-review
+description: Get an independent review of a PlotRoom branch or pull request, and record it where it belongs — dispatch the plotroom-review (and, for governance/approvals surfaces, security-reviewer) subagent, act on findings, post the verdict. Use before a change lands, as skill://plotroom-land's gate — not something the operator invokes by hand per item.
 ---
 
-Review the change for **#$1** — an issue number, or a pull request number if you say so.
+# Reviewing a change
+
 `AGENTS.md` requires that somebody who did not write the change reads it before it
 lands, and that the review is recorded on the pull request.
 
 ## 1. Find what is being reviewed
 
 The worktree, the branch, the pull request if one is open (`gh pr list --head <branch>`),
-and the item: `issue://$1`. If there is no pull request yet, open it first — a review
-recorded nowhere is one the next reader has to redo.
+and the tracked item (`issue://<n>`). If there is no pull request yet, open it first —
+a review recorded nowhere is one the next reader has to redo.
 
 ## 2. Dispatch a reader with fresh context
 
@@ -25,7 +27,11 @@ blank and does **not** inherit this repository's conventions from your context:
   plausibility — every factual assertion the change makes about how something behaves.
 
 Fan out more than one when the change has independent seams (schema, a rule, a surface):
-one reader per seam, in one batch, each told what to ignore.
+one reader per seam, in one batch, each told what to ignore. A change touching
+approvals, budgets, grants, or path claims (`docs/architecture/governance.md`) is a
+security seam — add `security-reviewer` alongside `plotroom-review` for it, not instead
+of it: `plotroom-review` judges the change against the spec and this repo's rules,
+`security-reviewer` finds what the change now lets someone do that they should not.
 
 ## 3. Act on it, then record it
 
@@ -43,5 +49,3 @@ one reader per seam, in one batch, each told what to ignore.
 Verdict, blocker count, what changed as a result, and anything the reviewer found that
 belongs on the tracker rather than in this change — another lane's bug, a stale
 comment, a convention nobody wrote down.
-
-Extra arguments, if any, are constraints on this run: $@

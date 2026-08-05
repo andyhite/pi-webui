@@ -1,12 +1,12 @@
 ---
-description: Triage a bug, error or idea — find the duplicate, then file it on the right lane
+name: plotroom-triage
+description: Triage a PlotRoom bug, error, or idea — find the duplicate, establish the mechanism, then file it on the right lane. Use when work surfaces something outside the current item's scope, or when handed a bug report or error message from ~/plotroom to investigate.
 ---
 
-Triage this: $@
+# Triaging a bug, error, or idea
 
-`skill://plotroom-tracker` has the board's shape and verbs; read it first. If the
-argument is a bare issue number, triage that existing item instead of filing a new
-one.
+`skill://plotroom-tracker` has the board's shape and verbs; read it first. If you were
+pointed at an existing issue number, triage that item instead of filing a new one.
 
 ## 1. Find out whether it already exists — before writing anything
 
@@ -77,4 +77,4 @@ think it goes and why (in front of what, because of what), and leave it in `Back
 ## 4. Report
 
 One paragraph: what it is, the seam, duplicate or not (with the numbers you checked),
-the lane and why that lane, and the one decision you left to me.
+the lane and why that lane, and the one decision left to the operator.

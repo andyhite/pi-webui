@@ -35,7 +35,7 @@ than guessing.
 1. Anything `In Progress` or `Review` on this lane wins: find its branch and
    worktree and continue that work. Never start something new beside it. If its
    branch is already identical to `origin/main`, the work landed and only the
-   cleanup is left — finish that first (`/plotroom:land` covers it).
+   cleanup is left — finish that first (`skill://plotroom-land` covers it).
 2. Otherwise the earliest-scheduled `To Do`.
 3. Otherwise a `Backlog` item, and say the lane needed triage.
 
@@ -57,29 +57,40 @@ has a command when the step is worth one:
    first edit_.
 3. **Worktree** — `git fetch origin`, then a branch off `origin/main` in a worktree
    of your own, then `pnpm install` in it.
-4. **Implement** — one logical change per commit, Conventional Commits.
-5. **Prove it** — `pnpm verify`, plus `pnpm --filter @plotroom/web e2e` when you
-   touched a surface it covers, plus `/plotroom:smoke` to actually exercise the change.
-   Green verify proves nothing broke, not that the thing you built works.
-6. **Review** — `/plotroom:review <n>`: a reader with fresh context, its verdict on the
-   pull request, blockers fixed into the commits that caused them.
-7. **Land** — `/plotroom:land <n>`: rebase, pull request, merge it yourself when the
+4. **Implement** — one logical change per commit, Conventional Commits. Check as you
+   go with the narrowest thing that covers the commit — `pnpm --filter <pkg>
+typecheck`, `... test`, `... lint` for the package you touched. Never run the full
+   `pnpm verify`, `pnpm build`, or the e2e suite inside this loop: `verify` repeats an
+   uncached whole-repo Prettier pass and an uncached script suite on every call
+   regardless of what changed, and e2e pays for a full build plus a Chromium boot —
+   paying either cost per commit is the actual slowdown, not the checks themselves.
+5. **Prove it — once, when implementation is done.** `pnpm verify`, plus
+   `pnpm --filter @plotroom/web e2e` when you touched a surface it covers, plus
+   `skill://plotroom-smoke` to actually exercise the change. Green verify proves
+   nothing broke, not that the thing you built works. `skill://plotroom-land` runs
+   `pnpm verify` (and e2e) again after the rebase — that is the only second run,
+   because the rebase is what invalidates this one.
+6. **Review** — `skill://plotroom-review`: a reader with fresh context, its verdict on
+   the pull request, blockers fixed into the commits that caused them.
+7. **Land** — `skill://plotroom-land`: rebase, pull request, merge it yourself when the
    checks are green, then close the issue, move the board, and remove the worktree.
    Nothing reaches `main` any other way.
 8. **Next** — take the next item on this lane.
 
-Found something that is not this item? `/plotroom:triage` files it on the right lane
-rather than growing this change. Needed a convention nobody had written?
-`/plotroom:decide` puts it where it belongs.
+Found something that is not this item? `skill://plotroom-triage` files it on the right
+lane rather than growing this change. Needed a convention nobody had written?
+`skill://plotroom-decide` puts it where it belongs.
 
 Use subagents inside the item wherever the work genuinely splits, and dispatch every
 independent one in the same batch — never serialise slices that don't depend on each
 other. Match the agent type to the work rather than reaching for the general-purpose
 worker by default: `scout` to map files you do not know yet, `librarian` for a
 vendor API's real behavior, `sonic` for a strictly mechanical fan-out (data
-collection, uniform edits across many files), several `plotroom-review` dispatches
-in one batch when a change has independent seams. Only one of them writes in your
-worktree — you.
+collection, uniform edits across many files). `plotroom-review` belongs to the Review
+step (`skill://plotroom-review`) only — it judges a finished diff against an open pull
+request and its verdict is recorded there; dispatching it here, before a pull request
+exists, is a review nobody can find and the next reader has to redo. Only one of
+these writes in your worktree — you.
 
 A dispatched subagent that genuinely needs another dispatched subagent's mid-flight
 finding messages it directly over `hub` rather than waiting for the whole batch to
