@@ -1,6 +1,6 @@
 import type { ReactElement, ReactNode } from "react";
 
-import { messageSurfaceStyle, type BannerTone } from "./Banner.js";
+import { messageRole, messageSurfaceStyle, type BannerTone } from "./Banner.js";
 import { IconButton } from "./IconButton.js";
 
 export type ToastTone = BannerTone;
@@ -14,8 +14,12 @@ export interface ToastProps {
 
 /**
  * A transient notification (#102) — announces a *change* when mounted, not a
- * standing fact. `aria-live` carries the tone: polite for neutral/attention,
- * assertive for alert. Timeout and stack management stay with the caller.
+ * standing fact. Unlike `Banner`, mounting it is itself the announcement, so
+ * the role carries the only live-region signal it needs — `role="alert"` is
+ * already an implicit assertive live region and `role="status"` an implicit
+ * polite one; adding `aria-live` on top would restate (and could contradict)
+ * what the role already says. Timeout and stack management stay with the
+ * caller.
  */
 export function Toast({
   tone = "neutral",
@@ -24,8 +28,7 @@ export function Toast({
 }: ToastProps): ReactElement {
   return (
     <div
-      role="status"
-      aria-live={tone === "alert" ? "assertive" : "polite"}
+      role={messageRole(tone)}
       className={[
         "rounded-block border border-solid border-edge inset-shadow-lip",
         "text-text-1 shadow-panel",

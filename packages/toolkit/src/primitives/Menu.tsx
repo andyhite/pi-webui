@@ -38,12 +38,11 @@ export interface MenuProps {
   readonly trigger: ReactNode;
 }
 
-// §18's panel glass recipe — same float surface as `Panel`, scaled to a menu
-// popover (`radius-block` rather than `radius-panel`).
+// §18's panel glass recipe — same float surface as `Panel`. Background/blur
+// have no `theme:` key so they stay inline; the shadow and `radius-block`
+// (a smaller popover than `Panel`'s `radius-panel`) are utility classes.
 const MENU_SURFACE: CSSProperties = {
   background: "var(--pr-glass-panel)",
-  boxShadow: "var(--pr-shadow-panel)",
-  borderRadius: "var(--pr-radius-block)",
   backdropFilter: "var(--pr-blur-panel)",
   WebkitBackdropFilter: "var(--pr-blur-panel)",
 };
@@ -60,6 +59,13 @@ const ROVING_KEYS: Record<string, true> = {
 function firstEnabledIndex(disabled: readonly boolean[]): number {
   const index = disabled.findIndex((d) => !d);
   return index === -1 ? 0 : index;
+}
+
+function lastEnabledIndex(disabled: readonly boolean[]): number {
+  for (let i = disabled.length - 1; i >= 0; i--) {
+    if (!disabled[i]) return i;
+  }
+  return 0;
 }
 
 /**
@@ -87,11 +93,16 @@ export function Menu({ items, trigger }: MenuProps): ReactElement {
     focusTrigger();
   }, [focusTrigger]);
 
-  const openMenu = useCallback(() => {
-    const first = firstEnabledIndex(disabled);
-    setFocusIndex(first);
+  const openMenuAt = useCallback((index: number) => {
+    setFocusIndex(index);
     setOpen(true);
-  }, [disabled]);
+  }, []);
+
+  // WAI-ARIA menu button: ArrowDown/ArrowUp open the (closed) menu focused
+  // on its first/last item, same as a click plus roving to that end.
+  const openMenu = useCallback(() => {
+    openMenuAt(firstEnabledIndex(disabled));
+  }, [disabled, openMenuAt]);
 
   const toggleMenu = useCallback(() => {
     if (open) closeMenu();
@@ -153,11 +164,23 @@ export function Menu({ items, trigger }: MenuProps): ReactElement {
     }
   };
 
+  const onTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
+    if (open) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      openMenuAt(firstEnabledIndex(disabled));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      openMenuAt(lastEnabledIndex(disabled));
+    }
+  };
+
   const menuTriggerProps = {
     "aria-haspopup": "menu" as const,
     "aria-expanded": open,
     "aria-controls": open ? menuId : undefined,
     onClick: toggleMenu,
+    onKeyDown: onTriggerKeyDown,
   };
 
   const triggerNode =
@@ -195,7 +218,7 @@ export function Menu({ items, trigger }: MenuProps): ReactElement {
           id={menuId}
           role="menu"
           onKeyDown={onMenuKeyDown}
-          className="border border-solid border-edge inset-shadow-lip"
+          className="rounded-block border border-solid border-edge shadow-panel inset-shadow-lip"
           style={{
             ...MENU_SURFACE,
             position: "absolute",

@@ -20,6 +20,19 @@ export const Chrome: StoryObj<BoxProps> = {
   args: { surface: "chrome", radius: "block", padding: 4, children: "chrome" },
 };
 
+export const ChipRadius: StoryObj<BoxProps> = {
+  args: { radius: "chip", border: "edge", padding: 3, children: "chip" },
+};
+
+export const PanelRadius: StoryObj<BoxProps> = {
+  args: {
+    radius: "panel",
+    border: "edge",
+    padding: 6,
+    children: "panel radius",
+  },
+};
+
 export const HairBorder: StoryObj<BoxProps> = {
   args: { border: "hair", padding: 4, children: "hair" },
 };

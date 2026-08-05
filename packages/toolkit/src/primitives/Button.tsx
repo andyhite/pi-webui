@@ -90,6 +90,9 @@ export function Button({
     height: SIZE_HEIGHT[size],
     paddingLeft: SIZE_PADDING_X[size],
     paddingRight: SIZE_PADDING_X[size],
+    // No `--spacing` scale (`toolkit.css`) — `gap-2` compiles to nothing, so
+    // the label/icon gap reads the space token directly, like padding above.
+    gap: "var(--pr-space-3)",
     // §10: 90ms, background-color and border-color only — nothing scales.
     transition:
       "background-color var(--pr-dur-hover) var(--pr-ease), " +
@@ -105,7 +108,7 @@ export function Button({
       disabled={inert}
       aria-busy={loading || undefined}
       className={[
-        "pr-focus-ring gap-2 inline-flex items-center justify-center",
+        "pr-focus-ring inline-flex items-center justify-center",
         "rounded-control border border-solid",
         t.rest,
         t.text,

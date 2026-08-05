@@ -16,12 +16,12 @@ export interface PanelProps extends Omit<
   readonly title?: string;
 }
 
-// §18's panel glass recipe has no `theme:` key — the gradient, blur, radius,
-// and float shadow are a multi-part surface applied together, not one utility.
+// §18's panel glass recipe: the gradient background and blur have no
+// `theme:` key (`tokens.ts`), so they stay inline; the shadow and radius
+// *do* have one (`--shadow-panel`, `--radius-panel`), so those are the
+// `shadow-panel`/`rounded-panel` utility classes below, not restated here.
 const PANEL_SURFACE: CSSProperties = {
   background: "var(--pr-glass-panel)",
-  boxShadow: "var(--pr-shadow-panel)",
-  borderRadius: "var(--pr-radius-panel)",
   backdropFilter: "var(--pr-blur-panel)",
   WebkitBackdropFilter: "var(--pr-blur-panel)",
 };
@@ -38,6 +38,7 @@ export function Panel({ title, children, ...rest }: PanelProps): ReactElement {
     <div
       role={title ? "region" : undefined}
       aria-labelledby={title ? titleId : undefined}
+      className="rounded-panel shadow-panel"
       style={PANEL_SURFACE}
       {...rest}
     >

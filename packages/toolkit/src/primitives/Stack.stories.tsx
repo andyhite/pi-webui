@@ -63,3 +63,83 @@ export const Wrap: StoryObj<StackProps> = {
     </Stack>
   ),
 };
+
+export const AlignStart: StoryObj<StackProps> = {
+  args: { direction: "row", align: "start", gap: 3 },
+  render: (args) => (
+    <Stack {...args}>
+      {item}
+      {item}
+    </Stack>
+  ),
+};
+
+export const AlignEnd: StoryObj<StackProps> = {
+  args: { direction: "row", align: "end", gap: 3 },
+  render: (args) => (
+    <Stack {...args}>
+      {item}
+      {item}
+    </Stack>
+  ),
+};
+
+export const AlignStretch: StoryObj<StackProps> = {
+  args: { direction: "row", align: "stretch", gap: 3 },
+  render: (args) => (
+    <Stack {...args}>
+      {item}
+      {item}
+    </Stack>
+  ),
+};
+
+export const AlignBaseline: StoryObj<StackProps> = {
+  args: { direction: "row", align: "baseline", gap: 3 },
+  render: (args) => (
+    <Stack {...args}>
+      {item}
+      {item}
+    </Stack>
+  ),
+};
+
+export const JustifyStart: StoryObj<StackProps> = {
+  args: { direction: "row", justify: "start" },
+  render: (args) => (
+    <Stack {...args}>
+      {item}
+      {item}
+    </Stack>
+  ),
+};
+
+export const JustifyCenter: StoryObj<StackProps> = {
+  args: { direction: "row", justify: "center" },
+  render: (args) => (
+    <Stack {...args}>
+      {item}
+      {item}
+    </Stack>
+  ),
+};
+
+export const JustifyEnd: StoryObj<StackProps> = {
+  args: { direction: "row", justify: "end" },
+  render: (args) => (
+    <Stack {...args}>
+      {item}
+      {item}
+    </Stack>
+  ),
+};
+
+export const JustifyAround: StoryObj<StackProps> = {
+  args: { direction: "row", justify: "around" },
+  render: (args) => (
+    <Stack {...args}>
+      {item}
+      {item}
+    </Stack>
+  ),
+};

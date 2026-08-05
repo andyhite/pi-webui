@@ -18,8 +18,13 @@ export interface KeyboardHintProps {
 export function KeyboardHint({ keys }: KeyboardHintProps): ReactElement {
   return (
     <span
-      style={{ display: "inline-flex", gap: "var(--pr-space-1)" }}
+      // A plain `<span>` has no implicit role, so `aria-label` on it alone is
+      // not reliably exposed to assistive tech across browsers. `role="img"`
+      // is the standard trick for labelling a group of decorative glyphs as
+      // one named unit — the chord *is* one unit, read as "Cmd+K".
+      role="img"
       aria-label={keys.join("+")}
+      style={{ display: "inline-flex", gap: "var(--pr-space-1)" }}
     >
       {keys.map((key, index) => (
         <kbd

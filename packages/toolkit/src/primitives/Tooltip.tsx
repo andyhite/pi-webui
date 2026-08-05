@@ -76,11 +76,12 @@ export function Tooltip({ content, children }: TooltipProps): ReactElement {
           id={tooltipId}
           role="tooltip"
           className={[
-            "left-0 absolute shadow-panel inset-shadow-lip",
+            "absolute shadow-panel inset-shadow-lip",
             "rounded-control border border-solid border-edge",
             "whitespace-nowrap text-text-1",
           ].join(" ")}
           style={{
+            left: 0,
             top: "100%",
             marginTop: "var(--pr-space-2)",
             background: "var(--pr-glass-panel)",

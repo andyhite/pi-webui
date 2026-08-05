@@ -40,9 +40,14 @@ export function messageSurfaceStyle(tone: BannerTone): CSSProperties {
   };
 }
 
-function bannerRole(tone: BannerTone): "status" | "alert" {
-  // ARIA: `alert` is for time-sensitive, important interruptions — the
-  // reserved alert tone's meaning, not attention's "needs a human".
+/**
+ * Tone -> ARIA role, shared by `Banner` and `Toast` so the tone-to-
+ * announcement rule is one function rather than one per component. `alert`
+ * is `role="alert"` (an implicit assertive live region) for a time-sensitive
+ * interruption — the reserved alert tone's meaning, not attention's "needs a
+ * human"; everything else is `role="status"` (implicit polite).
+ */
+export function messageRole(tone: BannerTone): "status" | "alert" {
   return tone === "alert" ? "alert" : "status";
 }
 
@@ -65,7 +70,7 @@ export function Banner({
 }: BannerProps): ReactElement {
   return (
     <div
-      role={bannerRole(tone)}
+      role={messageRole(tone)}
       className={[
         "rounded-block border border-solid border-edge inset-shadow-lip",
         "text-text-1",

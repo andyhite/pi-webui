@@ -78,6 +78,7 @@ export function Table({ columns, rows, caption }: TableProps): ReactElement {
           {columns.map((column) => (
             <th
               key={column.key}
+              scope="col"
               className="text-text-3"
               style={HEADER_CELL_STYLE}
             >

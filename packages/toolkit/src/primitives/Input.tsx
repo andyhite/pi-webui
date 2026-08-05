@@ -49,7 +49,6 @@ export function Input({
       "border-color var(--pr-dur-hover) var(--pr-ease)",
     opacity: disabled ? 0.5 : undefined,
     cursor: disabled ? "default" : undefined,
-    width: "100%",
   };
 
   return (

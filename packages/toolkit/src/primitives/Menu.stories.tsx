@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 
+import { IconButton } from "./IconButton.js";
 import { Menu, type MenuItem, type MenuProps } from "./Menu.js";
 import type { Meta, StoryObj } from "./story-kit.js";
 
@@ -47,4 +48,18 @@ function OpenMenuDemo(props: MenuProps) {
 export const Open: StoryObj<MenuProps> = {
   args: { trigger: "Actions", items },
   render: (args) => <OpenMenuDemo {...args} />,
+};
+
+export const ElementTrigger: StoryObj<MenuProps> = {
+  args: { trigger: "Actions", items },
+  render: (args) => (
+    <Menu
+      {...args}
+      trigger={
+        <IconButton aria-label="Actions" tone="neutral">
+          <span aria-hidden="true">⋯</span>
+        </IconButton>
+      }
+    />
+  ),
 };

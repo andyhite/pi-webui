@@ -96,7 +96,15 @@ export function Tabs({
     [activate, disabled, focusIndex],
   );
 
+  // Gated the same way `Menu.tsx` gates its focus effect on `open`: without
+  // this, mounting `Tabs` anywhere steals document focus onto the selected
+  // tab, which is only correct once an arrow key (or click) has moved it.
+  const mountedRef = useRef(false);
   useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      return;
+    }
     tabRefs.current[focusIndex]?.focus();
   }, [focusIndex]);
 
@@ -149,6 +157,7 @@ export function Tabs({
               aria-controls={panelId(tab.id)}
               tabIndex={index === focusIndex ? 0 : -1}
               disabled={tab.disabled}
+              aria-disabled={tab.disabled || undefined}
               className={[
                 "pr-focus-ring rounded-control border border-solid",
                 selected

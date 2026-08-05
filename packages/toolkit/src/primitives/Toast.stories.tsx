@@ -18,3 +18,11 @@ export const Attention: StoryObj<ToastProps> = {
 export const Alert: StoryObj<ToastProps> = {
   args: { tone: "alert", children: "Could not save layout — try again." },
 };
+
+export const Dismissible: StoryObj<ToastProps> = {
+  args: {
+    tone: "neutral",
+    children: "Copied node id to clipboard.",
+    onDismiss: () => {},
+  },
+};
