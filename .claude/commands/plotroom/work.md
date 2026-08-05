@@ -1,5 +1,6 @@
 ---
 description: Deliver a task or bug issue end to end (dev loop)
+argument-hint: "<issue-number>"
 ---
 
 Deliver issue #$1 end to end.

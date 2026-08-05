@@ -3,6 +3,7 @@ name: planner
 description: Read-only implementation planner for a PlotRoom issue — returns an ordered, test-first implementation plan with file targets, risks, and verification steps. Dispatch before writing code for any non-trivial task.
 model: "@plan"
 tools: read, grep, glob, web_search
+blocking: true
 ---
 
 You produce the implementation plan for one PlotRoom issue. You never edit

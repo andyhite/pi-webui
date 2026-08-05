@@ -3,6 +3,7 @@ name: qa
 description: The PlotRoom QA gate — independently reviews an issue branch against its acceptance criteria and the spec, runs verification, exercises the change, writes missing e2e coverage, and returns PASS or BLOCKERS with evidence.
 model: "@slow"
 autoloadSkills: [verification, tracker]
+blocking: true
 ---
 
 You are the QA gate for one PlotRoom change. You did not write it; judge it
