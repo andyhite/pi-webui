@@ -63,3 +63,40 @@ Anything that assumed the operator installs the agent runtime themselves changes
 PlotRoom now owns that process, which is why verifying a tunnelled backend has to
 exercise a spawned session host on the remote host, and why the installer stages a
 binary rather than a dependency tree.
+
+## Amendment — 2026-08-05: the compiled artifact is a binary plus its addon, not one file
+
+- **Status:** Accepted. Corrects §(d): the SDK's platform native addon does not
+  survive `bun build --compile` as embedded content, under any circumstance —
+  the gate as written asked whether compilation _could_ embed it, and the
+  answer is that nothing embeds it, ever. What #93 actually built and proved
+  answers the question that matters instead: whether the addon can be staged
+  beside the binary and still work. It can.
+- **Date:** 2026-08-05
+- **Issues:** #93 (implementation), #186 (this correction)
+- **Deciders:** none — this records what #93 already built and proved, not a
+  new choice.
+
+`pi_natives` is `require`d from a path computed at runtime, so the bundler
+never sees it, and `@oh-my-pi/pi-natives`'s `embeddedAddon` table is `null` in
+the published package outside the SDK's own release build. It survives as a
+**staged file** instead: the SDK's compiled-binary addon search covers the
+executable's own directory, so `apps/session-host`'s `compile` script copies
+every `pi_natives.<platform>*.node` the build machine's platform ships next to
+the binary — two files on linux-x64 (a modern and a baseline variant; the
+running CPU picks one). **The artifact is a directory, not a self-contained
+file** — one binary, one or two addon files beside it — but the `(d)`
+fallback the original gate named is still unused: no bundled Bun, no
+`node_modules`, no dependency tree to stage. A packaged install therefore
+stages **two** things, not one, which is what #79 should read from here
+rather than rediscover. The "no Bun prerequisite" consequence still holds
+exactly as written.
+
+One more fact the original record had no room for: compiling flips
+`isCompiledBinary()` SDK-wide, which makes **the binary itself the runtime's
+worker host**. The SDK re-execs `process.execPath` — this binary — for the
+subprocesses its own tools need, with a hidden `__omp_worker_*` argv the
+uncompiled path never sees. `apps/session-host/src/worker-dispatch.ts` exists
+because of this: without it, a worker launch hits the session host's own
+argument parser, is refused as an unknown argument, and a pinned tool (`eval`)
+dies in the compiled artifact while working under a host-installed Bun.
