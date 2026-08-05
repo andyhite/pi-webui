@@ -1,0 +1,246 @@
+/**
+ * Generated from `src/tokens.ts` by `renderThemeCss` — do not edit.
+ *
+ * Regenerate with `pnpm --filter @plotroom/toolkit build`; `theme.css.test.ts`
+ * fails if this file and the token table have drifted apart.
+ */
+
+:root {
+  /* §18 colour */
+  --pr-canvas: #101113;
+  --pr-canvas-grid: rgba(220,228,238,.045);
+  --pr-body-node: rgba(22,24,27,.55);
+  --pr-body-panel: rgba(18,19,22,.62);
+  --pr-body-chrome: rgba(16,17,19,.68);
+  --pr-body-frame: rgba(18,20,23,.40);
+  --pr-body-well: rgba(0,0,0,.30);
+  --pr-body-footer: rgba(0,0,0,.18);
+  --pr-hue: var(--pr-content-rgb);
+  --pr-content: #6aaee0;
+  --pr-content-rgb: 106,174,224;
+  --pr-content-icon: #8cc0e8;
+  --pr-command: #a893e8;
+  --pr-command-rgb: 168,147,232;
+  --pr-command-icon: #c0aef2;
+  --pr-session: #72c491;
+  --pr-session-rgb: 114,196,145;
+  --pr-session-icon: #93d4ab;
+  --pr-workstream: #c9a173;
+  --pr-workstream-rgb: 201,161,115;
+  --pr-workstream-icon: #d9b98f;
+  --pr-attention: #f7a441;
+  --pr-attention-rgb: 247,164,65;
+  --pr-attention-hi: #f8c887;
+  --pr-on-attention: #231404;
+  --pr-alert: #e0655a;
+  --pr-alert-rgb: 224,101,90;
+  --pr-alert-hi: #e88b82;
+  --pr-selection: #e6e9ec;
+  --pr-selection-rgb: 230,233,236;
+  --pr-text-hi: #f2f4f6;
+  --pr-text-1: rgba(242,244,246,.92);
+  --pr-text-2: rgba(228,231,235,.72);
+  --pr-text-3: rgba(228,231,235,.56);
+  --pr-text-4: rgba(228,231,235,.44);
+  --pr-text-5: rgba(228,231,235,.34);
+  --pr-fill-1: rgba(255,255,255,.035);
+  --pr-fill-2: rgba(255,255,255,.055);
+  --pr-fill-3: rgba(255,255,255,.09);
+  --pr-fill-4: rgba(255,255,255,.14);
+  --pr-edge: rgba(255,255,255,.10);
+  --pr-edge-strong: rgba(255,255,255,.16);
+  --pr-edge-soft: rgba(255,255,255,.07);
+  --pr-edge-hair: rgba(255,255,255,.045);
+  --pr-lip: rgba(255,255,255,.16);
+  --pr-lip-strong: rgba(255,255,255,.22);
+  --pr-divider-color: rgba(0,0,0,.28);
+  --pr-edge-line: rgba(220,226,233,.34);
+  --pr-edge-line-strong: rgba(220,226,233,.50);
+  --pr-edge-line-active: #e6e9ec;
+
+  /* §18 type */
+  --pr-font-sans: 'Familjen Grotesk', system-ui, sans-serif;
+  --pr-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --pr-type-kind: 500 9.5px/1 var(--pr-font-mono);
+  --pr-type-section: 500 9.5px/1 var(--pr-font-mono);
+  --pr-type-meta: 400 9.5px/1.4 var(--pr-font-mono);
+  --pr-type-meta-sm: 400 9px/1.4 var(--pr-font-mono);
+  --pr-type-mono: 400 10.5px/1.5 var(--pr-font-mono);
+  --pr-type-chrome: 400 11.5px/1 var(--pr-font-mono);
+  --pr-type-title: 500 12.5px/1.35 var(--pr-font-sans);
+  --pr-type-title-strong: 600 12.5px/1.35 var(--pr-font-sans);
+  --pr-type-panel: 600 13px/1 var(--pr-font-sans);
+  --pr-type-node-id: 600 14px/1 var(--pr-font-sans);
+  --pr-type-body: 400 11.5px/1.5 var(--pr-font-sans);
+  --pr-type-brand: 600 14.5px/1 var(--pr-font-sans);
+  --pr-ls-kind: .08em;
+  --pr-ls-section: .12em;
+  --pr-ls-heading: -.01em;
+  --pr-ls-brand: -.012em;
+
+  /* §18 motion */
+  --pr-ease: cubic-bezier(.2,.6,.2,1);
+  --pr-dur-hover: 90ms;
+  --pr-dur-state: 160ms;
+  --pr-dur-lod: 220ms;
+
+  /* §18 space, radius, size */
+  --pr-space-1: 4px;
+  --pr-space-2: 6px;
+  --pr-space-3: 8px;
+  --pr-space-4: 9px;
+  --pr-space-5: 11px;
+  --pr-space-6: 12px;
+  --pr-space-7: 14px;
+  --pr-space-8: 16px;
+  --pr-space-9: 18px;
+  --pr-space-10: 20px;
+  --pr-space-11: 24px;
+  --pr-space-12: 28px;
+  --pr-radius-chip: 6px;
+  --pr-radius-control: 7px;
+  --pr-radius-far: 9px;
+  --pr-radius-block: 10px;
+  --pr-radius-node: 11px;
+  --pr-radius-node-full: 12px;
+  --pr-radius-panel: 14px;
+  --pr-radius-frame: 16px;
+  --pr-chrome-h: 42px;
+  --pr-rail-w: 44px;
+  --pr-rail-button: 28px;
+  --pr-control-h: 26px;
+  --pr-control-h-floating: 30px;
+  --pr-panel-palette-w: 226px;
+  --pr-panel-conversation-w: 356px;
+
+  /* §09 redlines — measured geometry the layout solver consumes */
+  --pr-node-far-w: 150px;
+  --pr-node-far-h: 34px;
+  --pr-node-mid-w: 268px;
+  --pr-node-full-w: 340px;
+  --pr-header-h: 40px;
+  --pr-header-h-mid: 36px;
+  --pr-title-block-h: 57px;
+  --pr-footer-h: 44px;
+  --pr-footer-h-frame: 32px;
+  --pr-node-pad-x: 12px;
+  --pr-node-pad-x-far: 10px;
+  --pr-node-header-gap: 8px;
+  --pr-region-pad-y: 10px;
+  --pr-region-gap: 7px;
+  --pr-region-key-w: 64px;
+  --pr-region-key-gap: 10px;
+  --pr-frame-pad-x: 16px;
+  --pr-frame-band-gap: 9px;
+  --pr-frame-strip-gap: 12px;
+  --pr-frame-pad: 24px;
+  --pr-frame-child-gap: 16px;
+  --pr-frame-child-gap-edge: 42px;
+  --pr-session-offset-y: 140px;
+  --pr-port-size: 8px;
+  --pr-port-offset: -5px;
+  --pr-grid: 28px;
+
+  /* §18 surface recipes */
+  --pr-glass: linear-gradient(158deg, rgba(var(--pr-hue),.14), rgba(255,255,255,.012) 45%, rgba(var(--pr-hue),.05)), var(--pr-body-node);
+  --pr-glass-border: 1px solid rgba(var(--pr-hue),.32);
+  --pr-glass-border-signal: 1px solid rgba(var(--pr-hue),.45);
+  --pr-glass-border-frame: 1px solid rgba(var(--pr-hue),.28);
+  --pr-glass-panel: linear-gradient(165deg, rgba(255,255,255,.065), rgba(255,255,255,.008) 50%, rgba(255,255,255,.035)), var(--pr-body-panel);
+  --pr-glass-frame: linear-gradient(158deg, rgba(var(--pr-hue),.075), rgba(255,255,255,.008) 45%, rgba(var(--pr-hue),.03)), var(--pr-body-frame);
+  --pr-glass-loading: linear-gradient(158deg, rgba(255,255,255,.04), rgba(255,255,255,.008) 45%, rgba(255,255,255,.025)), var(--pr-body-node);
+  --pr-blur-node: blur(24px) saturate(1.4);
+  --pr-blur-panel: blur(30px) saturate(1.4);
+  --pr-blur-chrome: blur(28px) saturate(1.3);
+  --pr-shadow-lip: inset 0 1px 0 var(--pr-lip);
+  --pr-shadow-lip-strong: inset 0 1px 0 var(--pr-lip-strong);
+  --pr-shadow-flat: 0 3px 10px rgba(0,0,0,.25);
+  --pr-shadow-node: 0 8px 22px rgba(0,0,0,.38);
+  --pr-shadow-node-full: 0 10px 26px rgba(0,0,0,.40);
+  --pr-shadow-frame: 0 18px 44px rgba(0,0,0,.45);
+  --pr-shadow-panel: 0 18px 44px rgba(0,0,0,.50);
+  --pr-shadow-well: inset 0 1px 3px rgba(0,0,0,.30);
+  --pr-divider-shadow: 0 1px 0 rgba(255,255,255,.05);
+  --pr-select-border: 1.5px solid var(--pr-selection);
+  --pr-select-halo: 0 0 0 3px rgba(var(--pr-selection-rgb),.10);
+  --pr-focus-ring: 2px solid var(--pr-selection);
+  --pr-focus-ring-offset: 2px;
+  --pr-ghost-border: 1.5px dashed rgba(228,231,235,.2);
+  --pr-ghost-fill: rgba(255,255,255,.018);
+}
+
+@theme inline {
+  /* §18 colour */
+  --color-canvas: var(--pr-canvas);
+  --color-canvas-grid: var(--pr-canvas-grid);
+  --color-body-node: var(--pr-body-node);
+  --color-body-panel: var(--pr-body-panel);
+  --color-body-chrome: var(--pr-body-chrome);
+  --color-body-frame: var(--pr-body-frame);
+  --color-body-well: var(--pr-body-well);
+  --color-body-footer: var(--pr-body-footer);
+  --color-content: var(--pr-content);
+  --color-content-icon: var(--pr-content-icon);
+  --color-command: var(--pr-command);
+  --color-command-icon: var(--pr-command-icon);
+  --color-session: var(--pr-session);
+  --color-session-icon: var(--pr-session-icon);
+  --color-workstream: var(--pr-workstream);
+  --color-workstream-icon: var(--pr-workstream-icon);
+  --color-attention: var(--pr-attention);
+  --color-attention-hi: var(--pr-attention-hi);
+  --color-on-attention: var(--pr-on-attention);
+  --color-alert: var(--pr-alert);
+  --color-alert-hi: var(--pr-alert-hi);
+  --color-selection: var(--pr-selection);
+  --color-text-hi: var(--pr-text-hi);
+  --color-text-1: var(--pr-text-1);
+  --color-text-2: var(--pr-text-2);
+  --color-text-3: var(--pr-text-3);
+  --color-text-4: var(--pr-text-4);
+  --color-text-5: var(--pr-text-5);
+  --color-fill-1: var(--pr-fill-1);
+  --color-fill-2: var(--pr-fill-2);
+  --color-fill-3: var(--pr-fill-3);
+  --color-fill-4: var(--pr-fill-4);
+  --color-edge: var(--pr-edge);
+  --color-edge-strong: var(--pr-edge-strong);
+  --color-edge-soft: var(--pr-edge-soft);
+  --color-edge-hair: var(--pr-edge-hair);
+  --color-lip: var(--pr-lip);
+  --color-lip-strong: var(--pr-lip-strong);
+  --color-divider: var(--pr-divider-color);
+  --color-edge-line: var(--pr-edge-line);
+  --color-edge-line-strong: var(--pr-edge-line-strong);
+  --color-edge-line-active: var(--pr-edge-line-active);
+
+  /* §18 type */
+  --font-sans: var(--pr-font-sans);
+  --font-mono: var(--pr-font-mono);
+
+  /* §18 motion */
+  --ease-pr: var(--pr-ease);
+  --transition-duration-hover: var(--pr-dur-hover);
+  --transition-duration-state: var(--pr-dur-state);
+  --transition-duration-lod: var(--pr-dur-lod);
+
+  /* §18 space, radius, size */
+  --radius-chip: var(--pr-radius-chip);
+  --radius-control: var(--pr-radius-control);
+  --radius-far: var(--pr-radius-far);
+  --radius-block: var(--pr-radius-block);
+  --radius-node: var(--pr-radius-node);
+  --radius-node-full: var(--pr-radius-node-full);
+  --radius-panel: var(--pr-radius-panel);
+  --radius-frame: var(--pr-radius-frame);
+
+  /* §18 surface recipes */
+  --inset-shadow-lip: var(--pr-shadow-lip);
+  --inset-shadow-lip-strong: var(--pr-shadow-lip-strong);
+  --shadow-flat: var(--pr-shadow-flat);
+  --shadow-node: var(--pr-shadow-node);
+  --shadow-node-full: var(--pr-shadow-node-full);
+  --shadow-frame: var(--pr-shadow-frame);
+  --shadow-panel: var(--pr-shadow-panel);
+  --inset-shadow-well: var(--pr-shadow-well);
+}

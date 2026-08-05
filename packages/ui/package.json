@@ -25,6 +25,7 @@
     "@plotroom/plugin-github": "workspace:*",
     "@plotroom/plugin-jira": "workspace:*",
     "@plotroom/plugin-sdk": "workspace:*",
+    "@plotroom/toolkit": "workspace:*",
     "@xyflow/react": "^12.11.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
