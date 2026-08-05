@@ -77,7 +77,8 @@ by someone who could not run triage (e.g. from the GitHub UI).
 
 For each open issue labeled plain `bug`: reproduce (or establish why not),
 apply the rubric, swap `bug` for `bug:sevN`, route per the table. Grooming
-(`/groom`) sweeps these, but anyone meeting an untriaged bug may triage it.
+(`/plotroom:groom`) sweeps these, but anyone meeting an untriaged bug may
+triage it.
 
 ## 5. sev0 escalation
 

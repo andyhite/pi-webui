@@ -8,19 +8,20 @@ argument, where it sits in the lifecycle, which skills it reads, what it
 leaves behind (board moves, branches, PRs), and show one worked invocation.
 
 Ground everything in the live tree, never from memory: list
-`.omp/commands/*.md` and take each command's `description` frontmatter; list
-`.omp/skills/*/SKILL.md` and `.omp/agents/*.md` the same way; read the
-Documentation table in `AGENTS.md`. If anything this file implies disagrees
-with what is on disk, disk wins — present what exists.
+`.claude/commands/plotroom/*.md` and take each command's `description`
+frontmatter; list `.omp/skills/*/SKILL.md` and `.omp/agents/*.md` the same
+way; read the Documentation table in `AGENTS.md`. If anything this file
+implies disagrees with what is on disk, disk wins — present what exists.
 
 Present, compactly — tables over prose, one screen if you can:
 
-1. **The lifecycle in one breath.** Ideas are recorded cheaply (`/record`),
-   groomed into a task or an epic — or rejected (`/groom`), delivered
-   (`/work <issue>` for a task or bug, `/orchestrate <epic>` for an epic),
-   and land on `main` only through a PR that **I** merge — the merge is the
-   approval. Bugs enter through `/triage` with a severity label and skip the
-   idea stage. `/report` snapshots the board without moving anything.
+1. **The lifecycle in one breath.** Ideas are recorded cheaply
+   (`/plotroom:record`), groomed into a task or an epic — or rejected
+   (`/plotroom:groom`), delivered (`/plotroom:work <issue>` for a task or
+   bug, `/plotroom:orchestrate <epic>` for an epic), and land on `main` only
+   through a PR that **I** merge — the merge is the approval. Bugs enter
+   through `/plotroom:triage` with a severity label and skip the idea stage.
+   `/plotroom:report` snapshots the board without moving anything.
 2. **Commands.** One row each: command, argument, what it does (its own
    description), and the moment you'd reach for it.
 3. **Skills.** The operating manual behind the commands: which skill backs
@@ -38,5 +39,5 @@ Present, compactly — tables over prose, one screen if you can:
    claim before the first edit and keep the board current; agents never
    merge; a task is not done while its worktree exists.
 
-Close with the one-line default: unsure where to start? `/report` to see the
-board, then `/work` the top of `To Do`.
+Close with the one-line default: unsure where to start? `/plotroom:report`
+to see the board, then `/plotroom:work` the top of `To Do`.

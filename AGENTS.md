@@ -115,14 +115,14 @@ stage. Epics derive their status from their subtasks, and chains of dependent
 subtasks ship as **stacked pull requests** (`stacked-prs` skill) so review
 never blocks the next layer.
 
-| To…                         | Use                                            |
-| --------------------------- | ---------------------------------------------- |
-| Record an idea              | `/record <note>` — or the `tracker` skill      |
-| File and triage a bug       | `/triage <report>` — or the `bug-triage` skill |
-| Groom ideas and the backlog | `/groom [issue]` — the `grooming` skill        |
-| Deliver a task or bug       | `/work <issue>` — the `dev-loop` skill         |
-| Deliver an epic             | `/orchestrate <epic>` — the `epic-loop` skill  |
-| Snapshot the board          | `/report`                                      |
+| To…                         | Use                                                     |
+| --------------------------- | ------------------------------------------------------- |
+| Record an idea              | `/plotroom:record <note>` — or the `tracker` skill      |
+| File and triage a bug       | `/plotroom:triage <report>` — or the `bug-triage` skill |
+| Groom ideas and the backlog | `/plotroom:groom [issue]` — the `grooming` skill        |
+| Deliver a task or bug       | `/plotroom:work <issue>` — the `dev-loop` skill         |
+| Deliver an epic             | `/plotroom:orchestrate <epic>` — the `epic-loop` skill  |
+| Snapshot the board          | `/plotroom:report`                                      |
 
 Project agents: `planner` (read-only implementation planning), `qa` (the QA
 gate — independent review plus e2e coverage), `issue-worker` (executes the
