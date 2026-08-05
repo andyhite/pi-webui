@@ -234,30 +234,74 @@ export function startServer(config = loadServerConfig()) {
    * stored override (nothing to fall back to beyond what the caller already
    * asked for) still propagates, exactly as before.
    */
+  type OverriddenKey = "host" | "port";
+
+  function errorCode(err: unknown): string {
+    return err instanceof Error && "code" in err
+      ? String((err as NodeJS.ErrnoException).code)
+      : String(err);
+  }
+
   const listening: Promise<{ host: string; port: number }> = (async () => {
     let bound;
     try {
       bound = await attemptBind(effectiveConfig.host, effectiveConfig.port);
     } catch (err) {
-      const hostOverridden = effectiveConfig.host !== config.host;
-      const portOverridden = effectiveConfig.port !== config.port;
-      if (!hostOverridden && !portOverridden) throw err;
+      const overridden = (["host", "port"] as const).filter(
+        (key) => effectiveConfig[key] !== config[key],
+      );
+      if (overridden.length === 0) throw err;
 
-      const code =
-        err instanceof Error && "code" in err
-          ? String((err as NodeJS.ErrnoException).code)
-          : String(err);
-      if (hostOverridden) {
-        const reason = `stored host "${effectiveConfig.host}" could not be bound (${code}); running "${config.host}" instead`;
-        logger.error("ignored a stored setting", { key: "host", reason });
-        runtime.settings.markIgnored("host", reason);
+      // Which subset of the *stored* overrides to try reverting, smallest
+      // first: a combined failure with both `host` and `port` overridden
+      // cannot be attributed to either from the OS error alone (one error,
+      // two suspects), so this isolates the true cause by testing each on
+      // its own before ever blaming both — marking a value ignored that a
+      // smaller revert already proved innocent would be exactly the
+      // dishonesty `ignoredReason`'s own contract (`settings/service.ts`)
+      // exists to rule out.
+      const revertAttempts: readonly OverriddenKey[][] =
+        overridden.length === 1
+          ? [overridden]
+          : (() => {
+              const [first, second] = overridden as [
+                OverriddenKey,
+                OverriddenKey,
+              ];
+              return [[first], [second], overridden];
+            })();
+
+      let lastErr: unknown = err;
+      for (const revert of revertAttempts) {
+        const host = revert.includes("host")
+          ? config.host
+          : effectiveConfig.host;
+        const port = revert.includes("port")
+          ? config.port
+          : effectiveConfig.port;
+        try {
+          bound = await attemptBind(host, port);
+        } catch (retryErr) {
+          lastErr = retryErr;
+          continue;
+        }
+        // `err`, not `retryErr`: the first attempt is what every reverted
+        // key was actually judged against, so its code is what every
+        // ignored reason below cites.
+        const code = errorCode(err);
+        for (const key of revert) {
+          const stored = effectiveConfig[key];
+          const fallback = config[key];
+          const reason =
+            key === "host"
+              ? `stored host "${stored}" could not be bound (${code}); running "${fallback}" instead`
+              : `stored port ${stored} could not be bound (${code}); running ${fallback} instead`;
+          logger.error("ignored a stored setting", { key, reason });
+          runtime.settings.markIgnored(key, reason);
+        }
+        break;
       }
-      if (portOverridden) {
-        const reason = `stored port ${effectiveConfig.port} could not be bound (${code}); running ${config.port} instead`;
-        logger.error("ignored a stored setting", { key: "port", reason });
-        runtime.settings.markIgnored("port", reason);
-      }
-      bound = await attemptBind(config.host, config.port);
+      if (bound === undefined) throw lastErr;
     }
 
     boundServer = bound.server;
