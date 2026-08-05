@@ -103,6 +103,19 @@ export class SettingsService {
     }
   }
 
+  /**
+   * Marks a stored override as not in effect, after boot already decided so —
+   * the one case where that is not known until later: a `host`/`port` legal
+   * enough to pass every check yet unbindable on this machine (#87), which
+   * only the failed `listen()` itself can report. Every other reason a value
+   * is ignored (`applyStoredSettings`) is known before this service exists,
+   * which is why the constructor takes those and this exists for the one that
+   * is not.
+   */
+  markIgnored(key: string, reason: string): void {
+    this.#ignored.set(key, reason);
+  }
+
   list(): SettingReport[] {
     return SETTINGS_CATALOG.map((entry) => this.reportFor(entry));
   }

@@ -7,7 +7,7 @@
  * machine, not the operator's.
  */
 import { existsSync } from "node:fs";
-import { serve } from "@hono/node-server";
+import { serve, type ServerType } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { openDatabase, SettingsStore, stateLayout } from "@plotroom/db";
 import { Hono } from "hono";
@@ -176,39 +176,36 @@ export function startServer(config = loadServerConfig()) {
     return [];
   });
 
-  const server = serve({
-    fetch: app.fetch,
-    port: effectiveConfig.port,
-    hostname: effectiveConfig.host,
-  });
-  injectWebSocket(server);
-
   /**
-   * The address the socket actually got, which is not always the one asked for:
-   * port 0 means "whichever the OS has free", and the caller cannot learn that
-   * number from its own config. Test harnesses are the reason it exists —
-   * probing for a free port and then binding it is a race, because the probe has
-   * to close the socket before the server can have it, and something else on the
-   * machine can take the port in between (a leaked server, a parallel suite);
-   * observed on CI as one suite's `EADDRINUSE` and another's `ECONNREFUSED` on
-   * the same port in one run. Asking for 0 and being told what was bound cannot
-   * race with anything.
-   *
-   * It rejects on a bind failure, which is otherwise an `error` event nobody is
-   * listening to: the process dies with a raw stack far from the call that
-   * caused it. That listener is detached the moment this settles — a socket error
-   * *after* the bind (accept-time `EMFILE`, say) has nothing to do with starting
-   * up, and delivering it to a settled promise would discard it silently.
+   * Binds `app.fetch` at `host`:`port` and resolves once `listen()` actually
+   * succeeds — resolving from the socket's own address, never the arguments,
+   * because port 0 means "whichever the OS has free" and only the socket knows
+   * what it got. Rejects on a bind failure, which is otherwise an `error` event
+   * nobody is listening to: the process dies with a raw stack far from the call
+   * that caused it. That listener is detached the moment this settles — a
+   * socket error *after* the bind (accept-time `EMFILE`, say) has nothing to do
+   * with starting up, and delivering it to a settled promise would discard it
+   * silently.
    */
-  const listening = new Promise<{ host: string; port: number }>(
-    (resolve, reject) => {
+  interface BoundListener {
+    readonly server: ServerType;
+    readonly host: string;
+    readonly port: number;
+  }
+
+  // The executor form because this project's `lib` predates
+  // `Promise.withResolvers` (`apps/server/src/runtime/omp.ts` states the same
+  // reason).
+  function attemptBind(host: string, port: number): Promise<BoundListener> {
+    return new Promise((resolve, reject) => {
+      const srv = serve({ fetch: app.fetch, port, hostname: host });
       const failed = (err: unknown) => {
-        server.off("listening", report);
+        srv.off("listening", ready);
         reject(err);
       };
-      const report = () => {
-        server.off("error", failed);
-        const address = server.address();
+      const ready = () => {
+        srv.off("error", failed);
+        const address = srv.address();
         if (address === null || typeof address === "string") {
           reject(
             new Error(
@@ -217,26 +214,69 @@ export function startServer(config = loadServerConfig()) {
           );
           return;
         }
-        // Both from the socket, never from the config: under `port: 0` the
-        // configured port is literally `0`, and a startup line that says so is
-        // worse than no line. `address.address` is the same for `host` — a
-        // hostname resolves, and what it resolved to is what is reachable.
-        const bound = { host: address.address, port: address.port };
-        logger.info("server started", {
-          ...bound,
-          // Never from `effectiveConfig`: stateDir cannot be a stored override
-          // (see the note above `openDatabase`), so `config.stateDir` is the only
-          // value this ever was or could be.
-          stateDir: config.stateDir,
-          nonLoopback: effectiveConfig.allowNonLoopbackBind,
-        });
-        resolve(bound);
+        resolve({ server: srv, host: address.address, port: address.port });
       };
-      server.once("error", failed);
-      if (server.listening) report();
-      else server.once("listening", report);
-    },
-  );
+      srv.once("error", failed);
+      if (srv.listening) ready();
+      else srv.once("listening", ready);
+    });
+  }
+
+  let boundServer: ServerType | undefined;
+
+  /**
+   * A stored `host` or `port` that is *legal* — it passed `checkBindPolicy`
+   * and the catalog's bound — can still be unbindable on this machine: a port
+   * already in use, an address this machine does not have (#87). No bound can
+   * catch that ahead of time, only the failed `listen()` itself, which is why
+   * this retries with the env-derived default rather than letting the process
+   * exit on every subsequent boot. A failure on a value that was *not* a
+   * stored override (nothing to fall back to beyond what the caller already
+   * asked for) still propagates, exactly as before.
+   */
+  const listening: Promise<{ host: string; port: number }> = (async () => {
+    let bound;
+    try {
+      bound = await attemptBind(effectiveConfig.host, effectiveConfig.port);
+    } catch (err) {
+      const hostOverridden = effectiveConfig.host !== config.host;
+      const portOverridden = effectiveConfig.port !== config.port;
+      if (!hostOverridden && !portOverridden) throw err;
+
+      const code =
+        err instanceof Error && "code" in err
+          ? String((err as NodeJS.ErrnoException).code)
+          : String(err);
+      if (hostOverridden) {
+        const reason = `stored host "${effectiveConfig.host}" could not be bound (${code}); running "${config.host}" instead`;
+        logger.error("ignored a stored setting", { key: "host", reason });
+        runtime.settings.markIgnored("host", reason);
+      }
+      if (portOverridden) {
+        const reason = `stored port ${effectiveConfig.port} could not be bound (${code}); running ${config.port} instead`;
+        logger.error("ignored a stored setting", { key: "port", reason });
+        runtime.settings.markIgnored("port", reason);
+      }
+      bound = await attemptBind(config.host, config.port);
+    }
+
+    boundServer = bound.server;
+    injectWebSocket(boundServer);
+    // Both from the socket, never from the config: under `port: 0` the
+    // configured port is literally `0`, and a startup line that says so is
+    // worse than no line. `address.address` is the same for `host` — a
+    // hostname resolves, and what it resolved to is what is reachable.
+    logger.info("server started", {
+      host: bound.host,
+      port: bound.port,
+      // Never from `effectiveConfig`: stateDir cannot be a stored override
+      // (see the note above `openDatabase`), so `config.stateDir` is the only
+      // value this ever was or could be.
+      stateDir: config.stateDir,
+      nonLoopback: effectiveConfig.allowNonLoopbackBind,
+    });
+    return { host: bound.host, port: bound.port };
+  })();
 
   return {
     app,
@@ -293,11 +333,23 @@ export function startServer(config = loadServerConfig()) {
       await pluginsBooted;
       await runtime.plugins.shutdown();
 
+      // `boundServer` is only unset if the bind never succeeded at all (both
+      // the stored value and the env-derived fallback were refused) — nothing
+      // is listening, so there is nothing to close beyond the database.
+      await listening.catch(() => {});
+      // The executor form because this project's `lib` predates
+      // `Promise.withResolvers` (`apps/server/src/runtime/omp.ts` states the
+      // same reason).
       await new Promise<void>((resolve) => {
-        server.close(() => {
+        if (boundServer) {
+          boundServer.close(() => {
+            db.close();
+            resolve();
+          });
+        } else {
           db.close();
           resolve();
-        });
+        }
       });
     },
   };
