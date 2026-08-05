@@ -1,0 +1,32 @@
+/**
+ * Escape-hatch CSS for the primitive set (#102, decision 0002 §5): the two
+ * rules a plain utility cannot express because each is a pseudo-class paired
+ * with a token that is itself a shorthand (a border, not a colour).
+ *
+ * Everything else a primitive needs — colour, radius, shadow, font-family —
+ * has a Tailwind utility already, because `theme.generated.css`'s `@theme
+ * inline` block aliases those namespaces onto `--pr-*` (`theme.css.ts`).
+ * Spacing and the `font` shorthand do not: there is no default spacing scale
+ * and no `theme:` key for `--pr-type-*` (`toolkit.css`, `tokens.ts`), so a
+ * component reads those directly off the custom property inline, as data
+ * rather than a class.
+ */
+
+@layer components {
+  /*
+   * §15: "deliberately louder than the selection edge, on every focusable
+   * element, and never suppressed." One rule, so every interactive primitive
+   * applies the same class instead of restating `--pr-focus-ring` and
+   * `--pr-focus-ring-offset` as an inline `:focus-visible` nobody can write in
+   * plain CSS-in-props. The mouse/touch path drops the browser's default ring
+   * (`:focus-visible` never matches a pointer press); the keyboard path is the
+   * one this exists for.
+   */
+  .pr-focus-ring {
+    outline: none;
+  }
+  .pr-focus-ring:focus-visible {
+    outline: var(--pr-focus-ring);
+    outline-offset: var(--pr-focus-ring-offset);
+  }
+}
