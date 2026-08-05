@@ -55,7 +55,7 @@ unparented if it does not obviously belong to one epic's story.
 
 ```sh
 env -u GH_TOKEN gh issue create --title "<what is wrong, not what to do about it>" \
-  --label <bug|documentation|decision|follow-up> \
+  --label <bug|task|idea> \
   --body "$(cat <<'EOF'
 <what happens, and what should happen instead — spec section if there is one>
 
@@ -70,7 +70,7 @@ EOF
 
 Then put it on the board in `Backlog` (commands in the tracker skill), and — unless
 it is a `bug` you are leaving unparented — parent it under the epic whose story it
-belongs to: an unparented follow-up reads as an orphan to the next reader.
+belongs to: an unparented task reads as an orphan to the next reader.
 
 Placement in an epic's queue and its dates are the operator's call. Say where you
 think it goes and why (in front of what, because of what), and leave it in `Backlog`.
