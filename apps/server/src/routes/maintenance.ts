@@ -1,19 +1,19 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { WorkspaceKindRegistry } from "@plotroom/core";
+import type { Author, WorkspaceKindRegistry } from "@plotroom/core";
 import { RESET_SCOPES, type ResetScope } from "@plotroom/db";
 import type { ServerConfig } from "../config.js";
-import { badRequest } from "../http/errors.js";
+import { badRequest, forbidden } from "../http/errors.js";
 import { validateJsonBody } from "../http/validate.js";
 import type { Logger } from "../logging/logger.js";
 import type { CompactionSchedule } from "../maintenance/compaction.js";
 import { executeReset, planReset, resetPaths } from "../maintenance/reset.js";
-import { param, type ApiEnv, type ApiStores } from "./api.js";
+import { actorOf, param, type ApiEnv, type ApiStores } from "./api.js";
 
 /**
  * Durability, portability, and cleanup as endpoints (§12, Epic 2.3).
  *
- * Two rules are visible in the shapes here:
+ * Three rules are visible in the shapes here:
  *
  * - **A destructive verb states what it removes before it removes it.** The plan
  *   is its own read, and executing requires the caller to say `confirm: true` —
@@ -22,7 +22,20 @@ import { param, type ApiEnv, type ApiStores } from "./api.js";
  * - **Compaction is reachable on demand as well as on a schedule.** The schedule
  *   is the product keeping its own house; the endpoint is the operator asking it
  *   to, and both call the same sweep.
+ * - **Every verb here is the operator's own** — `catalog.test.ts`'s
+ *   `OPERATOR_ONLY_ROUTES` already declared every one of them tool-less for
+ *   exactly that reason; this is that declaration enforced rather than merely
+ *   documented (cross-cutting rule 3, #189). No catalog tool names any of these
+ *   endpoints, so neither approvals guard reaches them — the actor check below
+ *   is the only gate there is.
  */
+function requireOperator(actor: Author, gesture: string): void {
+  if (actor.kind === "human") return;
+  throw forbidden(
+    `${gesture} is the operator's own (§12); a session cannot make it`,
+  );
+}
+
 const resetBody = z.object({
   scope: z.enum(RESET_SCOPES),
   /**
@@ -46,6 +59,7 @@ export function maintenanceRoutes(
    * in it, and the derived directories that are deliberately *not* part of it.
    */
   app.get("/maintenance/state", (c) => {
+    requireOperator(actorOf(c), "reading the backup-and-move inventory");
     const inventory = stores.maintenance.inventory();
     const paths = resetPaths(config);
 
@@ -83,6 +97,7 @@ export function maintenanceRoutes(
    * is not instant — and why it is worth waiting for.
    */
   app.get("/reset/plan", async (c) => {
+    requireOperator(actorOf(c), "reading a reset's plan");
     const scope = c.req.query("scope");
     if (!isScope(scope)) {
       throw badRequest(
@@ -101,6 +116,7 @@ export function maintenanceRoutes(
    * and then repeat the call with a confirmation.
    */
   app.post("/reset", validateJsonBody(resetBody), async (c) => {
+    requireOperator(actorOf(c), "resetting the store");
     const input = c.get("body") as z.infer<typeof resetBody>;
     const plan = await planReset(
       stores.maintenance,
@@ -127,9 +143,10 @@ export function maintenanceRoutes(
    * Compact now (§15-3, §4.4). The sweep never removes pinned or referenced
    * content — the predicates in `@plotroom/core` decide, and this only asks.
    */
-  app.post("/maintenance/compact", (c) =>
-    c.json({ compaction: compaction.runNow() }),
-  );
+  app.post("/maintenance/compact", (c) => {
+    requireOperator(actorOf(c), "compacting on demand");
+    return c.json({ compaction: compaction.runNow() });
+  });
 
   /**
    * A single run's pin, which is the human's veto over all of the above (§4.4):
@@ -153,13 +170,15 @@ export function maintenanceRoutes(
     return run;
   };
 
-  app.post("/runs/:id/pin", (c) =>
-    c.json({ run: setPin(param(c, "id"), true) }),
-  );
+  app.post("/runs/:id/pin", (c) => {
+    requireOperator(actorOf(c), "pinning a run");
+    return c.json({ run: setPin(param(c, "id"), true) });
+  });
 
-  app.delete("/runs/:id/pin", (c) =>
-    c.json({ run: setPin(param(c, "id"), false) }),
-  );
+  app.delete("/runs/:id/pin", (c) => {
+    requireOperator(actorOf(c), "unpinning a run");
+    return c.json({ run: setPin(param(c, "id"), false) });
+  });
 
   return app;
 }
