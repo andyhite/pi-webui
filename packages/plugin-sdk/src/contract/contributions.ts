@@ -383,8 +383,11 @@ export interface PaletteEntry {
  * A theme (§10.1): named design tokens the host applies.
  *
  * Tokens are values, not stylesheets, for the same reason a card view is not
- * markup. The styling approach for the UI package is still an open decision
- * (AGENTS.md), so the *token names* are not frozen here — the shape is.
+ * markup. The UI package's styling approach is settled (decision 0002,
+ * `docs/decisions/0002-ui-styling-and-design-system.md`: Tailwind v4,
+ * confined to `@plotroom/toolkit`, with `Theme.tokens` as its CSS custom
+ * properties) — this contract stays generic regardless, so the *token
+ * names* a theme supplies are not frozen here, only the shape.
  */
 export interface Theme {
   readonly id: ContributionId;

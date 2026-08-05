@@ -591,8 +591,9 @@ function Board() {
   );
 
   // §3.1: a collection expands, prunes, and drags members out. There is no
-  // collection membership model server-side yet (an open decision, per
-  // docs/AGENTS.md), so this stays a fixture-shaped demo either way.
+  // collection membership model server-side yet (settled by decision 0004,
+  // implemented by #95 — this stays a fixture-shaped demo until it lands and
+  // replaces the demo with server data).
   const [collection, setCollection] = useState<Collection>(() => ({
     ...FIXTURE_COLLECTION,
     expanded: false,
