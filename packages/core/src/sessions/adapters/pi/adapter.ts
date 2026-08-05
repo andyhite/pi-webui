@@ -327,6 +327,14 @@ class PiSessionHandle implements RuntimeSessionHandle {
   #commandSeq = 0;
   #fatal: string | null = null;
   #stopRequested: "user" | null = null;
+  /**
+   * Set once the stream has ended. Without this, `#send` after the stream
+   * ended registers a pending entry that nothing will ever settle — `#read`'s
+   * rejection loop below runs once, at the tail, and a command sent after that
+   * point misses it entirely. `stop("graceful")` awaits one such send, so the
+   * gap hung a graceful stop, and the request behind it, forever (issue #110).
+   */
+  #ended: Error | null = null;
   #pump: Promise<void>;
 
   constructor(transport: PiRpcTransport, now: () => EpochMillis) {
@@ -458,6 +466,10 @@ class PiSessionHandle implements RuntimeSessionHandle {
   }
 
   async #send(command: PiCommand): Promise<PiResponse> {
+    // A command sent after the stream ended can never be answered — see the
+    // field comment on `#ended` (issue #110).
+    if (this.#ended !== null) return Promise.reject(this.#ended);
+
     const id = "id" in command ? command.id : this.#nextId();
     const response = new Promise<PiResponse>((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
@@ -508,8 +520,10 @@ class PiSessionHandle implements RuntimeSessionHandle {
       });
     }
 
+    const ended = new Error("the pi session ended before it answered");
+    this.#ended = ended;
     for (const waiting of this.#pending.values()) {
-      waiting.reject(new Error("the pi session ended before it answered"));
+      waiting.reject(ended);
     }
     this.#pending.clear();
 

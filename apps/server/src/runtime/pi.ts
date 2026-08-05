@@ -56,7 +56,7 @@ export function createPiRuntime(
       options.logger?.debug("pi stderr", { line: chunk.toString("utf8") });
     });
 
-    return new PiProcessTransport(child, launch.ref ?? null);
+    return new PiProcessTransport(child, launch.ref ?? null, options.logger);
   };
 
   return createPiAdapter({
@@ -86,12 +86,29 @@ class PiProcessTransport implements PiRpcTransport {
 
   readonly #child: ChildProcessWithoutNullStreams;
 
-  constructor(child: ChildProcessWithoutNullStreams, ref: string | null) {
+  constructor(
+    child: ChildProcessWithoutNullStreams,
+    ref: string | null,
+    logger?: Logger,
+  ) {
     this.#child = child;
     // Until pi reports its own session id on the stream, the process identity
     // is what resume and fork are addressed by; it is persisted either way, so
     // replacing it with pi's own is a change of value, not of shape.
     this.ref = ref ?? `pi-${child.pid ?? "unknown"}`;
+
+    // Writing to the stdin of a process that has exited emits `error` on the
+    // stream, and an unhandled one is an uncaught exception — the server would
+    // die because pi did. The window is real (a stop can land between pi's
+    // death and the driver detaching its handle, and `#send` — issue #110's
+    // other half — no longer waits forever on it either way), and the
+    // observation stream is where that failure is already reported: its own
+    // end is what says the session is over, so here it is noted and dropped.
+    this.#child.stdin.on("error", (error: Error) => {
+      logger?.debug("pi stdin closed under a write", {
+        message: error.message,
+      });
+    });
   }
 
   write(line: string): void {
