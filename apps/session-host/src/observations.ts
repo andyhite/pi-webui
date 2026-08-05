@@ -56,6 +56,15 @@ export interface ObservationTranslator {
    * recognized later (§6.5) rather than assumed from acceptance.
    */
   trackInjection(injection: PendingInjection): void;
+  /**
+   * Stop tracking an injection that was reported `injection-refused` (issue
+   * #107) — a no-op otherwise. Without this, the next `turn_start`'s queue
+   * diff would find the refused text absent from the queue (it was never
+   * delivered, so it is not there either) and fabricate a spurious
+   * `injection-delivered` for the same id, overwriting the ledger's terminal
+   * `refused` state with a delivery that never happened.
+   */
+  untrackInjection(id: InjectionId): void;
   translate(
     event: AgentSessionEvent,
     at: EpochMillis,
@@ -102,6 +111,10 @@ export function createObservationTranslator(): ObservationTranslator {
   return {
     trackInjection(injection) {
       pending = [...pending, injection];
+    },
+
+    untrackInjection(id) {
+      pending = pending.filter((injection) => injection.id !== id);
     },
 
     translate(event, at, extras) {

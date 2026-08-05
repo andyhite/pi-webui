@@ -6,7 +6,10 @@ import {
   type SessionHostEvent,
 } from "@plotroom/core";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent";
-import { createObservationTranslator } from "./observations.js";
+import {
+  createObservationTranslator,
+  type ObservationTranslator,
+} from "./observations.js";
 
 /**
  * The part of the SDK's session this process drives.
@@ -115,6 +118,7 @@ export async function runSessionHost(
           case "prompt":
             deliver(
               session,
+              translator,
               command.text,
               undefined,
               undefined,
@@ -139,6 +143,7 @@ export async function runSessionHost(
             });
             deliver(
               session,
+              translator,
               command.text,
               "steer",
               command.injectionId,
@@ -178,12 +183,16 @@ export async function runSessionHost(
  *
  * `prompt()` resolves when the turn completes, so awaiting it here would hold
  * the command loop for the whole turn — no stop, no injection, no answer would
- * be read while the session was working. A rejection is reported as a
- * non-fatal runtime error: the turn failed, the session is still alive, and
- * PlotRoom decides what to do about it (§7.2).
+ * be read while the session was working. A rejection is reported against
+ * whichever input it was: a bare prompt's rejection is a non-fatal
+ * `runtime-error` (the turn failed, the session is still alive, and PlotRoom
+ * decides what to do about it, §7.2); an injection's rejection is
+ * `injection-refused`, keyed by its id, so the §6.5 ledger's `refused` state
+ * is reachable (issue #107).
  */
 function deliver(
   session: HostedSession,
+  translator: ObservationTranslator,
   text: string,
   streamingBehavior: "steer" | undefined,
   injectionId: InjectionId | undefined,
@@ -193,17 +202,31 @@ function deliver(
   const options = streamingBehavior === undefined ? {} : { streamingBehavior };
   void session.prompt(text, options).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
+    if (injectionId === undefined) {
+      writeFrame({
+        type: "observation",
+        observation: {
+          kind: "runtime-error",
+          message,
+          fatal: false,
+          at: now(),
+        },
+      });
+      return;
+    }
+    // The queue never held this text — it was refused, not delivered — so a
+    // later turn_start diffing the queue must not find it "gone" and report a
+    // delivery that never happened (issue #107, and the review that caught it
+    // fabricating one anyway).
+    translator.untrackInjection(injectionId);
     writeFrame({
       type: "observation",
-      observation:
-        injectionId === undefined
-          ? { kind: "runtime-error", message, fatal: false, at: now() }
-          : {
-              kind: "injection-refused",
-              injectionId,
-              reason: message,
-              at: now(),
-            },
+      observation: {
+        kind: "injection-refused",
+        injectionId,
+        reason: message,
+        at: now(),
+      },
     });
   });
 }

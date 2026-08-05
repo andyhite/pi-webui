@@ -317,6 +317,45 @@ describe("the session host loop", () => {
     await harness.run;
   });
 
+  it("never reports a refused injection delivered at a later turn boundary (issue #107)", async () => {
+    // The review that caught this: a refused injection's text was never in
+    // the queue either, so the next turn_start's diff found it "gone" and
+    // fabricated a delivery for an id the ledger had already closed refused.
+    const harness = host();
+    harness.session.promptFailure = new Error("the session was disposed");
+    harness.input.send({
+      type: "inject",
+      id: "c1",
+      injectionId: "inj-1",
+      text: "also this",
+    });
+    await settle();
+
+    expect(harness.frames).toContainEqual({
+      type: "observation",
+      observation: {
+        kind: "injection-refused",
+        injectionId: "inj-1",
+        reason: "the session was disposed",
+        at: 1_000,
+      },
+    });
+
+    harness.session.promptFailure = null;
+    harness.session.emit({ type: "turn_start" });
+    await settle();
+
+    expect(harness.frames).not.toContainEqual(
+      expect.objectContaining({
+        type: "observation",
+        observation: expect.objectContaining({ kind: "injection-delivered" }),
+      }),
+    );
+
+    harness.input.end();
+    await harness.run;
+  });
+
   it("streams the session's events as PlotRoom's observations", async () => {
     const harness = host();
     await settle();

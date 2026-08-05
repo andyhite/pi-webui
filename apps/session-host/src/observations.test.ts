@@ -248,6 +248,16 @@ describe("the observation translator", () => {
     ]);
   });
 
+  it("stops tracking an injection once untracked, so it is never reported delivered (issue #107)", () => {
+    const translator = createObservationTranslator();
+    translator.trackInjection({ id: "inj-1", text: "also this" });
+    translator.untrackInjection("inj-1");
+
+    expect(translator.translate(event({ type: "turn_start" }), 1)).toEqual([
+      { kind: "turn-started", turn: 1, at: 1 },
+    ]);
+  });
+
   it("reports an untracked-in-queue injection delivered at the very next boundary", () => {
     // Idle when it arrived, so the runtime never held it queued at all — the
     // first turn_start is the first observable moment of delivery.

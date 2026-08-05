@@ -185,9 +185,13 @@ async function main(): Promise<number> {
           ? await session.fork()
           : !(await session.branch(target.entryId)).cancelled;
       if (!forked) {
+        // `fork()` also answers `false` when the session is not persisting —
+        // named alongside the more common cancellation rather than assuming
+        // the cause, since either way nothing was forked.
         writeFrame({
           type: "fatal",
-          message: "an extension cancelled the fork",
+          message:
+            "the fork did not complete: a hook cancelled it, or the session was not persisting",
         });
         return 4;
       }
