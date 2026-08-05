@@ -486,7 +486,7 @@ describe("the runtime registry (decision 0001)", () => {
     const harness = await boot({
       workspace: { repositoryPath: gitRepository() },
       // The default installation: adapter v1, and no script replay anywhere.
-      runtime: { adapterId: "pi-coding-agent" },
+      runtime: { adapterId: "omp-session-host" },
     });
     const fixture = await command(harness);
 

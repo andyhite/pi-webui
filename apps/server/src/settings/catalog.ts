@@ -266,20 +266,6 @@ export const SETTINGS_CATALOG: readonly SettingDefinition[] = [
       "the runtime registry is built once at boot from this value; changing this takes effect on the next start",
     humanOnly: true,
   },
-  {
-    key: "runtime.piProgram",
-    group: "Runtime",
-    label: "pi binary",
-    description:
-      "The pi binary, for hosts that keep it somewhere other than PATH.",
-    type: "string",
-    path: ["runtime", "piProgram"],
-    envVar: "PLOTROOM_PI_PROGRAM",
-    appliesWithoutRestart: false,
-    restartReason:
-      "the runtime registry is built once at boot from this value; changing this takes effect on the next start",
-    humanOnly: true,
-  },
   // -------------------------------------------------------------- workspaces
   {
     key: "workspace.kind",

@@ -375,7 +375,7 @@ describe("the session record (§3.6, principle 10)", () => {
         mode: "producing",
         launch: makeSession().launch,
         initiatedBy: humanAuthor,
-        runtime: { adapterId: "pi-coding-agent", ref: "ref-1" },
+        runtime: { adapterId: "omp-session-host", ref: "ref-1" },
       },
       4_000,
     );

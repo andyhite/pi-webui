@@ -88,12 +88,10 @@ export interface ServerConfig {
 
 export interface RuntimeConfig {
   /**
-   * The adapter id. `pi-coding-agent` is adapter v1; `scripted` replays a
+   * The adapter id. `omp-session-host` is adapter v1; `scripted` replays a
    * declared script and is opt-in, so a default install cannot run one.
    */
   readonly adapterId: string;
-  /** The pi binary, for hosts that keep it somewhere other than `PATH`. */
-  readonly piProgram: string;
   /**
    * The whole executable to run as the session host, when the operator has one
    * — a `bun build --compile` binary in a packaged install (issue #92). Set, it
@@ -198,7 +196,7 @@ export interface ServerConfigOverrides {
   readonly pluginsInBox?: readonly InBoxPluginEntry[];
 }
 
-export const DEFAULT_RUNTIME_ADAPTER = "pi-coding-agent";
+export const DEFAULT_RUNTIME_ADAPTER = "omp-session-host";
 
 /**
  * Six hours: often enough that the store does not grow unbounded between
@@ -493,8 +491,6 @@ export function loadServerConfig(
         overrides.runtime?.adapterId ??
         env.PLOTROOM_RUNTIME ??
         DEFAULT_RUNTIME_ADAPTER,
-      piProgram:
-        overrides.runtime?.piProgram ?? env.PLOTROOM_PI_PROGRAM ?? "pi",
       sessionHostProgram:
         overrides.runtime?.sessionHostProgram !== undefined
           ? overrides.runtime.sessionHostProgram

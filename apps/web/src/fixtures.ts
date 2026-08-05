@@ -74,7 +74,7 @@ export const FIXTURE_SESSION_RUNNING: Session = startSession(
       toolPermissions: INHERIT_APP_TOOLS,
     },
     initiatedBy: humanAuthor,
-    runtime: { adapterId: "pi-coding-agent", ref: "pi-session-1" },
+    runtime: { adapterId: "omp-session-host", ref: "session-1" },
   },
   1_700_000_000,
 );
@@ -92,7 +92,7 @@ export const FIXTURE_SESSION_ENDED: Session = {
         toolPermissions: INHERIT_APP_TOOLS,
       },
       initiatedBy: humanAuthor,
-      runtime: { adapterId: "pi-coding-agent", ref: "pi-session-2" },
+      runtime: { adapterId: "omp-session-host", ref: "session-2" },
     },
     1_699_000_000,
   ),

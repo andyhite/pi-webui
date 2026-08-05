@@ -127,7 +127,7 @@ describe("createSessionToolBridge", () => {
   it("sends the request with the session's own actor", async () => {
     const transport = recorder();
     const bridge = createSessionToolBridge({
-      binding: { sessionId: SESSION, adapterId: "pi" },
+      binding: { sessionId: SESSION, adapterId: "omp-session-host" },
       transport,
       lineage,
     });
