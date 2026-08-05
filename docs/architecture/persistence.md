@@ -1,11 +1,6 @@
----
-name: plotroom-persistence
-description: Why PlotRoom's schema and content storage are shaped the way they are — the state directory, the 64KB inline-vs-blob bound every caller reuses, migrations, maintenance and reset, objects and versions, retention defaults, and search. Read before editing packages/db, writing a migration, or storing content anywhere, including from a plugin producer.
----
-
 # How PlotRoom stores state
 
-These are the decisions behind `packages/db` and the state directory. Where a paragraph states a rule, the rule is binding: change the predicate and its mirror together, and never add a second place a rule is stated.
+The decisions behind `packages/db` and the state directory: the state directory's shape, the inline-vs-blob bound every caller reuses, migrations, maintenance and reset, objects and versions, retention defaults, and search. Where a paragraph states a rule, the rule is binding — change the predicate and its mirror together, and never add a second place a rule is stated.
 
 The schema must satisfy the four §15 invariants from day one:
 

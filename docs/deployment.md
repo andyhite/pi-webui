@@ -2,8 +2,8 @@
 
 This is the operator-facing picture of §12 ("Platform and deployment") as it
 actually landed. It complements the persistence notes in
-`skill://plotroom-persistence` rather than repeating them — read those first for
-the state-directory shape.
+[`docs/architecture/persistence.md`](architecture/persistence.md) rather than repeating
+them — read that first for the state-directory shape.
 
 ## Desktop installers
 

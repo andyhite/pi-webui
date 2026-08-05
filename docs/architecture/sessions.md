@@ -1,11 +1,6 @@
----
-name: plotroom-sessions
-description: How PlotRoom records sessions — the observation log, phases, workspaces, transcripts, steering (questions, broadcasts, handoffs), and the session runtime adapter seam including the omp sidecar. Read before editing sessions, adapters, apps/session-host, or steering.
----
-
 # Sessions, steering, and the runtime seam
 
-The observation log is the record; everything else about a session is folded from it. The runtime boundary's non-negotiables are at the end of this file and are binding.
+How PlotRoom records a session, steers one, and talks to an agent runtime. The observation log is the record and everything else about a session is folded from it; the runtime boundary's non-negotiables are at the end and are binding.
 
 **Steering** lives in `session_questions`, `broadcasts` / `broadcast_recipients` /
 `broadcast_sends`, and `handoff_briefs` (migration 16). Every rule is

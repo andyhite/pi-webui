@@ -1,11 +1,6 @@
----
-name: plotroom-governance
-description: PlotRoom's governance subsystems and the rules behind their tables — attention derivation, path claims, spend attribution, budgets, approvals and pre-grants, triage, outbound routes, plugin grants, and standing instructions. Read before editing approvals, claims, budgets, attention, plugins, or standing instructions.
----
-
 # Attention, claims, money, approvals, plugins, standing instructions
 
-Every rule below lives as a predicate in `@plotroom/core`; the stores apply effects and decide nothing. A store that re-derives a decision is the second implementation principle 8 exists to prevent.
+The subsystems that decide what an agent may do and what it costs. Every rule here lives as a predicate in `@plotroom/core`; the stores apply effects and decide nothing, because a store that re-derived a decision would be the second implementation principle 8 exists to prevent.
 
 **Attention is one derivation** (`@plotroom/core`'s `attention/`, joined by
 `apps/server/src/attention/`). Six feeds — questions, approvals, drift, health,

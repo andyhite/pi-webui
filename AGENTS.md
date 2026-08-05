@@ -87,19 +87,18 @@ The renderer is one web app. Desktop and browser are two ways to load it; never 
 ### Architecture notes
 
 The decisions behind each subsystem — why a table is shaped as it is, which rule is
-a predicate, what a column is load-bearing for — live in `.omp/skills/`. They are
-discovered automatically, cost nothing until you read them, and are binding wherever
-they state a rule. **Load the one that covers the files you are about to edit.** They
-are cut by subsystem rather than by track, so one skill can serve several lanes and
-no lane has a skill of its own name.
+a predicate, what a column is load-bearing for — live in `docs/architecture/`. They
+are binding wherever they state a rule. **Read the one that covers the files you are
+about to edit**; they are cut by subsystem rather than by track, so one note serves
+several lanes and no lane has a note of its own name.
 
-| Skill                          | Covers                                                                                                                                                                |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `skill://plotroom-persistence` | `packages/db`: the state directory, inline-vs-blob content, migrations, maintenance and reset, objects and versions, retention defaults, search, the injectable clock |
-| `skill://plotroom-runs`        | commands, runs, the preview, `output@n` addressing, scoped-run batches, the admission queue, initiation keys                                                          |
-| `skill://plotroom-sessions`    | sessions, the observation log, phases, workspaces, transcripts, steering, and the runtime adapter seam (`apps/session-host`)                                          |
-| `skill://plotroom-governance`  | attention, path claims, spend attribution, budgets, approvals and pre-grants, plugin grants, standing instructions                                                    |
-| `skill://plotroom-canvas`      | the canvas built on top of xyflow                                                                                                                                     |
+| Note                                                                   | Covers                                                                                                                                          |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`docs/architecture/persistence.md`](docs/architecture/persistence.md) | `packages/db`: the state directory, inline-vs-blob content, migrations, maintenance and reset, objects and versions, retention defaults, search |
+| [`docs/architecture/runs.md`](docs/architecture/runs.md)               | commands, runs, the preview, `output@n` addressing, scoped-run batches, the admission queue, initiation keys                                    |
+| [`docs/architecture/sessions.md`](docs/architecture/sessions.md)       | sessions, the observation log, phases, workspaces, transcripts, steering, and the runtime adapter seam (`apps/session-host`)                    |
+| [`docs/architecture/governance.md`](docs/architecture/governance.md)   | attention, path claims, spend attribution, budgets, approvals and pre-grants, plugin grants, standing instructions                              |
+| [`docs/architecture/canvas.md`](docs/architecture/canvas.md)           | the canvas built on top of xyflow                                                                                                               |
 
 Two of their rules are short enough to state here, because every change is judged
 against them.
@@ -282,23 +281,23 @@ the only record of work inside it is `CHANGELOG.md`.
 - **A behavior change that contradicts `docs/` does not carry the edit** — the
   contradiction is recorded where work is tracked and fixed on its own. The PR is
   not blocked by it; a contradiction nobody wrote down is the actual failure.
-- `docs/decisions/` holds decision records in prose (ADRs) when a decision
-  deserves more than the tracker. `.omp/skills/` holds the subsystem notes — why
-  each area's schema and predicates are shaped as they are — read on demand rather
-  than loaded into every session. `.omp/RULES.md` is the handful of hard rules that
-  must stay in view across a long session, and it is a subset of this file, never a
-  second source of truth — a user-level `RULES.md` would shadow it rather than add to
-  it, which is the other reason the full statement of a rule belongs here. `AGENTS.md` holds **standing conventions an agent must
-  follow** — not the decision archive.
+- `docs/decisions/` holds decision records in prose (ADRs) when a decision deserves
+  more than the tracker, and `docs/architecture/` holds the subsystem notes — why
+  each area's schema and predicates are shaped as they are. `.omp/RULES.md` is the
+  handful of hard rules that must stay in view across a long session; it is a subset
+  of this file, never a second source of truth (a user-level `RULES.md` shadows it
+  rather than adding to it, which is the other reason the full statement of a rule
+  belongs here). `AGENTS.md` holds **standing conventions an agent must follow** —
+  not the decision archive.
 
 ## Repository layout
 
 ```
 docs/product-spec.md   Product specification (north star, behavior only)
+docs/architecture/     Per-subsystem notes — why each area is shaped as it is
 docs/decisions/        Decision records (ADRs), when a decision deserves prose
 AGENTS.md              This file — canonical conventions
 .omp/RULES.md          The hard rules, re-attached near every turn
-.omp/skills/           Per-subsystem architecture notes, read on demand
 CHANGELOG.md           Completed work, one section per release
 CONTRIBUTING.md        How to contribute (git-level detail)
 ```

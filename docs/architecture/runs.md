@@ -1,11 +1,6 @@
----
-name: plotroom-runs
-description: How PlotRoom's commands, runs, previews, output addressing, scoped-run batches and the admission queue work, and which of their rules are schema constraints. Read before editing commands, runs, the preview, the queue, or run initiation.
----
-
 # Commands, runs, previews, and the queue
 
-The preview is the contract. Several rules below are CHECK constraints rather than conventions, so no call site can get them wrong — keep them that way.
+How a command becomes a run, how a run's output is addressed, and how a scoped batch is admitted rather than scheduled. The preview is the contract; several rules below are CHECK constraints rather than conventions, so no call site can get them wrong — keep them that way.
 
 **Scoped runs and the queue** live in `run_batches` / `run_queue` (migrations 13, 14
 and 15). One batch is one gesture over a scope; one entry is one command, admitted
