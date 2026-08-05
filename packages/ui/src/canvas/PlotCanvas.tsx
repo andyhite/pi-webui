@@ -287,6 +287,14 @@ export interface PlotCanvasProps {
    */
   readonly onCardAction?: (nodeId: string, actionId: string) => void;
   /**
+   * The session delete gesture (issue #65, principle 10): destroys the
+   * session record over `DELETE /api/sessions/:id` — distinct from the
+   * generic canvas delete key, which only unplaces a node locally
+   * (`canvas-delete-selection` below never reaches the server for any
+   * role). Absent: no delete button renders at all, matching `onRunCommand`.
+   */
+  readonly onDeleteSession?: (sessionNodeId: string) => void;
+  /**
    * Speech bubbles (§5): every source that could show as a bubble on some
    * node currently on this canvas — the host derives these from its own
    * streams (`bubbles/derive-sources.ts`, a fixture question source, ...).
@@ -328,6 +336,8 @@ type BoxNodeData = {
   cardView: CanvasCardView | null;
   /** Dispatches a card action's id when its button is clicked (§10.1). */
   onCardAction?: (actionId: string) => void;
+  /** Set on a session node when the host wired the delete gesture (issue #65). */
+  onDeleteSession?: () => void;
 };
 
 type BoxNode = Node<BoxNodeData, "box">;
@@ -453,6 +463,11 @@ function BoxNodeView({ data, id, selected }: NodeProps<BoxNode>) {
       {data.role === "command" && data.onRun ? (
         <button type="button" onClick={data.onRun} disabled={data.runInFlight}>
           {data.runInFlight ? "running…" : "run"}
+        </button>
+      ) : null}
+      {data.role === "session" && data.onDeleteSession ? (
+        <button type="button" onClick={data.onDeleteSession}>
+          delete
         </button>
       ) : null}
       {data.zoomLevel !== "workstream" ? <div>id: {id}</div> : null}
@@ -712,6 +727,7 @@ function toBoxNode(
     readonly onRunCommand?: (commandNodeId: string) => void;
     readonly runningCommandNodeIds?: ReadonlySet<string>;
     readonly onCardAction?: (nodeId: string, actionId: string) => void;
+    readonly onDeleteSession?: (sessionNodeId: string) => void;
   },
 ): BoxNode {
   return {
@@ -747,6 +763,9 @@ function toBoxNode(
       ...(input.role === "command" && ctx.onRunCommand
         ? { onRun: () => ctx.onRunCommand?.(input.id) }
         : {}),
+      ...(input.role === "session" && ctx.onDeleteSession
+        ? { onDeleteSession: () => ctx.onDeleteSession?.(input.id) }
+        : {}),
       ...(ctx.onCardAction
         ? {
             onCardAction: (actionId: string) =>
@@ -781,6 +800,7 @@ function CanvasInner({
   onRunCommand,
   runningCommandNodeIds,
   onCardAction,
+  onDeleteSession,
   bubbleSources = [],
   onAnswerQuestion,
   bubbleCap,
@@ -863,6 +883,7 @@ function CanvasInner({
         ...(onRunCommand ? { onRunCommand } : {}),
         ...(runningCommandNodeIds ? { runningCommandNodeIds } : {}),
         ...(onCardAction ? { onCardAction } : {}),
+        ...(onDeleteSession ? { onDeleteSession } : {}),
       }),
     );
 
@@ -880,6 +901,7 @@ function CanvasInner({
     onRunCommand,
     runningCommandNodeIds,
     onCardAction,
+    onDeleteSession,
     zoomLevel,
     selectedNodeId,
   ]);
@@ -1007,6 +1029,7 @@ function CanvasInner({
           ...(onRunCommand ? { onRunCommand } : {}),
           ...(runningCommandNodeIds ? { runningCommandNodeIds } : {}),
           ...(onCardAction ? { onCardAction } : {}),
+          ...(onDeleteSession ? { onDeleteSession } : {}),
         }),
       );
       if (
@@ -1032,6 +1055,7 @@ function CanvasInner({
     onRunCommand,
     runningCommandNodeIds,
     onCardAction,
+    onDeleteSession,
     zoomLevel,
     selectedNodeId,
     setNodes,
@@ -1708,6 +1732,37 @@ function CanvasInner({
         implementedBy: "xyflow",
       },
       {
+        // Deliberately mod-qualified and distinct from the bare delete key
+        // above (issue #65): that one only unplaces a node locally (never
+        // reaches the server for any role, `onDelete` below); this one
+        // destroys the focused session's own record over the API, so it
+        // needs its own, harder-to-hit chord rather than overloading
+        // `Backspace`/`Delete` with two different destructive meanings.
+        kind: "dispatched",
+        id: "canvas-delete-session",
+        chords: [
+          { key: "Backspace", mod: true },
+          { key: "Delete", mod: true },
+        ],
+        label: "delete the focused session",
+        description:
+          "destroys the session record (§3.6) rather than just unplacing its node; restorable via the restorable panel (principle 10)",
+        scope: "canvas",
+        run: () => {
+          const nodeId = focusedCanvasNodeId(
+            document.activeElement as HTMLElement | null,
+          );
+          if (!nodeId) return;
+          if (graphNodes.get(nodeId)?.role !== "session") {
+            setKeyboardAnnouncement(
+              "refused: the focused node is not a session",
+            );
+            return;
+          }
+          onDeleteSession?.(nodeId);
+        },
+      },
+      {
         // xyflow's `elementSelectionKeys` are `Enter`, `Space` and `Escape`, so
         // the space bar is a live canvas key whether or not this codebase
         // wanted one — and a live key that appears in no overlay is exactly
@@ -1747,7 +1802,7 @@ function CanvasInner({
         implementedBy: "xyflow",
       },
     ],
-    [onSelectNode, wireByKeyboard],
+    [onSelectNode, wireByKeyboard, graphNodes, onDeleteSession],
   );
   useKeyBindings(canvasBindings);
 
