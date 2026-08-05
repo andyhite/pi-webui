@@ -2,6 +2,7 @@
 name: plotroom-review
 description: Independent fresh-context review of a PlotRoom branch — judges the change against the spec section it claims and against the repository's cross-cutting rules. Read-only; returns blockers and non-blockers with evidence.
 tools: read, grep, glob, bash, web_search
+model: anthropic/claude-fable-5
 read-summarize: false
 output:
   type: object
