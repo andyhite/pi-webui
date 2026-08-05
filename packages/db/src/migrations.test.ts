@@ -382,3 +382,100 @@ describe("migration 27 widens the approval kinds by rebuild (§3.8)", () => {
     }
   });
 });
+
+describe("migration 33 rewrites external_system from producer id to plugin id (#85)", () => {
+  /**
+   * A store at 32 with two integrations of one plugin under their old,
+   * per-producer `system` values — exactly what `IntegrationService.connect`
+   * wrote before the fix — and the objects each one produced.
+   */
+  function storeWithProducerSystems(): void {
+    const file = storeAtMigration(32);
+    const sqlite = new Database(file);
+    sqlite.exec(`
+      INSERT INTO integrations
+        (id, plugin_id, producer_id, name, system, connection_state,
+         created_at, updated_at)
+        VALUES ('int_issues', 'jira', 'jira-issues', 'Issues', 'jira-issues',
+                'connected', 1000, 1000);
+      INSERT INTO integrations
+        (id, plugin_id, producer_id, name, system, connection_state,
+         created_at, updated_at)
+        VALUES ('int_epics', 'jira', 'jira-epics-as-collections', 'Epics',
+                'jira-epics-as-collections', 'connected', 1000, 1000);
+
+      -- Read only by the issue producer: no collision, a plain rewrite.
+      INSERT INTO objects
+        (id, kind, scope, external_system, external_id, title,
+         latest_version_id, created_at)
+        VALUES ('obj_solo', 'ticket', 'world', 'jira-issues', 'OXY-1',
+                'Solo ticket', NULL, 1000);
+
+      -- The same ticket, produced under both systems — #85's duplicate.
+      INSERT INTO objects
+        (id, kind, scope, external_system, external_id, title,
+         latest_version_id, created_at)
+        VALUES ('obj_dup_issue', 'ticket', 'world', 'jira-issues', 'OXY-2',
+                'Duplicate, via issues', NULL, 1000);
+      INSERT INTO objects
+        (id, kind, scope, external_system, external_id, title,
+         latest_version_id, created_at)
+        VALUES ('obj_dup_epic', 'ticket', 'world', 'jira-epics-as-collections',
+                'OXY-2', 'Duplicate, via epics', NULL, 1000);
+    `);
+    sqlite.close();
+  }
+
+  it("rewrites both tables to the plugin id when no collision results", () => {
+    storeWithProducerSystems();
+
+    const state = openDatabase({ stateDir: dir });
+    try {
+      const integrationSystems = state.sqlite
+        .prepare<[], { id: string; system: string }>(
+          "SELECT id, system FROM integrations ORDER BY id",
+        )
+        .all();
+      expect(integrationSystems).toEqual([
+        { id: "int_epics", system: "jira" },
+        { id: "int_issues", system: "jira" },
+      ]);
+
+      const solo = state.sqlite
+        .prepare<[], { external_system: string }>(
+          "SELECT external_system FROM objects WHERE id = 'obj_solo'",
+        )
+        .get() as { external_system: string };
+      expect(solo.external_system).toBe("jira");
+
+      expect(state.sqlite.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      state.close();
+    }
+  });
+
+  it("leaves a colliding pair exactly as it was rather than merging them", () => {
+    storeWithProducerSystems();
+
+    const state = openDatabase({ stateDir: dir });
+    try {
+      const rows = state.sqlite
+        .prepare<[], { id: string; external_system: string }>(
+          "SELECT id, external_system FROM objects WHERE id IN ('obj_dup_issue', 'obj_dup_epic') ORDER BY id",
+        )
+        .all();
+
+      // Rewriting either row to "jira" would collide with the other under
+      // `objects_external_idx`, so this migration does not attempt to merge
+      // them — the pre-existing duplicate the fix stops creating going
+      // forward is left in place, under its stale system, rather than
+      // silently merged.
+      expect(rows).toEqual([
+        { id: "obj_dup_epic", external_system: "jira-epics-as-collections" },
+        { id: "obj_dup_issue", external_system: "jira-issues" },
+      ]);
+    } finally {
+      state.close();
+    }
+  });
+});

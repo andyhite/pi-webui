@@ -2068,4 +2068,68 @@ export const migrations: readonly Migration[] = [
         WHERE effect_failed_at IS NOT NULL;
     `,
   },
+  {
+    id: 33,
+    name: "external_system_is_plugin_id",
+    sql: `
+      -- \`objects.external_system\` recorded the producer id, not the plugin's
+      -- system identity, so the same external record read by two producers of
+      -- one plugin — an issue producer and an epics-as-collections producer,
+      -- both Jira — reconciled to two different object rows instead of one
+      -- (#85). \`IntegrationService.connect\` now records \`producer.pluginId\`;
+      -- this backfills the two tables it wrote before that fix existed.
+      --
+      -- Collision detection has to be order-independent: a single correlated
+      -- \`UPDATE\` can see its own earlier rows within the same statement,
+      -- which SQLite does not promise a scan order for. Two real temp tables
+      -- (not a CTE, which is not guaranteed materialized either) fix that —
+      -- \`object_system_targets\` is a snapshot of every row's intended new
+      -- system, taken once, before anything is written.
+      CREATE TEMP TABLE object_system_targets AS
+      SELECT
+        o.id AS id,
+        o.external_id AS external_id,
+        COALESCE(
+          (SELECT i.plugin_id FROM integrations i
+            WHERE i.system = o.external_system LIMIT 1),
+          o.external_system
+        ) AS target_system
+      FROM objects o
+      WHERE o.external_system IS NOT NULL;
+
+      -- A collision is only possible where this backfill is doing its actual
+      -- job: two producers of one plugin already wrote the same external id
+      -- under their two different per-producer systems, which is exactly
+      -- #85's bug reconciling for the first time. Merging two object rows —
+      -- their versions, edges, workstream membership, search entries — is a
+      -- data migration of its own that nothing here invents silently; a
+      -- colliding pair is left exactly as it was, under its stale
+      -- per-producer \`external_system\`, rather than guessed at. One
+      -- consequence of leaving it rather than reporting it: \`integrations.
+      -- system\` is still corrected below, so a colliding pair's rows become
+      -- unreachable by future reconciliation and the next refresh of either
+      -- integration writes a third row for the same ticket. Accepted because
+      -- every state directory with rows in this shape predates a shipped
+      -- release — \`POST /api/reset\` is the documented way to clear a
+      -- development database that wants a clean start instead.
+      CREATE TEMP TABLE object_system_safe AS
+      SELECT id FROM object_system_targets
+      GROUP BY target_system, external_id
+      HAVING COUNT(*) = 1;
+
+      UPDATE objects
+      SET external_system = (
+        SELECT target_system FROM object_system_targets
+        WHERE object_system_targets.id = objects.id
+      )
+      WHERE id IN (SELECT id FROM object_system_safe);
+
+      -- \`integrations.system\` is corrected last: the snapshot above already
+      -- captured the old value, so nothing downstream needs it anymore.
+      UPDATE integrations SET system = plugin_id WHERE system <> plugin_id;
+
+      DROP TABLE object_system_targets;
+      DROP TABLE object_system_safe;
+    `,
+  },
 ];
