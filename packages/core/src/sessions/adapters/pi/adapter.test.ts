@@ -520,6 +520,21 @@ describe("how a pi session ends", () => {
     });
   });
 
+  it("does not hang a graceful stop after the stream already ended (issue #110)", async () => {
+    const transport = new FakeTransport();
+    const handle = await adapterWith(transport).start(startConfig);
+
+    // The stream ended on its own — a crash, or a stop that landed between the
+    // process dying and the driver detaching its handle — before this stop
+    // gesture arrived. Drained fully first, so `#read`'s loop has actually
+    // exited (not merely told to) by the time `stop` sends a command nothing
+    // will ever answer; without the `#ended` latch this hangs forever.
+    transport.end();
+    await drain(handle);
+
+    await expect(handle.stop("graceful")).resolves.toBeUndefined();
+  });
+
   it("never reports out-of-budget itself", () => {
     expect(PI_CAPABILITIES.enforcesPermissions).toBe(true);
     expect(PI_CAPABILITIES.injection).toBe("between-turns");
