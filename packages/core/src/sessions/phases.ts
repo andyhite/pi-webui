@@ -150,6 +150,8 @@ export function reduceObservation(
       };
     case "injection-delivered":
       return base;
+    case "injection-refused":
+      return base;
     case "turn-ended":
       return {
         ...base,

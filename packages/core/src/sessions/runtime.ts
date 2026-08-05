@@ -466,6 +466,18 @@ export type RuntimeObservation = { readonly at: EpochMillis } & (
       readonly outcome: RequestOutcome;
     }
   | { readonly kind: "injection-delivered"; readonly injectionId: InjectionId }
+  /**
+   * The runtime rejected input already acknowledged as queued — a provider
+   * error, a disposed session, the SDK refusing in the current state. Reported
+   * against the injection it was so the §6.5 ledger's `refused` state is
+   * reachable, rather than as an anonymous `runtime-error` nothing can key on
+   * (issue #107).
+   */
+  | {
+      readonly kind: "injection-refused";
+      readonly injectionId: InjectionId;
+      readonly reason: string;
+    }
   | {
       readonly kind: "turn-ended";
       readonly turn: number;
@@ -527,6 +539,30 @@ export interface SessionRuntimeAdapter {
     point: TranscriptPoint,
     config: RuntimeStartConfig,
   ): Promise<RuntimeSessionHandle>;
+}
+
+/**
+ * A native fork an adapter could not perform (§6.3, principle 7).
+ *
+ * One class for every adapter that forks natively, so the caller's fallback —
+ * `startForkedSession` catching this and re-running as a seeded `start()` — is
+ * written once against one type rather than against each adapter's own class.
+ * Thrown rather than papered over, and specifically not substituted for: the
+ * caller holds the plan and writes the record, and it is the caller that seeds
+ * a fresh session from PlotRoom's own transcript instead. Subclassed per
+ * adapter only so its own tests can assert their own adapter's failures
+ * without also matching another adapter's.
+ */
+export class NativeForkUnavailable extends Error {
+  readonly turn: number;
+
+  constructor(adapterId: string, point: TranscriptPoint, reason: string) {
+    super(
+      `${adapterId} cannot fork at turn ${point.turn.toString()}: ${reason}`,
+    );
+    this.name = "NativeForkUnavailable";
+    this.turn = point.turn;
+  }
 }
 
 /** Which adapter, and which native session, a PlotRoom session is bound to. */
