@@ -554,6 +554,39 @@ describe("the plan (§3.6, §3.1)", () => {
       objects.read(second?.planObjectId as string).renderings.agentContent,
     ).toContain("[x] wire the route");
   });
+
+  it("reads the live log, not the last published version (§7.2's need to see a block immediately)", () => {
+    const { session } = startSession();
+
+    append(session.id, {
+      kind: "plan-updated",
+      at: millis(),
+      phases: [
+        {
+          name: "Implementation",
+          tasks: [
+            {
+              content: "ship it",
+              status: "blocked",
+              blocker: "waiting on review",
+            },
+          ],
+        },
+      ],
+    });
+
+    // Nothing has been checkpointed — sessions.get(session.id).planObjectId
+    // is still null — but the live read already sees the block.
+    expect(sessions.get(session.id).planObjectId).toBeNull();
+    expect(sessions.blockedTasks(session.id)).toEqual([
+      {
+        phaseName: "Implementation",
+        content: "ship it",
+        blocker: "waiting on review",
+        since: expect.any(Number),
+      },
+    ]);
+  });
 });
 
 describe("the injection ledger", () => {

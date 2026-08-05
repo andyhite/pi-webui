@@ -58,6 +58,13 @@ export const HEALTH_ALERTS = [
    * updating.
    */
   "integration-broken",
+  /**
+   * A task the runtime itself says it cannot advance (§7.2, #150, #155) —
+   * not `blocked-on-you`, whose own definition is time spent waiting on a
+   * *human* specifically. A task blocked on a failing test is a different
+   * fact and must not borrow that row's id or its meaning.
+   */
+  "plan-blocked",
 ] as const;
 
 export type HealthAlertKind = (typeof HEALTH_ALERTS)[number];

@@ -353,6 +353,94 @@ describe("integration broken", () => {
   });
 });
 
+describe("plan blocked", () => {
+  it("alerts immediately on a blocked task, with no threshold to wait out", () => {
+    const alerts = deriveHealthAlerts(
+      observations({
+        planBlocks: [
+          {
+            sessionId: "sess-1",
+            target: { nodeId: "node-1", workstreamId: "ws-1" },
+            since: NOW - 500,
+            phaseName: "Implementation",
+            taskContent: "ship it",
+            blocker: "waiting on review",
+          },
+        ],
+      }),
+    );
+    expect(alerts.map((alert) => alert.alert)).toEqual(["plan-blocked"]);
+    expect(alerts[0]?.id).toBe(
+      "health:plan-blocked:sess-1:Implementation:ship it",
+    );
+    expect(alerts[0]?.summary).toBe("ship it: waiting on review");
+    expect(alerts[0]?.since).toBe(NOW - 500);
+  });
+
+  it("keeps two sessions' identically-named tasks as two rows, not one", () => {
+    const alerts = deriveHealthAlerts(
+      observations({
+        planBlocks: [
+          {
+            sessionId: "sess-1",
+            target: { nodeId: "node-1", workstreamId: "ws-1" },
+            since: NOW,
+            phaseName: "Implementation",
+            taskContent: "ship it",
+            blocker: "flaky CI",
+          },
+          {
+            sessionId: "sess-2",
+            target: { nodeId: "node-2", workstreamId: "ws-2" },
+            since: NOW,
+            phaseName: "Implementation",
+            taskContent: "ship it",
+            blocker: "waiting on review",
+          },
+        ],
+      }),
+    );
+    expect(alerts.map((alert) => alert.id)).toEqual([
+      "health:plan-blocked:sess-1:Implementation:ship it",
+      "health:plan-blocked:sess-2:Implementation:ship it",
+    ]);
+  });
+
+  it("keeps two phases' identically-named tasks in one session as two rows too", () => {
+    const alerts = deriveHealthAlerts(
+      observations({
+        planBlocks: [
+          {
+            sessionId: "sess-1",
+            target: { nodeId: "node-1", workstreamId: "ws-1" },
+            since: NOW,
+            phaseName: "Planning",
+            taskContent: "review",
+            blocker: "waiting on the spec",
+          },
+          {
+            sessionId: "sess-1",
+            target: { nodeId: "node-1", workstreamId: "ws-1" },
+            since: NOW,
+            phaseName: "Implementation",
+            taskContent: "review",
+            blocker: "waiting on the PR",
+          },
+        ],
+      }),
+    );
+    expect(alerts.map((alert) => alert.id)).toEqual([
+      "health:plan-blocked:sess-1:Planning:review",
+      "health:plan-blocked:sess-1:Implementation:review",
+    ]);
+  });
+
+  it("reports nothing when nothing is blocked", () => {
+    expect(deriveHealthAlerts(observations({ planBlocks: [] }))).toEqual([]);
+    expect(deriveHealthAlerts(observations({}))).toEqual([]);
+  });
+});
+
 describe("path overlap", () => {
   it("is the claim vocabulary: the same path, or one inside the other", () => {
     expect(pathsOverlap("src/a.ts", "src/a.ts")).toBe(true);
