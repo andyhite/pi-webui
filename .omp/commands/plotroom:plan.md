@@ -11,8 +11,10 @@ The output is a plan I can disagree with while it is still cheap.
 2. The spec section it claims (`docs/product-spec.md`). If it claims none, say so and
    name the section it should have claimed — an item with no spec section is either
    hygiene or under-specified, and those want different plans.
-3. `issue://112` — which lane owns it, which files that lane owns, and which
-   cross-track edges it must not walk into.
+3. Its parent epic (`issue://<epic>`) — the epic's own body is its map now: what it
+   owns, the order it takes its children in, and which other epic it must not walk
+   into. An item with no parent and no `bug` label is itself a finding, not
+   something to plan past.
 4. `docs/development.md` — **which of the six shapes this change is**, and therefore
    the files in order, the example to copy, and the test the repo expects.
 5. The architecture note for the area (`docs/architecture/`), and the code the change
@@ -25,7 +27,7 @@ The output is a plan I can disagree with while it is still cheap.
   or — if this change introduces one — where it goes and which surfaces must call it.
   A rule re-derived at a call site is the defect this repository cares most about.
 - **The files, in the order you will touch them**, and for each: what changes and why.
-  Name what you will **not** touch, especially anything another lane owns.
+  Name what you will **not** touch, especially anything another epic's active work owns.
 - **The proof.** The exact test the shape requires, plus how you will exercise the
   change (`skill://plotroom-smoke`). If a change is only believable by clicking it,
   say what you will click and what you expect to see.
@@ -37,7 +39,7 @@ The output is a plan I can disagree with while it is still cheap.
   than work: name it and say who owes the answer. An unasked question invented locally
   is worse than a blocked item.
 
-Keep it short enough to argue with. No code, no branch, no board moves — `/plotroom:track`
+Keep it short enough to argue with. No code, no branch, no board moves — `/plotroom:work`
 does those, and it is the next step once we agree.
 
 Extra arguments, if any, are constraints on this run: $@

@@ -27,7 +27,7 @@ Say which one you picked and why. If it is not an ADR, do that instead and stop.
 
 ## 2. If it is a record
 
-**Claim the number on the tracker before writing** — several lanes write records and two
+**Claim the number on the tracker before writing** — several epics write records and two
 `0007`s cannot both land. Then write it: `docs/decisions/NNNN-kebab-slug.md`, the
 metadata block, `Context → Decision → Consequences`, and `Alternatives rejected` naming
 each loser with the single thing it was better at.
