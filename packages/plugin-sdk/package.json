@@ -14,9 +14,9 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b",
-    "lint": "eslint src",
-    "test": "vitest run --passWithNoTests"
+    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
+    "lint": "eslint .",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^26.1.2"

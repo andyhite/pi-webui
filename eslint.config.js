@@ -1,4 +1,5 @@
 import js from "@eslint/js";
+import globals from "globals";
 import tseslint from "typescript-eslint";
 import prettier from "eslint-config-prettier";
 
@@ -8,7 +9,20 @@ export default tseslint.config(
       "**/dist/**",
       "**/node_modules/**",
       "**/.turbo/**",
+      "**/.vite/**",
       "**/coverage/**",
+      // Playwright's own output, which `pnpm --filter @plotroom/web e2e`
+      // writes into the package `eslint .` runs in.
+      "**/playwright-report/**",
+      "**/test-results/**",
+      // Generated trees a package's own `eslint .` would otherwise walk:
+      // `apps/desktop/scripts/stage-resources.mjs` stages a whole `pnpm deploy`
+      // tree into `build/`, and electron-builder writes `dist-installers/`.
+      // Gitignored is not eslint-ignored — these two lists have to be kept
+      // agreeing by hand.
+      "**/build/**",
+      "**/out/**",
+      "**/dist-installers/**",
     ],
   },
   js.configs.recommended,
@@ -25,12 +39,28 @@ export default tseslint.config(
     },
   },
   {
-    // Repository tooling run by a human at a terminal (`scripts/`, #94): its
-    // output *is* its interface — a release script that could not print the
-    // version and notes it derived would have no dry-run mode to review. The
-    // `no-console` warning is there to keep logging out of the product, where
-    // the server has a real logger; nothing here runs in the product.
-    files: ["scripts/**/*.ts"],
+    // Each package lints itself with `eslint .`, so linting now reaches its
+    // build scripts as well as its sources — `apps/desktop/scripts/*.mjs`
+    // stages and packages the desktop app, and a build script nothing lints is
+    // how a typo there becomes a broken installer. They are plain Node modules,
+    // so they get Node's globals; TypeScript files need no such block because
+    // typescript-eslint turns `no-undef` off for them (the compiler says it
+    // better).
+    files: ["**/*.mjs", "**/*.cjs"],
+    languageOptions: { globals: globals.node },
+  },
+  {
+    // Tooling run by a human at a terminal — the repository's own scripts
+    // (`scripts/`, #94) and a package's build scripts (`apps/desktop/scripts`,
+    // which stages and packages the app): its output *is* its interface, and a
+    // release script that could not print the version and notes it derived
+    // would have no dry-run mode to review. The `no-console` warning is there
+    // to keep logging out of the product, where the server has a real logger;
+    // nothing here runs in the product.
+    files: [
+      "scripts/**/*.ts",
+      "{apps,packages}/**/scripts/**/*.{ts,mjs,cjs,js}",
+    ],
     rules: { "no-console": "off" },
   },
   {

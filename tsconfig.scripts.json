@@ -23,5 +23,8 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["scripts/**/*.ts"]
+  // `*.config.ts` too: `vitest.base.config.ts` is the include pattern every
+  // package's suite runs on, and the root is the one place neither turbo's
+  // per-package `typecheck` nor a package's `tsconfig` reaches.
+  "include": ["scripts/**/*.ts", "*.config.ts"]
 }

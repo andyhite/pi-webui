@@ -20,8 +20,8 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
-    "lint": "eslint src",
-    "test": "tsc -b && vitest run --passWithNoTests"
+    "lint": "eslint .",
+    "test": "tsc -b && vitest run"
   },
   "devDependencies": {
     "@plotroom/plugin-sdk": "workspace:*",

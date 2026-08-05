@@ -6,9 +6,9 @@
   "scripts": {
     "build": "tsc -b && vite build",
     "dev": "vite",
-    "typecheck": "tsc -b && tsc -p e2e/tsconfig.json",
-    "lint": "eslint src e2e",
-    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -b && tsc -p tsconfig.tests.json && tsc -p e2e/tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run",
     "e2e": "playwright test --config e2e/playwright.config.ts",
     "e2e:electrobun": "playwright test --config e2e/playwright.electrobun.config.ts"
   },
