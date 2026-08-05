@@ -104,3 +104,6 @@ export * from "./settings/SettingsPanel.js";
 export * from "./logs/types.js";
 export * from "./logs/data-source.js";
 export * from "./logs/LogsPanel.js";
+export * from "./restorable/types.js";
+export * from "./restorable/data-source.js";
+export * from "./restorable/RestorablePanel.js";

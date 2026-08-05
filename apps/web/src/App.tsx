@@ -31,6 +31,7 @@ import {
   PaletteRail,
   PlotCanvas,
   QueuePanel,
+  RestorablePanel,
   SearchPanel,
   SettingsPanel,
   ShortcutsOverlay,
@@ -51,6 +52,7 @@ import {
   createApiLogsDataSource,
   createApiQuestionDataSource,
   createApiSearchDataSource,
+  createApiRestorableDataSource,
   createApiSessionDataSource,
   createApiSettingsDataSource,
   createFixtureActivityDataSource,
@@ -63,6 +65,8 @@ import {
   createFixturePluginHealthDataSource,
   createFixtureQuestionDataSource,
   createFixtureSearchDataSource,
+  createFixtureRestorableDataSource,
+  EMPTY_RESTORABLE_SUMMARY,
   createFixtureSessionDataSource,
   createFixtureSettingsDataSource,
   createArrangementWriteQueue,
@@ -311,6 +315,16 @@ const activityDataSource = LIVE
 const searchDataSource = LIVE
   ? createApiSearchDataSource({ http: httpClient })
   : createFixtureSearchDataSource(FIXTURE_SEARCH_RESULTS);
+
+/**
+ * The restorable/undo panel's data seam (issue #65, §5, principle 10): live
+ * over `GET /api/restorable`, which never had a reader before this. Fixture-
+ * fed as the empty summary for `VITE_USE_FIXTURES` — offline mode has
+ * nothing server-side to have deleted.
+ */
+const restorableDataSource = LIVE
+  ? createApiRestorableDataSource({ http: httpClient })
+  : createFixtureRestorableDataSource(EMPTY_RESTORABLE_SUMMARY);
 
 /**
  * The Settings panel's data seam (§11, §8, Epic 8.3): live over
@@ -1183,6 +1197,34 @@ function Board() {
   }
 
   /**
+   * The session delete gesture (issue #65, §3.6, principle 10): the
+   * card's delete button and the canvas's `canvas-delete-session` chord
+   * both call this — never two paths that agree by coincidence (principle
+   * 8). Destroys the session record over `DELETE /api/sessions/:id`
+   * (stopping it first if it was live, on the server's own side); the
+   * record and its node come back through the restorable panel.
+   */
+  function deleteSessionNode(nodeId: string): void {
+    if (!LIVE) {
+      log(`offline mode: deleting ${nodeId} was not saved`);
+      return;
+    }
+    const sessionNode = graph?.nodes.find((node) => node.id === nodeId);
+    if (!sessionNode?.refId) return;
+    void actions.deleteSession(sessionNode.refId).then((result) => {
+      if (!result.ok) {
+        log(`refused: ${result.refusal.reason} - ${result.refusal.message}`);
+        return;
+      }
+      log(
+        `deleted session ${sessionNode.refId}${
+          result.value.stopped ? " (stopped first)" : ""
+        }`,
+      );
+    });
+  }
+
+  /**
    * The high-frequency verbs (§11), declared **once**: each becomes a
    * registry binding (and so a row in the shortcuts overlay) and a command
    * palette row, from this one definition. Every `run` below is the same
@@ -1637,6 +1679,19 @@ function Board() {
     );
     registry.register(
       definePanel<null>({
+        id: "restorable",
+        title: "Restorable",
+        initialState: null,
+        render: () => (
+          <RestorablePanel
+            dataSource={restorableDataSource}
+            restoreEntity={actions.restoreEntity}
+          />
+        ),
+      }),
+    );
+    registry.register(
+      definePanel<null>({
         id: "what-changed",
         title: "What changed",
         initialState: null,
@@ -1907,6 +1962,7 @@ function Board() {
             onDropPaletteEntry={placePaletteEntry}
             runningCommandNodeIds={runsInFlight}
             onRunCommand={runCommandNode}
+            onDeleteSession={deleteSessionNode}
           />
         </div>
 

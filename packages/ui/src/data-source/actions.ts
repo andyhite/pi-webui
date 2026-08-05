@@ -15,6 +15,8 @@
 
 import type { ContinueVsFresh, NodeRole } from "@plotroom/core";
 
+import type { RestorableKind } from "../restorable/types.js";
+
 import type { Point } from "../solver/push.js";
 import {
   HttpError,
@@ -360,6 +362,23 @@ export interface GraphActions {
    * looking is free — not wrapped in `ActionResult`, matching `previewStop`.
    */
   getContinuation(commandId: string): Promise<ContinueVsFresh>;
+  /**
+   * Delete a session record (§3.6, issue #65) — stopped first if it was
+   * still live, and the same effect either way, so a card's delete gesture
+   * never has to decide that itself. `restorable` in the server's own
+   * response is always `true` (principle 10); nothing here needs to branch
+   * on it, so it is not carried through.
+   */
+  deleteSession(
+    sessionId: string,
+  ): Promise<ActionResult<{ readonly stopped: boolean }>>;
+  /**
+   * Undo one (principle 10, issue #65): every entity `GET /api/restorable`
+   * lists carries its own `POST .../restore` verb, and this is the one
+   * dispatcher that picks the right path for each `RestorableKind` — never a
+   * guess from the id's shape.
+   */
+  restoreEntity(kind: RestorableKind, id: string): Promise<ActionResult<void>>;
 }
 
 export function createApiActions(http: HttpClient): GraphActions {
@@ -633,6 +652,19 @@ export function createApiActions(http: HttpClient): GraphActions {
       http.get<ContinueVsFresh>(
         `${apiPath("/api/commands", commandId)}/continuation`,
       ),
+
+    deleteSession: (sessionId) =>
+      asAction(async () => {
+        const response = await http.delete<{ readonly stopped: boolean }>(
+          apiPath("/api/sessions", sessionId),
+        );
+        return { stopped: response.stopped };
+      }),
+
+    restoreEntity: (kind, id) =>
+      asAction(async () => {
+        await http.post(`${apiPath(RESTORE_PATH_PREFIX[kind], id)}/restore`);
+      }),
   };
 }
 
@@ -665,3 +697,19 @@ function contextOrderPath(nodeId: string): string {
 function apiPath(prefix: string, id: string): string {
   return `${prefix}/${encodeURIComponent(id)}`;
 }
+
+/**
+ * Every `GET /api/restorable` category has its own `POST .../restore` verb
+ * (`apps/server/src/routes/restorable.ts`'s own doc comment: "undoing is the
+ * same gesture wherever it is offered"). One table, so a new category is one
+ * line here rather than a new branch scattered through `restoreEntity`.
+ */
+const RESTORE_PATH_PREFIX: Readonly<Record<RestorableKind, string>> = {
+  object: "/api/objects",
+  node: "/api/nodes",
+  edge: "/api/edges",
+  workstream: "/api/workstreams",
+  command: "/api/commands",
+  commandDefinition: "/api/command-definitions",
+  session: "/api/sessions",
+};
