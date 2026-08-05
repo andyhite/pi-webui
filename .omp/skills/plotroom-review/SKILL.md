@@ -47,5 +47,5 @@ of it: `plotroom-review` judges the change against the spec and this repo's rule
 ## 4. Report
 
 Verdict, blocker count, what changed as a result, and anything the reviewer found that
-belongs on the tracker rather than in this change — another lane's bug, a stale
+belongs on the tracker rather than in this change — another epic's bug, a stale
 comment, a convention nobody wrote down.

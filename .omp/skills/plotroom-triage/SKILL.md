@@ -1,6 +1,6 @@
 ---
 name: plotroom-triage
-description: Triage a PlotRoom bug, error, or idea — find the duplicate, establish the mechanism, then file it on the right lane. Use when work surfaces something outside the current item's scope, or when handed a bug report or error message from ~/plotroom to investigate.
+description: Triage a PlotRoom bug, error, or idea — find the duplicate, establish the mechanism, then file it under the right epic. Use when work surfaces something outside the current item's scope, or when handed a bug report or error message from ~/plotroom to investigate.
 ---
 
 # Triaging a bug, error, or idea
@@ -45,16 +45,17 @@ somebody has to redo.
 Use `scout` for a file map you do not have. Do not fix anything: triage decides
 _what_ the work is, not who does it or when.
 
-## 3. File it where its files live
+## 3. File it under the epic it belongs to
 
-The lane is decided by **file ownership**, not by subject — `issue://112` is the
-ownership cut. If the fix spans two lanes' files, say which lane owns the write and
-list the other as a cross-track edge in the body; that is the one thing the map
-cannot derive later.
+The parent is decided by **which epic's story this is part of**, not by file
+ownership — epics no longer partition files the way the old tracks did. If the fix
+spans two epics' work, say which epic owns the write and name the other as related
+in the body; that is the one thing neither epic can derive later. A `bug` may stay
+unparented if it does not obviously belong to one epic's story.
 
 ```sh
 env -u GH_TOKEN gh issue create --title "<what is wrong, not what to do about it>" \
-  --label <bug|enhancement|documentation|decision|follow-up> --label track:<lane> \
+  --label <bug|documentation|decision|follow-up> \
   --body "$(cat <<'EOF'
 <what happens, and what should happen instead — spec section if there is one>
 
@@ -67,14 +68,14 @@ EOF
 )"
 ```
 
-Then put it on the board in `Backlog` with its `Track` set (commands in the tracker
-skill), and **parent it** if it is a follow-up of landed work or a child of an epic —
-an unparented follow-up reads as an orphan to the next reader.
+Then put it on the board in `Backlog` (commands in the tracker skill), and — unless
+it is a `bug` you are leaving unparented — parent it under the epic whose story it
+belongs to: an unparented follow-up reads as an orphan to the next reader.
 
-Placement in a lane's queue and its dates are the operator's call. Say where you
+Placement in an epic's queue and its dates are the operator's call. Say where you
 think it goes and why (in front of what, because of what), and leave it in `Backlog`.
 
 ## 4. Report
 
 One paragraph: what it is, the seam, duplicate or not (with the numbers you checked),
-the lane and why that lane, and the one decision left to the operator.
+the epic and why that epic, and the one decision left to the operator.

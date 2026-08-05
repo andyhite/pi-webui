@@ -97,8 +97,8 @@ The renderer is one web app. Desktop and browser are two ways to load it; never 
 The decisions behind each subsystem — why a table is shaped as it is, which rule is
 a predicate, what a column is load-bearing for — live in `docs/architecture/`. They
 are binding wherever they state a rule. **Read the one that covers the files you are
-about to edit**; they are cut by subsystem rather than by track, so one note serves
-several lanes and no lane has a note of its own name.
+about to edit**; they are cut by subsystem rather than by epic, so one note serves
+several epics and no epic has a note of its own name.
 
 | Note                                                                   | Covers                                                                                                                                          |
 | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
