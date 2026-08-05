@@ -9,11 +9,28 @@
   // *global*: a lint-rule tweak busts every package's `build` and `test` cache
   // too, which per-task `inputs` cannot fix — they may not reach above a
   // package.
+  //
+  // The same list decides *selection*, which is the other reason to keep it
+  // complete. CI runs `turbo … --affected`, which maps changed files to
+  // packages, and a file outside every package maps to none of them — so a
+  // shared base missing from here would not merely replay a stale cache, it
+  // would select nothing at all and report green having checked nothing
+  // (measured on turbo 2.10.8: a file listed here marks every package
+  // affected, and one that is not marks none).
+  //
+  // `turbo.json` needs no entry: turbo always hashes it, and a change to it
+  // already marks everything affected. `pnpm-lock.yaml` is deliberately absent
+  // too — turbo reads it semantically, which is more precise than this list
+  // could be, and listing it would imply it drives selection, which it does
+  // not. `.github/workflows/ci.yml` runs unfiltered on a lockfile change
+  // instead, and says why.
   "globalDependencies": [
+    "tsconfig.json",
     "tsconfig.base.json",
     "tsconfig.tests.base.json",
     "eslint.config.js",
-    "vitest.base.config.ts"
+    "vitest.base.config.ts",
+    ".npmrc"
   ],
   "tasks": {
     "build": {

@@ -1,17 +1,28 @@
 name: CI
 
-# The code checks. Documentation cannot break a typecheck, a browser test or a Bun
-# binary, so a change confined to prose does not run any of them — a docs-only pull
-# request was compiling on three platforms to prove that prose still built.
+# The code checks. Nothing here runs unless the change could break it, decided on
+# two axes:
 #
-# `checks.yml` holds what every change runs (formatting, commit messages, history
-# shape) and has no path filter. The split is by workflow because `paths-ignore` is a
-# trigger filter rather than a per-job one.
+# 1. **The trigger**, for the one axis that is genuinely file-shaped: documentation
+#    cannot break a typecheck, a browser test or a Bun binary, so a change confined
+#    to prose starts no runner at all. `checks.yml` holds what every change runs
+#    (formatting, commit messages, history shape) and has no path filter; the split
+#    is by workflow because `paths-ignore` is a trigger filter rather than a per-job
+#    one.
 #
-# The filter is deliberately narrow, because a wrong "documentation" skips real checks:
-# `docs/**`, root-level Markdown, `.omp/**`, and Markdown under `.github/`. **Markdown
-# anywhere else is code.** Nothing under `apps/`, `packages/` or `scripts/` is read by a
-# test or at runtime today — the one Markdown file there,
+# 2. **The dependency graph**, for everything else, which is where a path filter
+#    would lie. `apps/session-host` has to be rebuilt by a change to
+#    `packages/core`, and the e2e gate has to run for a change to `packages/ui`,
+#    and no glob expresses "and its dependents". Turborepo already knows, so the
+#    `scope` job below asks it (`turbo ls --affected`) and every other job is
+#    gated on the answer. A gated job reports as *skipped*, which GitHub treats as
+#    success for branch protection — so unlike a trigger filter, these can be
+#    required checks.
+#
+# The `paths-ignore` filter is deliberately narrow, because a wrong "documentation"
+# skips real checks: `docs/**`, root-level Markdown, `.omp/**`, and Markdown under
+# `.github/`. **Markdown anywhere else is code.** Nothing under `apps/`, `packages/`
+# or `scripts/` is read by a test or at runtime today — the one Markdown file there,
 # `apps/server/src/plugins/test-fixtures/README.md`, describes fixtures that every
 # loader resolves as `.ts` — and the point of the narrow axis is that it stays true
 # without anyone re-checking: a fixture, a snapshot or a generated table under those
@@ -19,11 +30,15 @@ name: CI
 #
 # `docs/**` is a directory rather than a genre, and it is about to hold executable
 # files: #214 checks design exports, including JavaScript, in under `docs/design/`.
-# Nothing lints those today either, so nothing is lost — but if `docs/` becomes a place
-# code lives, this filter is what has to be revisited.
+# Nothing lints those today either, so nothing is lost — but if `docs/` becomes a
+# place code lives, this filter is what has to be revisited.
 #
-# A skipped job reports neither success nor failure, so if branch protection is ever
-# enabled here, only `checks.yml`'s jobs can be *required* checks.
+# **A push to `main` runs the whole graph, unfiltered.** Not belt-and-braces: a
+# GitHub cache is readable from the branch that wrote it and from branches based on
+# it, so every pull request restores `main`'s Turborepo cache and none can restore
+# another's. A `--affected` run on `main` would only ever publish the packages that
+# happened to change, leaving every other package cold for every pull request that
+# touches it. The full run per merge is what buys the cache hits.
 
 on:
   push:
@@ -44,85 +59,211 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  # What `e2e` and `session-host-binary` are gated on, and how `code` is scoped.
+  # Cheap — an install and one turbo query — and its own job rather than a step of
+  # `code`, so those two still start in parallel with the checks instead of
+  # queueing behind them.
+  scope:
+    name: Decide what to run
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.decide.outputs.packages }}
+      turbo-scope: ${{ steps.decide.outputs.turbo-scope }}
+      web: ${{ steps.decide.outputs.web }}
+      session-host: ${{ steps.decide.outputs.session-host }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `--affected` diffs against the base commit, which a shallow clone
+          # does not have.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup
+
+      - name: Decide
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # The diff is captured before anything is matched against it, rather than
+          # piped into `grep -q`: under `pipefail`, `grep -q` exits on the first
+          # match, `git` then dies of SIGPIPE, and the pipeline reports 141 — so a
+          # matched path would read as no match, on exactly the large diffs where
+          # it matters.
+          #
+          # On a pull request, `github.sha` is the merge commit Actions checked
+          # out, so `base..HEAD` is exactly this branch's diff.
+          changed=
+          if [ "$EVENT" = "pull_request" ]; then
+            changed=$(git diff --name-only "$BASE" "$HEAD")
+          fi
+
+          matches() { grep -qE "$1" <<<"$changed"; }
+
+          # Two ways to end up unscoped.
+          #
+          # A push to `main` runs the whole graph to publish a cache every pull
+          # request can restore (see this file's header).
+          #
+          # So does a change to what is installed, or to which packages exist.
+          # Turbo reads `pnpm-lock.yaml` semantically, and on a *coherent* bump it
+          # is precise — rewriting better-sqlite3's version throughout selected
+          # `db` and its three dependents, and changed `@plotroom/db#lint`'s task
+          # hash and no other. But an edit it cannot resolve selects **nothing**
+          # (measured on 2.10.8: changing only the importer's version selected no
+          # package at all), and a dependency bump is not a change to be wrong
+          # about in that direction. Root `package.json` is here for a plainer
+          # reason: it pins TypeScript, ESLint and Vitest for every package.
+          #
+          # Unfiltered is not the same as uncached, which is what makes this cheap
+          # rather than a full rebuild: turbo's *hashing* of the lockfile stays
+          # precise even where its selection is not, so the packages a bump did not
+          # reach replay from cache.
+          if [ "$EVENT" != "pull_request" ] ||
+            matches '^(pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|\.npmrc)$'; then
+            scope=
+          else
+            export TURBO_SCM_BASE="$BASE" TURBO_SCM_HEAD="$HEAD"
+            scope=--affected
+          fi
+
+          packages=$(pnpm exec turbo ls $scope --output=json | node -e '
+            let json = "";
+            process.stdin
+              .on("data", (chunk) => (json += chunk))
+              .on("end", () => {
+                const { packages } = JSON.parse(json);
+                console.log(packages.items.map((p) => p.name).join(" "));
+              });
+          ')
+
+          affects() { case " $packages " in (*" $1 "*) return 0 ;; (*) return 1 ;; esac; }
+
+          {
+            echo "packages=$packages"
+            echo "turbo-scope=$scope"
+            if affects @plotroom/web; then echo "web=true"; else echo "web=false"; fi
+            if affects @plotroom/session-host; then
+              echo "session-host=true"
+            else
+              echo "session-host=false"
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+          # Say what was decided where a human will look, so a skipped job is
+          # never a mystery.
+          {
+            if [ -n "$scope" ]; then
+              echo "### Affected packages"
+              echo
+              echo "\`$BASE\` → \`$HEAD\`"
+            else
+              echo "### Every package"
+              echo
+              echo "A push to \`main\` runs the whole graph and publishes its cache."
+            fi
+            echo
+            if [ -z "$packages" ]; then
+              echo "_none_"
+            else
+              for package in $packages; do echo "- \`$package\`"; done
+            fi
+            echo
+            echo "| Job | Runs |"
+            echo "| --- | --- |"
+            echo "| e2e | $(if affects @plotroom/web; then echo yes; else echo no; fi) |"
+            echo "| session-host-binary | $(if affects @plotroom/session-host; then echo yes; else echo no; fi) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  code:
+    name: Typecheck, lint and test
+    needs: scope
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup
         with:
-          node-version: 22
-          cache: pnpm
+          # `apps/session-host` runs its tests with `bun test` (decision 0005).
+          bun: "true"
+          turbo-cache: code
 
-      # One package needs Bun: `apps/session-host` embeds the agent SDK, which is
-      # Bun-only, and runs its tests with `bun test` (decision 0005). A toolchain
-      # addition, not a replacement — pnpm still installs, turbo still runs
-      # everything, and every other package stays on Node. Producing the packaged
-      # compiled binary is #93's half of this.
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
+      # One turbo invocation rather than three, so lint (which depends on no
+      # build) runs while the builds typecheck and test need are still going.
+      # `$SCOPE` is `--affected` or empty, and unquoted so that empty passes no
+      # argument at all. With nothing affected turbo runs nothing and exits — no
+      # `if:` needed, and none that could go stale.
+      - name: Typecheck, lint and test
+        env:
+          TURBO_SCM_BASE: ${{ github.event.pull_request.base.sha }}
+          TURBO_SCM_HEAD: ${{ github.sha }}
+          SCOPE: ${{ needs.scope.outputs.turbo-scope }}
+        run: pnpm check $SCOPE
 
-      - run: pnpm install --frozen-lockfile
+      # `scripts/**` is repository tooling rather than a workspace package, so
+      # turbo cannot answer for it — and it is deliberately not gated either.
+      # `pnpm check:scripts` takes four seconds inside a job that is running
+      # anyway, and the path list that would skip it was already wrong: its
+      # `workspace-tooling.test.ts` reads every package's manifest, tsconfig and
+      # vitest configuration (#215), so the surface is most of the repository.
+      # Four seconds is not worth a regex re-derived every time a package grows a
+      # config file.
+      #
+      # And it is worth the four seconds: the release script decides what version
+      # the product claims to be (#94), and that test is what keeps every
+      # package's build tooling honest. "Outside the build graph" is a bad reason
+      # for either to be what CI never checks.
+      - name: Check the tooling
+        run: pnpm check:scripts
 
-      # Formatting is `checks.yml`'s: it is the one check a documentation-only change
-      # can fail, so it cannot live behind this workflow's path filter.
-
-      # `scripts/**` is repository tooling, not a workspace package, so turbo
-      # does not reach it and the `:scripts` passes are separate steps rather
-      # than chained onto the turbo ones — chaining them into one script would
-      # have sent `pnpm typecheck --filter …`'s arguments to the tail command
-      # instead of to turbo. The release script decides what version the
-      # product claims to be (#94); "outside the build graph" is a bad reason
-      # for it to be the one file CI never checks.
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Typecheck (tooling)
-        run: pnpm typecheck:scripts
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Lint (tooling)
-        run: pnpm lint:scripts
-
-      - name: Test
-        run: pnpm test
-
-      - name: Test (tooling)
-        run: pnpm test:scripts
-
+  # The W10 milestone gate: a spawned `@plotroom/server`, a real git repository
+  # and a Chromium tab against the server's own served page. It runs when
+  # `@plotroom/web` is affected, which — since web depends on server, which
+  # depends on core, db, the plugins and session-host — is nearly every change to
+  # anything the gate actually exercises, and none of the changes it does not
+  # (`apps/desktop`, `scripts/`).
   e2e:
+    name: E2E (W10 milestone gate)
+    needs: scope
+    if: needs.scope.outputs.web == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup
         with:
-          node-version: 22
-          cache: pnpm
+          # No Bun. The build below reaches `apps/session-host` (the server
+          # depends on it), but its `build` is `tsc -b` — only its `test` and
+          # `compile` need Bun, and this job runs neither.
+          turbo-cache: e2e
 
-      # `pnpm build` reaches `apps/session-host`'s `tsc -b`.
-      - uses: oven-sh/setup-bun@v2
+      # `--filter=@plotroom/web` and not `pnpm build`: the gate serves
+      # `apps/web/dist` and spawns `apps/server/dist/index.js`, and web's build
+      # `dependsOn: ["^build"]` pulls the server and everything under it along.
+      # `apps/desktop` is the only package that drops out, and nothing here
+      # loads it.
+      - name: Build what the gate serves
+        run: pnpm exec turbo run build --filter=@plotroom/web
+
+      # ~150MB of Chromium per run otherwise. Keyed on the lockfile because that
+      # is what pins the Playwright version the browser has to match.
+      - uses: actions/cache@v4
         with:
-          bun-version: 1.3.14
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
 
-      - run: pnpm install --frozen-lockfile
-
-      - name: Build
-        run: pnpm build
-
-      - name: Install Playwright browsers
+      - name: Install Playwright's Chromium
         run: pnpm --filter @plotroom/web exec playwright install --with-deps chromium
 
-      - name: E2E (W10 milestone gate)
+      - name: E2E
         run: pnpm --filter @plotroom/web e2e
 
   # The packaged session host is one compiled binary per platform (issue #92):
@@ -142,6 +283,11 @@ jobs:
   # `ubuntu-24.04-arm` is what would cover them; until then the gap is stated
   # rather than implied by a green check.
   session-host-binary:
+    name: Session host binary (${{ matrix.os }})
+    needs: scope
+    # Three runners, two of them the expensive kind, for a package most changes
+    # do not touch. `packages/core` does touch it, and `--affected` knows that.
+    if: needs.scope.outputs.session-host == 'true'
     # The failure this job exists to catch includes a binary that hangs at module
     # init; without a bound that burns the default six hours on a runner.
     timeout-minutes: 20
@@ -155,107 +301,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-
       # A plain install, scripts and all. This used `--ignore-scripts` because a
       # full install failed on the Windows runner (#183); nothing compiles on
       # any platform now, so the flag would only be hiding whether that is
       # still true.
-      - run: pnpm install --frozen-lockfile
+      #
+      # `compile` itself is `cache: false` — it ends by running what it built —
+      # but it `dependsOn: ["^build"]`, and those builds cache.
+      - uses: ./.github/actions/setup
+        with:
+          bun: "true"
+          turbo-cache: session-host
 
       - name: Compile the session host, and run what it built
         run: pnpm compile
-
-  # A full `pnpm install --frozen-lockfile` **with scripts**, on Windows,
-  # followed by a round trip through the SQLite binding it installs (#183).
-  #
-  # Windows is the only platform where this can regress, and it regressed
-  # silently: `better-sqlite3` carries a `binding.gyp` at its package root, so
-  # pnpm synthesises the default `install: node-gyp rebuild` for it even though
-  # it ships an N-API prebuild per platform and needs no compiler — and
-  # node-gyp 10.2.0 does not recognise the Visual Studio the runner image now
-  # ships ("unknown version \"undefined\" found at .../Visual Studio\\18"). The
-  # fix is `pnpm.neverBuiltDependencies`, and the thing that keeps it fixed is
-  # this job: without it, the next dependency that wants a compiler is found by
-  # whoever tries to build the Windows installer (#79), not by CI.
-  #
-  # The last step exercises the binding rather than running `@plotroom/db`'s
-  # suite. That was the first shape of this job and it failed — for reasons
-  # that have nothing to do with installing: 21 of its tests tear down with
-  # `EBUSY: resource busy or locked, unlink ...\plotroom.db`, because Windows
-  # refuses to delete a file that still has an open handle and `afterEach`
-  # removes the state directory straight after `close()`. Filed as #202.
-  # Running it here would have made this job's red mean two unrelated things,
-  # and the one it exists to catch is the install.
-  windows-install:
-    runs-on: windows-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      # The install step *is* the regression test. Without
-      # `neverBuiltDependencies`, pnpm synthesises `install: node-gyp rebuild`
-      # for better-sqlite3 and this step is what fails on a Windows runner,
-      # exactly as it did in #183's original log.
-      - name: Install with scripts
-        run: pnpm install --frozen-lockfile
-
-      # What can be asserted on top of that, and what cannot. "Did pnpm run a
-      # build?" is **not** reliably observable after the fact: pnpm's
-      # side-effects cache replays a build performed by an earlier install, so
-      # a warm store neither runs the script nor prints that it did (measured
-      # both ways locally), and `binding.gyp` degrades its targets to
-      # `type: none` when a prebuild matches the host, so even a real node-gyp
-      # run emits only `.stamp` files. A guard on any of those passes when it
-      # should fail.
-      #
-      # What is observable, and is the claim a Windows installer actually
-      # rests on, is *which binary loads*: `lib/binding.js` prefers
-      # `build/Release/better_sqlite3.node` and falls back to `prebuilds/`. If
-      # a compile ever succeeds here, the first exists and this fails.
-      - name: Refuse a compiled binding
-        shell: bash
-        run: |
-          pkg=$(echo node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3)
-          test -d "$pkg" || { echo "better-sqlite3 not found at $pkg"; exit 1; }
-          test -f "$pkg/prebuilds/win32-x64.node" || {
-            echo "no win32-x64 prebuild shipped; this platform would need a compiler"
-            exit 1
-          }
-          if [ -f "$pkg/build/Release/better_sqlite3.node" ]; then
-            echo "a compiled binding exists and would load in preference to the prebuild"
-            exit 1
-          fi
-          echo "the shipped prebuild is what will load"
-
-      # A round trip through the native module, which is the whole claim: the
-      # server's SQLite is what a Windows installer has to ship, and an
-      # install that "succeeded" without a loadable binding proves nothing.
-      # Run from `packages/db`, where `better-sqlite3` is actually a
-      # dependency — pnpm's store is not hoisted to the root.
-      - name: Load the SQLite binding and round-trip a row
-        working-directory: packages/db
-        run: >-
-          node -e "const D=require('better-sqlite3');
-          const d=new D(':memory:');
-          d.exec('create table t (x integer)');
-          d.prepare('insert into t values (?)').run(42);
-          const got=d.prepare('select x from t').get().x;
-          if (got !== 42) { throw new Error('round trip returned ' + got); }
-          console.log('sqlite ok via', require.resolve('better-sqlite3'));"

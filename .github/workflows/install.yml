@@ -1,0 +1,112 @@
+name: Install
+
+# A full `pnpm install --frozen-lockfile` **with scripts**, on Windows, followed by
+# a round trip through the SQLite binding it installs (#183).
+#
+# Its own workflow with its own trigger filter, because unlike every other job this
+# one's surface really is a list of files: it tests *installing*, so what can change
+# its answer is the lockfile, a manifest, `.npmrc`, the workspace definition, or the
+# way this job runs — and nothing else in the repository can. A path filter here
+# costs zero runner minutes on the changes that cannot affect it, where a job gated
+# on the dependency graph (see `ci.yml`) would still have to start a runner to be
+# told the graph is irrelevant.
+#
+# The tradeoff of filtering at the trigger: a workflow that never starts reports
+# neither success nor failure, so this cannot be a required check under branch
+# protection. `ci.yml`'s jobs can, because they are gated per job rather than per
+# trigger.
+#
+# Windows is the only platform where this can regress, and it regressed silently:
+# `better-sqlite3` carries a `binding.gyp` at its package root, so pnpm synthesises
+# the default `install: node-gyp rebuild` for it even though it ships an N-API
+# prebuild per platform and needs no compiler — and node-gyp 10.2.0 does not
+# recognise the Visual Studio the runner image now ships ("unknown version
+# \"undefined\" found at .../Visual Studio\\18"). The fix is
+# `pnpm.neverBuiltDependencies`, and the thing that keeps it fixed is this job:
+# without it, the next dependency that wants a compiler is found by whoever tries to
+# build the Windows installer (#79), not by CI.
+#
+# The last step exercises the binding rather than running `@plotroom/db`'s suite.
+# That was the first shape of this job and it failed — for reasons that have nothing
+# to do with installing: 21 of its tests tear down with `EBUSY: resource busy or
+# locked, unlink ...\plotroom.db`, because Windows refuses to delete a file that
+# still has an open handle and `afterEach` removes the state directory straight
+# after `close()`. Filed as #202. Running it here would have made this job's red
+# mean two unrelated things, and the one it exists to catch is the install.
+
+on:
+  push:
+    branches: [main]
+    # One list, aliased below — the classification must not drift between the two
+    # triggers. `**/package.json` covers the root manifest and every package's.
+    paths: &manifests
+      - "**/package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".npmrc"
+      - ".github/workflows/install.yml"
+      - ".github/actions/setup/action.yml"
+  pull_request:
+    paths: *manifests
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Install on Windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # The install step *is* the regression test. Without
+      # `neverBuiltDependencies`, pnpm synthesises `install: node-gyp rebuild` for
+      # better-sqlite3 and it is what fails on a Windows runner, exactly as it did
+      # in #183's original log. No Bun and no turbo cache: nothing here builds or
+      # runs a turbo task.
+      - uses: ./.github/actions/setup
+
+      # What can be asserted on top of that, and what cannot. "Did pnpm run a
+      # build?" is **not** reliably observable after the fact: pnpm's side-effects
+      # cache replays a build performed by an earlier install, so a warm store
+      # neither runs the script nor prints that it did (measured both ways
+      # locally), and `binding.gyp` degrades its targets to `type: none` when a
+      # prebuild matches the host, so even a real node-gyp run emits only `.stamp`
+      # files. A guard on any of those passes when it should fail.
+      #
+      # What is observable, and is the claim a Windows installer actually rests
+      # on, is *which binary loads*: `lib/binding.js` prefers
+      # `build/Release/better_sqlite3.node` and falls back to `prebuilds/`. If a
+      # compile ever succeeds here, the first exists and this fails.
+      - name: Refuse a compiled binding
+        shell: bash
+        run: |
+          pkg=$(echo node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3)
+          test -d "$pkg" || { echo "better-sqlite3 not found at $pkg"; exit 1; }
+          test -f "$pkg/prebuilds/win32-x64.node" || {
+            echo "no win32-x64 prebuild shipped; this platform would need a compiler"
+            exit 1
+          }
+          if [ -f "$pkg/build/Release/better_sqlite3.node" ]; then
+            echo "a compiled binding exists and would load in preference to the prebuild"
+            exit 1
+          fi
+          echo "the shipped prebuild is what will load"
+
+      # A round trip through the native module, which is the whole claim: the
+      # server's SQLite is what a Windows installer has to ship, and an install
+      # that "succeeded" without a loadable binding proves nothing. Run from
+      # `packages/db`, where `better-sqlite3` is actually a dependency — pnpm's
+      # store is not hoisted to the root.
+      - name: Load the SQLite binding and round-trip a row
+        working-directory: packages/db
+        run: >-
+          node -e "const D=require('better-sqlite3');
+          const d=new D(':memory:');
+          d.exec('create table t (x integer)');
+          d.prepare('insert into t values (?)').run(42);
+          const got=d.prepare('select x from t').get().x;
+          if (got !== 42) { throw new Error('round trip returned ' + got); }
+          console.log('sqlite ok via', require.resolve('better-sqlite3'));"
