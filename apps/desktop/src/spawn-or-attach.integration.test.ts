@@ -12,6 +12,7 @@
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -20,10 +21,31 @@ import { createPollingWaiter, spawnOrAttach } from "./spawn-or-attach.js";
 import type { SpawnOrAttachHandle } from "./spawn-or-attach.js";
 import { healthProbe, spawnServer } from "./main.js";
 
-let nextPort = 46_900;
-function ephemeralPort(): number {
-  nextPort += 1;
-  return nextPort;
+/**
+ * A port the OS says is free, never one a counter guessed. A static band is the
+ * worse of the two failures available here: 46_900 is inside Linux's own
+ * ephemeral range (32768–60999), so any port-0 bind anywhere on the machine can
+ * already hold it — including `apps/server`'s suites, which `turbo run test` runs
+ * at the same time as this one. The probe closes before the child binds, which is
+ * a window; a counter is not a window, it is a standing collision.
+ */
+function ephemeralPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.unref();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (address === null || typeof address === "string") {
+        probe.close(() =>
+          reject(new Error("could not determine an ephemeral port")),
+        );
+        return;
+      }
+      const { port } = address;
+      probe.close(() => resolve(port));
+    });
+  });
 }
 
 const stateDirs: string[] = [];
@@ -42,7 +64,7 @@ afterEach(() => {
 
 describe("spawnServer + healthProbe against the real built server", () => {
   it("spawns the real server and observes it become healthy", async () => {
-    const port = ephemeralPort();
+    const port = await ephemeralPort();
     const stateDir = tempStateDir();
     let unexpectedExitCode: number | null | undefined;
     // Declared outside the try so `finally` can always stop it — an
@@ -90,7 +112,7 @@ describe("spawnServer + healthProbe against the real built server", () => {
   }, 20_000);
 
   it("attaches without spawning a second process once one is already healthy", async () => {
-    const port = ephemeralPort();
+    const port = await ephemeralPort();
     const stateDir = tempStateDir();
     // Declared outside the try so `finally` can always stop whichever of
     // these got assigned before an assertion failed.

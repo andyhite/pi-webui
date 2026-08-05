@@ -22,6 +22,7 @@
 
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,10 +40,31 @@ const SERVER_ENTRY = fileURLToPath(
   new URL("../../../server/dist/index.js", import.meta.url),
 );
 
-let nextPort = 47_100;
-function ephemeralPort(): number {
-  nextPort += 1;
-  return nextPort;
+/**
+ * A port the OS says is free, never one a counter guessed. A static band is the
+ * worse of the two failures available here: 47_100 is inside Linux's own
+ * ephemeral range (32768–60999), so any port-0 bind anywhere on the machine can
+ * already hold it — including `apps/server`'s suites, which `turbo run test` runs
+ * at the same time as this one. The probe closes before the child binds, which is
+ * a window; a counter is not a window, it is a standing collision.
+ */
+function ephemeralPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.unref();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (address === null || typeof address === "string") {
+        probe.close(() =>
+          reject(new Error("could not determine an ephemeral port")),
+        );
+        return;
+      }
+      const { port } = address;
+      probe.close(() => resolve(port));
+    });
+  });
 }
 
 interface RunningServer {
@@ -68,7 +90,7 @@ async function waitForHealth(port: number, timeoutMs = 15_000): Promise<void> {
 }
 
 async function startServer(): Promise<RunningServer> {
-  const port = ephemeralPort();
+  const port = await ephemeralPort();
   const stateDir = mkdtempSync(join(tmpdir(), "plotroom-web-gate-"));
 
   const child = spawn(process.execPath, [SERVER_ENTRY], {
