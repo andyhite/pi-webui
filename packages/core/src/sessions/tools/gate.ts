@@ -56,7 +56,7 @@ import type { RequestOutcome, RuntimeRequest } from "../runtime.js";
  *   a conflict on a path the declaration named. A tool that writes `src/a.ts` while
  *   declaring `docs/b.md` writes outside its claim and nothing here can tell — the
  *   claim ledger records what was declared. That is why an adapter's declaration is
- *   reviewed code (`PI_KNOWN_WRITE_EXTENTS`) rather than configuration, and why an
+ *   reviewed code (`OMP_KNOWN_WRITE_EXTENTS`) rather than configuration, and why an
  *   unknown tool is `unbounded` instead of being trusted.
  * - **A tool mis-declared `none` executes ungated.** `intent.kind === "none"` means
  *   "touches nothing in the workspace", and this gate believes it: no paths are

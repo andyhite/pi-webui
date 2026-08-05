@@ -12,9 +12,10 @@ import type { RequestBridge } from "./request-bridge.js";
  * every tool the model calls — read-tier tools included, unlike a gate that
  * only wraps writes — and a `{block: true, reason}` result stops the call with
  * no side effect, the model reading `reason` as the tool's own error. That is
- * the proven shape the pi adapter already verified (`permission-gate.ts`,
- * against pi 0.83.0): a denied call produced no side effect and the model got
- * an error; without the extension the same call ran.
+ * the shape `apps/server/src/runtime/omp.spike.test.ts`'s "denies a gated tool
+ * call" case proves against the real SDK: a denied call produced no side
+ * effect and the model got an error; without this extension the same call
+ * ran.
  *
  * The decision itself is `apps/server/src/sessions/gate.ts`'s, in the server
  * process this sidecar is not; `bridge.raise` is what reaches it (§3.4/§6.6

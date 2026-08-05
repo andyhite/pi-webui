@@ -1,4 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { INHERIT_APP_TOOLS } from "@plotroom/core";
@@ -212,10 +218,14 @@ describe.skipIf(!ENABLED)("the session host, against the real SDK", () => {
   it("gates a read-tier tool too, not only writes (issue #81)", async () => {
     const adapter = spikeAdapter();
     const dir = workspace("read-tier");
+    writeFileSync(
+      join(dir, "note.txt"),
+      "the gate should still ask about this",
+    );
 
     const handle = await adapter.start({
       prompt:
-        "Run exactly this shell command using the bash tool and nothing else: whoami",
+        "Use the read tool to read exactly the file note.txt, and nothing else.",
       launch: {
         model: MODEL,
         effort: "off",
@@ -224,17 +234,22 @@ describe.skipIf(!ENABLED)("the session host, against the real SDK", () => {
       workspacePath: dir,
     });
 
-    // `bash` is unbounded either way (§3.4's write-intent), so the read-tier
-    // claim under test is narrower: the gate fires at all for a call whose
-    // own effect is read-only, which a gate that only wrapped writes would
-    // skip outright rather than deny.
+    // `read` has no write-intent at all (§3.4's write-intent is about what a
+    // call *writes*), so a gate keyed on write-intent alone would let it
+    // through ungated; this proves the gate wraps every `tool_call`, read or
+    // write, which the deny test (on `bash`, always unbounded either way)
+    // cannot distinguish on its own.
     const { observations } = await drainUntil(
       handle,
       (observation) => observation.kind === "request-raised",
     );
-    expect(
-      observations.some((observation) => observation.kind === "request-raised"),
-    ).toBe(true);
+    const raised = observations.find(
+      (observation) => observation.kind === "request-raised",
+    );
+    expect(raised?.kind === "request-raised" && raised.request).toMatchObject({
+      kind: "tool-permission",
+      toolName: "read",
+    });
 
     await handle.stop("abort");
   }, 120_000);

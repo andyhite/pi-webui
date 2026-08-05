@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { systemMillisClock } from "@plotroom/core";
 import type { ServerConfig } from "../config.js";
 import type { Logger } from "../logging/logger.js";
-import { createOmpRuntime } from "./omp.js";
+import { createOmpRuntime, OMP_ADAPTER_ID } from "./omp.js";
 import { RuntimeRegistry } from "./registry.js";
 import {
   createScriptedRuntime,
@@ -56,6 +56,15 @@ export function createRuntimeRegistry(
       scriptPath: config.runtime.scriptPath,
     });
     return registry;
+  }
+
+  if (config.runtime.adapterId !== OMP_ADAPTER_ID) {
+    // A stale `PLOTROOM_RUNTIME` naming a retired adapter (issue #83) must
+    // not silently select today's default instead — that is exactly the
+    // quiet degradation principle 12 forbids.
+    throw new Error(
+      `PLOTROOM_RUNTIME names an unknown adapter: "${config.runtime.adapterId}"`,
+    );
   }
 
   registry.register(

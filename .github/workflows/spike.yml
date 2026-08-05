@@ -52,6 +52,10 @@ jobs:
   spike:
     name: Spike (against the real SDK)
     runs-on: ubuntu-latest
+    # A fork's pull request cannot see this repository's secrets, so
+    # `ANTHROPIC_API_KEY` would be empty and every case would fail before
+    # reaching the model — a false "the SDK moved" rather than a true one.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # A hung sidecar the harness itself failed to bound would otherwise burn
     # the runner's default six hours; the suite's own tests finish in well
     # under two minutes end to end.
@@ -64,12 +68,23 @@ jobs:
           bun: "true"
           turbo-cache: spike
 
+      # Turbo, not a filtered pnpm script directly: `compile` and `test` both
+      # `dependsOn: ["^build"]` because `@plotroom/core` resolves through its
+      # package exports to `dist/`, which a fresh runner does not have yet —
+      # `ci.yml`'s `session-host-binary` job builds the same way for the same
+      # reason.
       - name: Compile the session host
-        run: pnpm --filter @plotroom/session-host compile
+        run: pnpm compile
 
       - name: Run the spike suite against the compiled binary
         env:
           PLOTROOM_SESSION_HOST_SPIKE: "1"
           PLOTROOM_SESSION_HOST: ${{ github.workspace }}/apps/session-host/out/plotroom-session-host
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: pnpm --filter @plotroom/server test -- run src/runtime/omp.spike.test.ts
+        # `vitest run <path>` directly, not `pnpm --filter @plotroom/server
+        # test -- <path>`: that script is already `vitest run`, so appending
+        # `run <path>` makes the extra "run" a second positional filter —
+        # vitest matches it against the relative file path, which every file
+        # under `runtime/` or `routes/runs.*` contains, so it silently ran
+        # the whole suite instead of only this file.
+        run: pnpm --filter @plotroom/server exec vitest run src/runtime/omp.spike.test.ts
