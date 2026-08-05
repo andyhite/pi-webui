@@ -92,40 +92,48 @@ own checks, exercises the change, and writes any missing e2e coverage.
 
 - Rebase onto fresh `origin/main`; re-run `pnpm verify` if the rebase pulled
   in real changes; push.
-- Open the PR: title is a Conventional Commit header for the squashed result;
-  body says what changed, why, how it was exercised (the proof from step 6),
-  and `Closes #<issue>`.
+- Open the PR: title is a Conventional Commit header for the squashed result
+  (a squash merge takes it as the commit subject); body says what changed,
+  why, how it was exercised (the proof from step 6), and `Closes #<issue>`.
 - Record the QA verdict as a PR comment (who reviewed, what was checked,
   `PASS`).
 - Move the issue to `Review`.
+- Under an epic, a chained subtask's PR is a stack layer instead — same
+  gates, different plumbing: see `skill://stacked-prs`.
 
-## 9. Review
+## 9. Review — the operator decides on the PR itself
+
+You never merge. **The operator merging the PR is the approval; the operator
+commenting on it is a change request.** There is no approve-then-merge
+two-step.
 
 - Watch CI (`github` tool `run_watch`). Red checks are yours to fix
   immediately.
-- Wait for the review: poll `gh pr view <n> --json reviewDecision,reviews,comments`
-  every few minutes. If nothing arrives within ~30 minutes, tell the operator
-  the PR is waiting and yield — do not merge an unreviewed PR out of
-  impatience.
-- **Changes requested** (by human or agent): move the issue back to
-  `In Progress`, address every point (or answer it with evidence on the PR),
-  re-run the gates (6–7 if code changed), push, re-request review, move back
-  to `Review`.
-- The merge gate: checks green **and** a review recorded on the PR by someone
-  who did not write the change — a human approval, or the QA sign-off comment
-  when the operator has delegated the loop (interactive sessions confirm with
-  the operator before merging).
+- Then poll `gh pr view <n> --json state,mergedAt,comments,reviews` every few
+  minutes, backing off toward ~10 when quiet.
+  - **A comment you did not post** (you know which are yours; ignore CI
+    bots) → change request: issue back to `In Progress`, address every point
+    with a fix or an evidence-backed reply on the PR, re-run the gates (6–7
+    if code changed), push, reply on the PR that it is addressed, issue back
+    to `Review`, resume waiting.
+  - **Merged** → step 10.
+  - **Closed unmerged** → the operator declined it: comment the state on the
+    issue, ask where it should go, and stop.
+- Keep it mergeable while you wait: if `main` moves under the PR into
+  conflict, rebase onto `origin/main` and `git push --force-with-lease`.
+- Interactive session: tell the operator the PR is ready and yield rather
+  than poll forever. Subagent: report the PR to your parent via `hub`, then
+  keep polling with backoff.
 
-## 10. Merge, close, clean up
+## 10. After the merge
 
-1. Rebase onto `origin/main` one last time if `main` moved; push; wait for
-   green.
-2. `gh pr merge <n> --squash --delete-branch` (fast-forward is also
-   acceptable; never a merge commit).
-3. `Closes #` closed the issue; set the board status to `Done` explicitly.
-4. Remove the worktree and local branch (`worktree` skill). The task is not
-   complete while the worktree exists.
-5. Report: issue, PR, what shipped, how it was proven.
+1. The operator merged — squash or fast-forward, `main` stays linear either
+   way.
+2. `Closes #` closed the issue; set the board status to `Done` explicitly.
+3. Delete the remote branch if the merge didn't; remove the worktree and
+   local branch (`worktree` skill). The task is not complete while the
+   worktree exists.
+4. Report: issue, PR, what shipped, how it was proven.
 
 ## Blocked?
 

@@ -12,6 +12,27 @@ toolchain, conventions, and the delivery workflow. The skills under
 `.omp/skills/` are the operating manual for the workflow — read the relevant
 skill before acting, don't improvise from memory.
 
+## Documentation
+
+`docs/` is the canonical product documentation — the layer beneath the spec:
+geography, state machines, derivations, and boundary contracts. Read the doc
+that owns your subject before reading code; when a doc disagrees with the
+tree, the doc is stale — file it.
+
+| When you need…                                                                               | Read                           |
+| -------------------------------------------------------------------------------------------- | ------------------------------ |
+| What the product is and how it behaves — every change is judged against it                   | `docs/product-spec.md`         |
+| Persisted records, identity, versions and retention, output addressing, deletion/recovery    | `docs/data-model.md`           |
+| A rule and its predicate — actors, lineage/reflexivity, claims, approvals, budgets, legality | `docs/enforcement.md`          |
+| How a session runs — launch, phases, plan, injection/questions/broadcast, end states, forks  | `docs/session-lifecycle.md`    |
+| How a run happens — preview, queue admission, assembly, proof, history/pinning               | `docs/run-lifecycle.md`        |
+| The attention system — feeds, ranking, triage, health alerts, outbound routing               | `docs/attention-derivation.md` |
+| The session-host/runtime seam — observations, pinned tools, configuration fidelity           | `docs/runtime-boundary.md`     |
+| Building or changing a plugin                                                                | `docs/plugin-authoring.md`     |
+| HTTP/WS protocol, the actor header, the event stream, adding a new gesture                   | `docs/interface-contract.md`   |
+| Running, configuring, or operating the product                                               | `docs/operations.md`           |
+| User-facing copy — the state vocabulary and what the product never says                      | `docs/product-voice.md`        |
+
 ## Layout
 
 | Path                  | Package                  | What it is                                                                                               |
@@ -19,7 +40,7 @@ skill before acting, don't improvise from memory.
 | `apps/web`            | `@plotroom/web`          | React 19 + Vite canvas UI; the Playwright e2e gate lives in `apps/web/e2e`                               |
 | `apps/server`         | `@plotroom/server`       | The HTTP API server the web app and desktop shell talk to                                                |
 | `apps/session-host`   | `@plotroom/session-host` | Bun sidecar embedding omp as the session runtime; tests run under `bun test`; ships as a compiled binary |
-| `apps/desktop`        | `@plotroom/desktop`      | Electrobun desktop shell                                                                                 |
+| `apps/desktop`        | `@plotroom/desktop`      | Electron desktop shell (spawn-or-attach to a local server, or a remembered remote backend)               |
 | `packages/core`       | `@plotroom/core`         | Domain model and **rule predicates** — every product rule lives here once, called by every surface       |
 | `packages/db`         | `@plotroom/db`           | Persistence (better-sqlite3)                                                                             |
 | `packages/toolkit`    | `@plotroom/toolkit`      | Design tokens and theme; `theme.generated.css` is generated — never hand-edit it                         |
@@ -64,7 +85,9 @@ gate.
 - **Hooks:** pre-commit refuses commits on `main`, checks the branch name, and
   runs `pnpm format:check` over the whole repo; commit-msg runs commitlint.
 - **`main` is linear and never rewritten.** Nothing reaches it except a pull
-  request, squashed or fast-forwarded after a rebase onto `origin/main`.
+  request, squashed or fast-forwarded after a rebase onto `origin/main` —
+  and **only the operator merges**: the merge is the approval, an operator
+  comment on an open PR is a change request. Agents never merge a PR.
 
 ## CI
 
@@ -88,7 +111,9 @@ The shape: **ideas** (label `idea`) are recorded cheaply and groomed later into
 an **epic** or a **task** — or rejected. **Tasks** are small, single-PR units;
 anything bigger is an epic broken into task sub-issues. **Bugs** keep a
 severity-suffixed label (`bug:sev0`–`bug:sev3`) for life and skip the idea
-stage. Epics derive their status from their subtasks.
+stage. Epics derive their status from their subtasks, and chains of dependent
+subtasks ship as **stacked pull requests** (`stacked-prs` skill) so review
+never blocks the next layer.
 
 | To…                         | Use                                            |
 | --------------------------- | ---------------------------------------------- |

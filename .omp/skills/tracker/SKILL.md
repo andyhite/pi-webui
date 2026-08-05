@@ -55,14 +55,18 @@ gh issue list --search "label:bug,bug:sev0,bug:sev1,bug:sev2,bug:sev3" --state o
 | `Backlog`     | Captured, not committed to                       | Idea recorded; epic accepted; sev2/sev3 bug filed                                                    |
 | `To Do`       | Committed, next up, ordered by priority          | Task accepted at grooming; epic breakdown lands; sev0/sev1 bug filed; sev2/sev3 promoted at grooming |
 | `In Progress` | Actively being worked in a worktree              | A session claims it — **before its first edit**                                                      |
-| `Review`      | Implementation complete, `verify` green, PR open | The PR opens. Falls back to `In Progress` when changes are requested                                 |
-| `Done`        | Reviewed, merged to `main`, worktree cleaned up  | After merge **and** cleanup — never before                                                           |
+| `Review`      | PR open, `verify` green, waiting on the operator | The PR opens. An operator comment on the PR is a change request → falls back to `In Progress`        |
+| `Done`        | Operator-merged to `main`, worktree cleaned up   | The operator merges the PR — the merge **is** the approval. `Done` after merge **and** cleanup       |
 | `Rejected`    | Groomed and declined                             | Grooming rejects an idea; issue is closed as not planned                                             |
 
 Lifecycle: `idea → Backlog` → grooming → (`Rejected` | `task → To Do` |
 `epic → Backlog` → breakdown → subtasks `To Do`) → `In Progress` → `Review` →
 `Done`. Bugs skip the idea stage: triage routes sev0/sev1 straight to `To Do`
 and sev2/sev3 to `Backlog`.
+
+Chained epic subtasks ship as **stacked PRs** — one layer per subtask, with
+each layer's issue moving through `Review`/`Done` exactly as above as its
+layer PR opens and merges; see `skill://stacked-prs`.
 
 ## Epic status is derived from its subtasks
 

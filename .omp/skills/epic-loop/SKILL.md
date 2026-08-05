@@ -1,6 +1,6 @@
 ---
 name: epic-loop
-description: Orchestrating delivery of a PlotRoom epic — dependency-ordering its subtasks, dispatching issue-worker subagents in parallel waves, integration verification between waves, derived epic status, and closeout. Read when picking up an epic issue.
+description: Orchestrating delivery of a PlotRoom epic — partitioning subtasks into dependency tracks, dispatching issue-worker subagents in parallel (stacked PRs for chained tracks), integration verification as work lands, derived epic status, and closeout. Read when picking up an epic issue.
 ---
 
 # Epic loop — orchestrate, verify, integrate
@@ -8,9 +8,9 @@ description: Orchestrating delivery of a PlotRoom epic — dependency-ordering i
 An epic is delivered by running the `dev-loop` on each subtask — but never by
 you directly. You are the **conductor**: you sequence, dispatch, watch,
 integrate, and verify. You do not edit product code, create task worktrees, or
-open task PRs; `issue-worker` subagents do that, one per subtask, each in its
-own worktree. Related skills: `tracker` (statuses, sub-issue queries, derived
-epic status), `grooming` (breakdown), `bug-triage` (integration findings),
+open task PRs; `issue-worker` subagents do that. Related skills: `tracker`
+(statuses, sub-issue queries, derived epic status), `stacked-prs` (chained
+subtasks), `grooming` (breakdown), `bug-triage` (integration findings),
 `verification`, `worktree`.
 
 ## 1. Preflight
@@ -35,42 +35,58 @@ If reading reveals the breakdown is wrong — tasks too big, a missing seam, a
 dependency nobody recorded — fix the breakdown first (grooming skill), don't
 dispatch around it.
 
-## 3. Plan the waves
+## 3. Partition into tracks
 
-Build the dependency graph over subtasks. Group into waves: everything in a
-wave is independent of everything else in it; a wave only starts when the
-waves it depends on are merged. Prefer wide waves — but cap concurrent workers
-at **3**: every merge is a rebase onto a moving `main`, and beyond that the
-rebase churn eats the parallelism.
+Build the dependency graph over subtasks, then partition it into **tracks**:
 
-`todo init`: one omp todo per subtask, phased by wave, plus an integration
-todo per wave and a closeout phase.
+- A **chain** — subtasks where each depends on the previous one — is one
+  track, delivered by **one** worker as **stacked PRs** (`stacked-prs`
+  skill): one worktree, one layer per subtask, review never blocking the next
+  layer. Serial work goes to one worker on purpose — it accumulates the
+  chain's context instead of re-learning it per subtask.
+- An independent subtask is a single-subtask track: plain dev loop, PR off
+  `main`.
+- A cross-track dependency (track B needs track A's layer on `main`) stays
+  merge-gated: B dispatches only after that layer lands. If such edges are
+  everywhere, the partition is wrong — refold the chains.
 
-## 4. Dispatch a wave
+Run tracks in parallel, at most **3 workers** concurrently. `todo init`: one
+omp todo per subtask grouped by track, an integration todo per landing, and a
+closeout phase.
 
-One `task` batch per wave, `agent: issue-worker`, one item per subtask. Each
-brief is self-contained (workers start blank): the issue number, the epic
-number, the contracts from step 2, anything a sibling's landed work changed,
-and the reminder that the worker owns its issue end-to-end — worktree, TDD,
-QA gate, PR, merge, cleanup, board moves — per the `dev-loop` skill.
+## 4. Dispatch and monitor
 
-While a wave runs:
+One `task` batch per ready set of tracks, `agent: issue-worker`, one item per
+track. Each brief is self-contained (workers start blank): the issue
+number(s) — for a chained track, the ordered list with the instruction to
+deliver it as a stack per `skill://stacked-prs` — the epic number, the
+contracts from step 2, and anything a sibling's landed work changed.
 
-- Monitor with `hub` (`jobs`, `wait`); answer worker questions promptly —
-  an unanswered contract question stalls a whole wave.
+While tracks run:
+
+- Monitor with `hub` (`jobs`, `wait`); answer worker questions promptly — an
+  unanswered contract question stalls a whole track.
 - Keep the epic's derived status current (tracker skill) as subtasks move.
-- A stuck worker gets steered via `hub send`; a dead one gets its issue reset
-  (blocker comment, status back to `To Do`) and redispatched or split.
-- Workers merge their own PRs; if two PRs collide heavily, serialize them —
-  tell one worker to hold its merge until the other lands.
+- **Surface the merge queue to the operator**: whenever layers or PRs go to
+  `Review`, tell the operator what is ready and in what order — for a stack,
+  that merging layer K takes everything below it, and merging the top takes
+  the whole track. The operator merges; nobody else. A comment from the
+  operator on any PR is a change request the owning worker must pick up.
+- A stuck worker gets steered via `hub send`; a dead one gets its issues
+  reset (blocker comment, status back to `To Do`) and its track redispatched
+  or split.
+- Two plain-PR tracks colliding on the same files: tell the later one to
+  rebase after the first lands, or serialize them.
 
-A worker's "completed" is a claim. Verify it: the PR is merged, the issue is
-`Done`, the worktree is gone.
+A worker's "completed" is a claim. Verify it: PRs merged, issues `Done`,
+worktree gone.
 
-## 5. Integrate between waves
+## 5. Integrate as work lands
 
-After each wave fully lands, verify the _integrated_ state — each task was
-verified alone, the combination was not:
+Each track's top-of-stack rung-3 verification already proves the track's
+layers work **together**. What it cannot prove is tracks working with _each
+other_ — that is yours. After each meaningful landing on `main` (a track
+completing, or a batch of merges):
 
 ```sh
 PRIMARY=$(git worktree list --porcelain | head -1 | sed 's/^worktree //')
@@ -78,17 +94,18 @@ git -C "$PRIMARY" fetch origin main
 git -C "$PRIMARY" worktree add "$PRIMARY/../plotroom-<epic>-integration" --detach origin/main
 ```
 
-(Reuse the worktree across waves: `git -C ../plotroom-<epic>-integration fetch
-origin && git -C ../plotroom-<epic>-integration checkout --detach origin/main`.)
+(Reuse it across landings: `git -C ../plotroom-<epic>-integration fetch
+origin && git -C ../plotroom-<epic>-integration checkout --detach
+origin/main`.)
 
 In it: `pnpm install`, `pnpm verify`, the e2e gate, and — most importantly —
-**exercise the epic's behavior across the seams** the wave just joined, per
-rung 3 of the `verification` skill.
+**exercise the epic's behavior across the seams** that just joined, per rung
+3 of the `verification` skill.
 
-Findings are never fixed by you in the integration worktree. File each one:
-a defect in landed work is a bug (`bug-triage` skill, usually `sev1` since it
+Findings are never fixed by you in the integration worktree. File each one: a
+defect in landed work is a bug (`bug-triage` skill, usually `sev1` since it
 blocks the epic); a missing seam is a new subtask (grooming breakdown
-addendum, linked to the epic). Dispatch fixes as part of the next wave.
+addendum, linked to the epic). Dispatch fixes as their own track.
 
 ## 6. Closeout
 
