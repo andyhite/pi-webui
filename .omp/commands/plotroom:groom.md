@@ -30,8 +30,8 @@ Work from the data, not from memory. Report each finding as `#n — what — the
 **Off the board or unclassified**
 
 - an open issue that is not a board item at all (`gh issue list` minus `/tmp/board.json`);
-- an item with no kind label (`bug`, `documentation`, `decision`, `epic`, `follow-up`,
-  `idea`) — exactly one, never zero, never two;
+- an item with no kind label (`bug`, `epic`, `task`, `idea`) — exactly one, never
+  zero, never two;
 - a non-`bug` issue with **no parent epic** — everything except a bug gets one
   (`skill://plotroom-tracker` → "Deliberately unparented" is the short exception
   list; anything else orphaned is a finding).
@@ -41,7 +41,7 @@ Work from the data, not from memory. Report each finding as `#n — what — the
 - an `epic` with no children, or a child whose parent is not the epic its own body
   says it belongs to;
 - an epic that is itself parented — a parent is never parented;
-- a follow-up filed out of landed work with **no parent** — those read as orphans to
+- a task filed out of landed work with **no parent** — those read as orphans to
   the next reader and should be parented rather than left to guess;
 - two epics whose bodies claim overlapping files with neither naming the other —
   the old `track:*` partition is gone, so this collision is no longer structurally

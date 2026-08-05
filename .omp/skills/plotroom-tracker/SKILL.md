@@ -28,13 +28,13 @@ the board, and every `plotroom:*` command addresses it as `skill://plotroom-trac
 
 ## Vocabulary
 
-| Thing                  | Means                                                                                                                                                                                                                                                                                |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Epic**               | a **container, never picked**. Labelled `epic`, has children (sub-issues), and never has a parent of its own. It carries the span of its children and — in its own body — the scope, the order to take them in, and any other epic it depends on or collides with.                   |
-| **Status**             | `Backlog` → `To Do` → `In Progress` → `Review` → `Done`.                                                                                                                                                                                                                             |
-| **Kind label**         | exactly one per issue: `bug`, `documentation`, `decision`, `epic`, `follow-up`, `idea`. A `bug` may be left with no parent; everything else gets one — an epic, if it is feature or follow-up work — with the small set of deliberate exceptions in "Deliberately unparented" below. |
-| **`idea` label**       | spec §13's recorded intentions, or anything else deliberately deferred pending a decision. Never promoted by drift — only by an explicit operator decision.                                                                                                                          |
-| **`Start` / `Target`** | dates; a sizing input, not a commitment. A stale date is the same failure as a stale status.                                                                                                                                                                                         |
+| Thing                  | Means                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Epic**               | a **container, never picked**. Labelled `epic`, has children (sub-issues), and never has a parent of its own. It carries the span of its children and — in its own body — the scope, the order to take them in, and any other epic it depends on or collides with.                                                                                                                                                                                                                                                  |
+| **Status**             | `Backlog` → `To Do` → `In Progress` → `Review` → `Done`.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **Kind label**         | exactly one per issue: `bug`, `epic`, `task`, `idea`. A `bug` may be left with no parent; everything else gets one — an epic, if it is feature or task work — with the small set of deliberate exceptions in "Deliberately unparented" below. `documentation` and `decision` are retired: a documentation gap is fixed in its own commit per `AGENTS.md` → "Documentation" rather than tracked as an issue kind, and an open decision either becomes an `idea` or an open question on the existing ticket it gates. |
+| **`idea` label**       | spec §13's recorded intentions, or anything else deliberately deferred pending a decision. Never promoted by drift — only by an explicit operator decision.                                                                                                                                                                                                                                                                                                                                                         |
+| **`Start` / `Target`** | dates; a sizing input, not a commitment. A stale date is the same failure as a stale status.                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 Never enumerate the epics from memory — derive them:
 
@@ -137,8 +137,8 @@ mutation($p: ID!, $c: ID!) { addSubIssue(input: {issueId: $p, subIssueId: $c}) {
    deletes the remote one. A task is not complete while its worktree exists.
 
 Filing work you find on the way: `gh issue create` with a kind label
-(`bug`/`documentation`/`decision`/`follow-up`), then put it on the board and — unless
-it is a `bug` — parent it under the right epic:
+(`bug`/`task`/`idea`), then put it on the board and — unless it is a `bug` —
+parent it under the right epic:
 
 ```sh
 env -u GH_TOKEN gh project item-add 1 --owner andyhite --url https://github.com/andyhite/plotroom/issues/<n>
@@ -201,9 +201,9 @@ Everything gets a parent epic except:
   decision about the tracker itself rather than product work (e.g. the old track map,
   closed).
 
-Nothing else. If you find a `follow-up`, `documentation`, `decision`, or `idea` issue
-with no parent, that is a grooming finding: name the epic it belongs to, or — if none
-fits — say so and propose a new one rather than leaving it orphaned.
+Nothing else. If you find a `task` or `idea` issue with no parent, that is a
+grooming finding: name the epic it belongs to, or — if none fits — say so and
+propose a new one rather than leaving it orphaned.
 
 ## Anomalies worth reporting whenever you look at the board
 
