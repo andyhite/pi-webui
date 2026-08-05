@@ -16,6 +16,7 @@ import {
 import type { SessionId } from "../../ids.js";
 import type { RuntimeRequest } from "../runtime.js";
 import { createPiWriteIntents } from "../adapters/pi/write-intents.js";
+import { createOmpWriteIntents } from "../adapters/omp/write-intents.js";
 import { declareToolWorld } from "../outside-world.js";
 import type { PreGrantId } from "../approvals/ids.js";
 import {
@@ -530,5 +531,49 @@ describe("pi write intents", () => {
       "unbounded",
     );
     expect(declared.intentOf("write", null).kind).toBe("unbounded");
+  });
+});
+
+describe("omp write intents (issue #81)", () => {
+  const intents = createOmpWriteIntents();
+
+  it("treats a shell as unbounded — it can write anything", () => {
+    expect(intents.intentOf("bash", { command: "echo hi" }).kind).toBe(
+      "unbounded",
+    );
+  });
+
+  it("treats an undeclared tool as unbounded rather than as harmless", () => {
+    expect(
+      intents.intentOf("some_new_omp_tool", { path: "src/a.ts" }).kind,
+    ).toBe("unbounded");
+  });
+
+  it("treats asking a question as touching nothing in the workspace", () => {
+    expect(intents.intentOf("plotroom_ask", { question: "?" }).kind).toBe(
+      "none",
+    );
+  });
+
+  it("bounds a real workspace path to a claim", () => {
+    expect(intents.intentOf("write", { path: "src/a.ts" })).toEqual({
+      kind: "paths",
+      paths: ["src/a.ts"],
+    });
+  });
+
+  it("declares an xd:// tool-device write unbounded, never as the literal path (issue #81)", () => {
+    // `write({ path: "xd://ast_edit", content })` dispatches a mounted tool
+    // device whose write extent has nothing to do with the string "xd://ast_edit" —
+    // binding it as a claimed path would check a path nothing writes and let
+    // the device's real, unpredictable effect through unchecked.
+    const intent = intents.intentOf("write", { path: "xd://ast_edit" });
+    expect(intent.kind).toBe("unbounded");
+  });
+
+  it("falls back to unbounded when the declared path field is absent or not a string", () => {
+    expect(intents.intentOf("write", { content: "x" }).kind).toBe("unbounded");
+    expect(intents.intentOf("write", { path: "" }).kind).toBe("unbounded");
+    expect(intents.intentOf("write", null).kind).toBe("unbounded");
   });
 });

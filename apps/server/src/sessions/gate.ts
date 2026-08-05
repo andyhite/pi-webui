@@ -1,9 +1,11 @@
 import {
   approvalOutcome,
+  createOmpWriteIntents,
   createPiWriteIntents,
   decideToolPermission,
   isApproved,
   NO_TOOL_WORLD_DECLARATIONS,
+  OMP_ADAPTER_ID,
   sessionAuthor,
   UNKNOWN_WRITE_INTENTS,
   type Approval,
@@ -125,6 +127,10 @@ export function defaultWriteIntents(): ReadonlyMap<
     // unbounded there too.
     [PI_ADAPTER_ID, createPiWriteIntents()],
     [SCRIPTED_ADAPTER_ID, scriptedWriteIntents()],
+    // The omp session-host's own declaration (issue #81): a real workspace
+    // path bounds to a claim, an `xd://` tool device does not, and an
+    // undeclared tool is unbounded there too.
+    [OMP_ADAPTER_ID, createOmpWriteIntents()],
   ]);
 }
 

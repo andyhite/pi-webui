@@ -10,6 +10,7 @@ import {
   createObservationTranslator,
   type ObservationTranslator,
 } from "./observations.js";
+import type { RequestBridge } from "./request-bridge.js";
 
 /**
  * The part of the SDK's session this process drives.
@@ -54,6 +55,12 @@ export interface SessionHostOptions {
   /** Raw stdin chunks; framing is this module's job, not the caller's. */
   readonly input: AsyncIterable<string>;
   readonly now: () => EpochMillis;
+  /**
+   * Settles a request the permission gate or the `plotroom_ask` tool raised
+   * (issue #81) — the same bridge both were built with, so a `respond`
+   * command here reaches the exact call it is blocking.
+   */
+  readonly requestBridge: RequestBridge;
 }
 
 /**
@@ -153,18 +160,25 @@ export async function runSessionHost(
             writeFrame({ type: "ack", id: command.id });
             break;
 
-          case "respond":
-            // Nothing raises a request yet: the permission gate and §6.4's
-            // structured questions are issue #81, and they own the pending-call
-            // registry an answer settles. Until then the truthful reply is that
-            // there is nothing here to answer — never a silent success, which
-            // would tell PlotRoom a blocked call had been released.
-            writeFrame({
-              type: "nack",
-              id: command.id,
-              error: `no request ${command.requestId} is pending in this session`,
-            });
+          case "respond": {
+            const settled = options.requestBridge.settle(
+              command.requestId,
+              command.outcome,
+            );
+            if (settled) {
+              writeFrame({ type: "ack", id: command.id });
+            } else {
+              // Either nothing raised this id, or it was already settled — a
+              // silent success here would tell PlotRoom a blocked call had
+              // been released when nothing was blocked (or blocked twice).
+              writeFrame({
+                type: "nack",
+                id: command.id,
+                error: `no request ${command.requestId} is pending in this session`,
+              });
+            }
             break;
+          }
 
           case "stop":
             writeFrame({ type: "ack", id: command.id });
