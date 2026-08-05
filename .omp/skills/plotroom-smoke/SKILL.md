@@ -1,9 +1,12 @@
 ---
-description: Run PlotRoom and exercise a change by hand — the step green verify does not cover
+name: plotroom-smoke
+description: Run PlotRoom and exercise a change by hand — the step green pnpm verify does not cover. Use exactly once, when implementation of a PlotRoom change is finished and before opening or merging its pull request; not a per-commit loop step.
 ---
 
-Exercise this: $@ — the gesture or seam your change touched. If nothing was named,
-work it out from `git diff origin/main...HEAD` and say what you chose.
+# Exercising a change by hand
+
+Exercise the gesture or seam the change touched — work it out from
+`git diff origin/main...HEAD` if it is not already obvious, and say what you chose.
 
 `docs/development.md` in `~/plotroom` is the runbook; read it rather than guessing at
 ports and variables. Green `pnpm verify` proves nothing broke, not that what you built

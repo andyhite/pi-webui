@@ -27,8 +27,8 @@ The output is a plan I can disagree with while it is still cheap.
 - **The files, in the order you will touch them**, and for each: what changes and why.
   Name what you will **not** touch, especially anything another lane owns.
 - **The proof.** The exact test the shape requires, plus how you will exercise the
-  change (`/plotroom:smoke`). If a change is only believable by clicking it, say what
-  you will click and what you expect to see.
+  change (`skill://plotroom-smoke`). If a change is only believable by clicking it,
+  say what you will click and what you expect to see.
 - **The schema question**, if any: does this touch the four §15 invariants, is a
   migration needed, does it need a reserved id?
 - **What could make this wrong** — the assumption you are least sure of, and the

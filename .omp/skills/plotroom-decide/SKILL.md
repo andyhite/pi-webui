@@ -1,8 +1,9 @@
 ---
-description: Record a decision as an ADR in the house style, or say why it is not one
+name: plotroom-decide
+description: Record a PlotRoom decision as an ADR in the house style, or determine it does not belong in one. Use when work in ~/plotroom surfaces a stack/boundary choice, a schema shape plus the product rules it cannot state, or a measurement gating a deferred decision — nobody has written it down yet and the reasoning has to survive.
 ---
 
-The decision: $@
+# Recording a decision
 
 `docs/decisions/README.md` in `~/plotroom` is the house style — read it first; it has
 the numbering, the metadata block, the `Status` vocabulary, the spine, and the amendment
@@ -38,20 +39,21 @@ Two things the existing records do that are worth copying:
 - **`Consequences` states what the decision obliges, including work that does not exist
   yet.** A record whose implementation is unwritten still constrains it.
 
-If the decision is mine to make rather than yours, write it with
-`Status: Proposed` naming exactly what is unanswered, and **ask me** — do not accept it
-on my behalf. `Deciders` is `operator` unless the record decides nothing.
+If the decision is the operator's to make rather than yours, write it with
+`Status: Proposed` naming exactly what is unanswered, and **ask** — do not accept it on
+the operator's behalf. `Deciders` is `operator` unless the record decides nothing.
 
 ## 3. Land it
 
 One record, one `docs:` commit, subject `record <the thing>`, body two or three
 paragraphs of the argument. It rides with nothing else, and nothing else rides with it.
-Then `/plotroom:land <n>` — a record goes through a pull request like everything else.
+Then `skill://plotroom-land` — a record goes through a pull request like everything
+else.
 
 If this decision contradicts something already in `docs/`, **do not fix that here**:
 record the contradiction on the tracker and let it be its own change.
 
 ## 4. Report
 
-The path, the number, the `Status`, the issues it names, and — if you wrote `Proposed` —
-the question I owe an answer to.
+The path, the number, the `Status`, the issues it names, and — if you wrote
+`Proposed` — the question the operator owes an answer to.

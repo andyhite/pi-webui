@@ -1,20 +1,23 @@
 ---
-description: Land this worktree's branch for an issue — rebase, prove, pull request, merge, clean up
+name: plotroom-land
+description: Land a finished PlotRoom worktree's branch — rebase, prove, open the pull request, merge it yourself, then clean up and move the board. Use once a change in ~/plotroom is implemented, proven, and reviewed, and is ready to reach main. Not an operator-invoked command — an agent finishing a tracked item runs this itself.
 ---
 
-Land the work in this worktree for issue **#$1**. `AGENTS.md` in `~/plotroom` wins on
-any conflict; `skill://plotroom-tracker` has the board verbs.
+# Landing a branch
+
+Land the work in the current worktree for its tracked issue. `AGENTS.md` in
+`~/plotroom` wins on any conflict; `skill://plotroom-tracker` has the board verbs.
 
 **Nothing reaches `main` except through a pull request you merge yourself.** No direct
-push, no local fast-forward, no exception for one line. The one thing that bypasses it
-is `pnpm release`, and that is not this command.
+push, no local fast-forward, no exception for one line. The one thing that bypasses
+this is `pnpm release`, and that is not this.
 
 Refuse and say why if any of these is true:
 
 - cwd is the primary checkout (`git rev-parse --show-toplevel` is `~/plotroom`);
 - the working tree is dirty;
 - `pnpm verify` has never been green on this branch;
-- the change has not been exercised — not merely compiled (`/plotroom:smoke`).
+- the change has not been exercised — not merely compiled (`skill://plotroom-smoke`).
 
 ## 1. Rebase, then prove
 
@@ -27,6 +30,8 @@ pnpm verify
 
 Plus `pnpm --filter @plotroom/web e2e` if you touched a surface that suite covers. A
 rebase that produced conflicts invalidates the earlier run — this one is what counts.
+This is the terminal gate: it runs once here (and once more only if the rebase below
+moves again while you wait), never per commit during implementation.
 
 ## 2. Open the pull request
 
@@ -51,7 +56,7 @@ EOF
 ## 3. Review, then merge
 
 Somebody who did not write the change reads it, and **the review goes on the pull
-request** — `/plotroom:review <n>` dispatches it and posts the verdict. Fix the
+request** — `skill://plotroom-review` dispatches it and posts the verdict. Fix the
 blockers, squash the fixes into the commits that introduced them, and say on the
 thread what you fixed. Then:
 
@@ -86,5 +91,3 @@ merged.
 The commit sha on `main`, the pull request number, the issue closed, the board moved,
 the worktree and branch gone — and anything the next session needs that you recorded on
 an issue rather than here.
-
-Extra arguments, if any, are constraints on this run: $@
