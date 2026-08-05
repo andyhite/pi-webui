@@ -83,7 +83,12 @@ Husky hooks run locally and CI repeats them:
   format, commitlint over the pull request's range, the subject a squash merge will
   write, and a job that rejects merge commits.
 - `.github/workflows/ci.yml` — the code checks (typecheck, lint, test, e2e, the compile
-  matrix, the Windows install), skipped for a change confined to prose.
+  matrix), skipped for a change confined to prose, and each job gated on whether the
+  change reaches it: `turbo ls --affected` decides, so a change to `packages/core`
+  runs the compile matrix and a change to `apps/desktop` runs neither it nor e2e.
+- `.github/workflows/install.yml` — the Windows install and its SQLite round trip, on
+  a paths filter, because installing is the one job whose whole surface is a list of
+  manifests.
 
 The renderer is one web app. Desktop and browser are two ways to load it; never fork the UI per target.
 
