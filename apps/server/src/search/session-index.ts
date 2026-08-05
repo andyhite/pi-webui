@@ -34,10 +34,20 @@ export function reindexSessionSearch(
 
   const title = resolveSessionTitle(stores, stored.session.commandId);
 
-  const body =
+  const transcriptBody =
     stored.transcriptObjectId === null
       ? ""
       : stores.objects.read(stored.transcriptObjectId).renderings.agentContent;
+  // The plan is searchable too (§6.8, §3.6): folded into the same indexed
+  // body rather than a second row, because a search result is one hit per
+  // session, not one per document that happens to live on it.
+  const planBody =
+    stored.planObjectId === null
+      ? ""
+      : stores.objects.read(stored.planObjectId).renderings.agentContent;
+  const body = [transcriptBody, planBody]
+    .filter((text) => text !== "")
+    .join("\n\n");
 
   stores.search.index({
     title,

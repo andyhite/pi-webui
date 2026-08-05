@@ -262,6 +262,30 @@ const scriptedObservation = z.discriminatedUnion("kind", [
     message: z.string(),
     fatal: z.boolean().default(false),
   }),
+  // Test-enablement only (#152, #150): lets a script exercise the plan
+  // fold and its consumers (search, the plan document) without a real
+  // runtime. Mirrors core's TodoTaskSnapshot/TodoPhaseSnapshot exactly.
+  z.object({
+    kind: z.literal("plan-updated"),
+    phases: z.array(
+      z.object({
+        name: z.string(),
+        tasks: z.array(
+          z.object({
+            content: z.string(),
+            status: z.enum([
+              "pending",
+              "in_progress",
+              "completed",
+              "abandoned",
+              "blocked",
+            ]),
+            blocker: z.string().optional(),
+          }),
+        ),
+      }),
+    ),
+  }),
 ]);
 
 /**

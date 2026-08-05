@@ -54,6 +54,48 @@ const oneTurn: RuntimeScript = {
   ],
 };
 
+/** A script that updates the plan, streams one turn, and ends the session. */
+const oneTurnWithPlan: RuntimeScript = {
+  acts: [
+    {
+      on: "start",
+      steps: [
+        {
+          observation: {
+            kind: "plan-updated",
+            phases: [
+              {
+                name: "Implementation",
+                tasks: [
+                  {
+                    content: "chase the ferret out of the login form",
+                    status: "in_progress",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        { observation: { kind: "turn-started", turn: 1 } },
+        { observation: { kind: "output-delta", text: "on it" } },
+        {
+          observation: {
+            kind: "turn-ended",
+            turn: 1,
+            usage: { inputTokens: 10, outputTokens: 10, costUsd: 0.001 },
+          },
+        },
+        {
+          observation: {
+            kind: "session-ended",
+            reason: { kind: "ended-by-user" },
+          },
+        },
+      ],
+    },
+  ],
+};
+
 describe("search (§6.8)", () => {
   it("finds a session by its command's title, ranks the title above a body-only hit, and reports its workstream's location", async () => {
     const harness = await boot(repository());
@@ -106,6 +148,23 @@ describe("search (§6.8)", () => {
     const found = await harness.ok(
       `/search?q=${encodeURIComponent("assertion")}`,
     );
+    const hits = list(found, "hits");
+
+    expect(hits.map((hit) => at(hit, "refId"))).toContain(sessionId);
+  });
+
+  it("indexes the plan alongside the transcript, findable by a word only the plan said (§3.6, §6.8)", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness, {
+      lifecycle: "open",
+      name: "Unrelated command name",
+    });
+
+    const started = await run(harness, fixture.commandId, oneTurnWithPlan);
+    const sessionId = str(started, "session.id");
+    await endedSession(harness, sessionId);
+
+    const found = await harness.ok(`/search?q=${encodeURIComponent("ferret")}`);
     const hits = list(found, "hits");
 
     expect(hits.map((hit) => at(hit, "refId"))).toContain(sessionId);

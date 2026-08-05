@@ -2132,4 +2132,23 @@ export const migrations: readonly Migration[] = [
       DROP TABLE object_system_safe;
     `,
   },
+  {
+    id: 34,
+    name: "session_plan",
+    sql: `
+      -- The runtime's plan, projected as a \`document\` object (§3.1: not a
+      -- tenth concept) and versioned by the same checkpoint rule as the
+      -- transcript (§3.6) — one publish event, two projections of one
+      -- observation log, so the plan's version lives on the transcript's own
+      -- publication row rather than a second ordinal-counting mechanism.
+      ALTER TABLE sessions ADD COLUMN plan_object_id TEXT REFERENCES objects (id);
+
+      -- Nullable: a session with no plan yet (nothing has called \`todo\`)
+      -- publishes a transcript version with no plan version beside it.
+      ALTER TABLE session_transcript_publications
+        ADD COLUMN plan_object_id TEXT REFERENCES objects (id);
+      ALTER TABLE session_transcript_publications
+        ADD COLUMN plan_version_id TEXT REFERENCES object_versions (id);
+    `,
+  },
 ];

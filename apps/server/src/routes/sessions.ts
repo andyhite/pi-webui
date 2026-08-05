@@ -83,6 +83,7 @@ export function sessionRoutes(
       runId: stored.runId,
       workspaceId: stored.workspaceId,
       transcriptObjectId: stored.transcriptObjectId,
+      planObjectId: stored.planObjectId,
       // Derived now, from the log — the stored phase is a snapshot, and a read
       // is a good moment to say what silence has done to the health signal.
       // PlotRoom's own gates outrank whatever the runtime was last seen doing

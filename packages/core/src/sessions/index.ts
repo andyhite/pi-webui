@@ -27,6 +27,7 @@ export * from "./handoff.js";
 export * from "./injection.js";
 export * from "./outside-world.js";
 export * from "./phases.js";
+export * from "./plan.js";
 export * from "./questions.js";
 export * from "./runtime.js";
 export * from "./session.js";

@@ -12,6 +12,7 @@ import {
 import { manualClock, type ManualClock } from "@plotroom/core/testing";
 import { openDatabase, type PlotroomDatabase } from "./client.js";
 import { GraphStore } from "./graph-store.js";
+import { ObjectStore } from "./object-store.js";
 import { SessionStore } from "./session-store.js";
 import { WorkstreamStore } from "./workstream-store.js";
 
@@ -20,6 +21,7 @@ let state: PlotroomDatabase;
 let clock: ManualClock;
 let sessions: SessionStore;
 let graph: GraphStore;
+let objects: ObjectStore;
 let workstreamId: string;
 
 beforeEach(() => {
@@ -28,6 +30,7 @@ beforeEach(() => {
   clock = manualClock();
   sessions = new SessionStore(state, clock.now);
   graph = new GraphStore(state, clock.now);
+  objects = new ObjectStore(state, clock.now);
   workstreamId = new WorkstreamStore(state, clock.now).create({
     author: humanAuthor,
   }).id;
@@ -437,6 +440,119 @@ describe("the transcript", () => {
     expect(onEnd?.publication.throughTurn).toBe(2);
     expect(onEnd?.publication.trigger).toBe("session-end");
     expect(sessions.publications(session.id)).toHaveLength(2);
+  });
+});
+
+describe("the plan (§3.6, §3.1)", () => {
+  it("stays null until the first plan-updated observation, then versions on the transcript's own event", () => {
+    const { session } = startSession();
+
+    append(session.id, {
+      kind: "turn-started",
+      turn: 1,
+      at: millis(),
+    });
+
+    // A turn publishes nothing, and there is no plan yet either way.
+    expect(
+      sessions.publishTranscript(session.id, {
+        kind: "turn-ended",
+        at: clock.now(),
+        turn: 1,
+      }),
+    ).toBeNull();
+
+    append(
+      session.id,
+      {
+        kind: "plan-updated",
+        at: millis(),
+        phases: [
+          {
+            name: "Implementation",
+            tasks: [{ content: "wire the route", status: "in_progress" }],
+          },
+        ],
+      },
+      {
+        kind: "turn-ended",
+        turn: 1,
+        usage: { inputTokens: 1, outputTokens: 1 },
+        at: millis(),
+      },
+    );
+
+    const published = sessions.publishTranscript(session.id, {
+      kind: "checkpoint",
+      at: clock.now(),
+      by: humanAuthor,
+    });
+
+    expect(published?.planObjectId).not.toBeNull();
+    expect(sessions.get(session.id).planObjectId).toBe(published?.planObjectId);
+    expect(
+      objects.read(published?.planObjectId as string).renderings.agentContent,
+    ).toContain("wire the route");
+  });
+
+  it("re-versions the same plan object rather than writing a second one", () => {
+    const { session } = startSession();
+
+    append(
+      session.id,
+      {
+        kind: "plan-updated",
+        at: millis(),
+        phases: [
+          {
+            name: "Implementation",
+            tasks: [{ content: "wire the route", status: "in_progress" }],
+          },
+        ],
+      },
+      {
+        kind: "turn-ended",
+        turn: 1,
+        usage: { inputTokens: 1, outputTokens: 1 },
+        at: millis(),
+      },
+    );
+    const first = sessions.publishTranscript(session.id, {
+      kind: "checkpoint",
+      at: clock.now(),
+      by: humanAuthor,
+    });
+
+    append(
+      session.id,
+      {
+        kind: "plan-updated",
+        at: millis(),
+        phases: [
+          {
+            name: "Implementation",
+            tasks: [{ content: "wire the route", status: "completed" }],
+          },
+        ],
+      },
+      {
+        kind: "turn-ended",
+        turn: 2,
+        usage: { inputTokens: 1, outputTokens: 1 },
+        at: millis(),
+      },
+    );
+    const second = sessions.publishTranscript(session.id, {
+      kind: "checkpoint",
+      at: clock.now(),
+      by: humanAuthor,
+    });
+
+    expect(second?.planObjectId).toBe(first?.planObjectId);
+    expect(second?.planVersionId).not.toBe(first?.planVersionId);
+    expect(
+      objects.read(second?.planObjectId as string).renderings.agentContent,
+    ).toContain("[x] wire the route");
   });
 });
 

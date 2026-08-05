@@ -17,6 +17,7 @@ import {
   markDelivered,
   markRefused,
   newSessionId,
+  planRenderings,
   publishesVersion,
   reduceObservation,
   reduceTranscriptPublication,
@@ -64,6 +65,7 @@ import {
   type SessionInjectionRow,
   type SessionRow,
 } from "./schema.js";
+import { planFromObservations } from "./session-plan.js";
 import { transcriptFromObservations } from "./session-transcript.js";
 
 /**
@@ -113,6 +115,12 @@ export interface StoredSession {
   readonly runId: RunId | null;
   readonly workspaceId: WorkspaceId | null;
   readonly transcriptObjectId: ObjectId | null;
+  /**
+   * The plan's own object, versioned on the same publication row as the
+   * transcript (§3.6, migration 34). Null until the first `plan-updated`
+   * observation has been folded and a checkpoint or session end publishes it.
+   */
+  readonly planObjectId: ObjectId | null;
   /** The last derived phase, snapshotted from the fold over the log. */
   readonly phase: SessionPhase;
 }
@@ -173,6 +181,12 @@ export interface PublishTranscriptResult {
   readonly publication: TranscriptPublication;
   readonly objectId: ObjectId;
   readonly versionId: string;
+  /**
+   * The plan's own object/version from the same publish event, null when the
+   * session has folded no `plan-updated` observation yet (migration 34).
+   */
+  readonly planObjectId: ObjectId | null;
+  readonly planVersionId: string | null;
 }
 
 export class SessionStore {
@@ -703,6 +717,34 @@ export class SessionStore {
           .run();
       }
 
+      // The plan's own projection of the same log, on the same publish event
+      // (§3.6, migration 34) — null until the first `plan-updated`
+      // observation has been folded, so a session with no plan yet never
+      // gets an empty document for one.
+      const { phases } = planFromObservations(this.observations(sessionId));
+      const writtenPlan =
+        phases.length === 0
+          ? null
+          : stored.planObjectId === null
+            ? this.objects.write({
+                kind: "document",
+                title: `Plan · ${sessionId}`,
+                renderings: planRenderings(phases),
+                workstreamId: stored.session.workstreamId,
+              })
+            : this.objects.edit(stored.planObjectId, {
+                renderings: planRenderings(phases),
+                title: `Plan · ${sessionId}`,
+              });
+
+      if (writtenPlan !== null && stored.planObjectId === null) {
+        this.state.db
+          .update(sessions)
+          .set({ planObjectId: writtenPlan.objectId })
+          .where(eq(sessions.id, sessionId))
+          .run();
+      }
+
       this.state.db
         .insert(sessionTranscriptPublications)
         .values({
@@ -717,6 +759,8 @@ export class SessionStore {
               : null,
           objectId: written.objectId,
           versionId: written.versionId,
+          planObjectId: writtenPlan?.objectId ?? null,
+          planVersionId: writtenPlan?.versionId ?? null,
           at: publication.at,
         })
         .run();
@@ -725,6 +769,8 @@ export class SessionStore {
         publication,
         objectId: written.objectId as ObjectId,
         versionId: written.versionId,
+        planObjectId: (writtenPlan?.objectId ?? null) as ObjectId | null,
+        planVersionId: writtenPlan?.versionId ?? null,
       };
     });
   }
@@ -954,6 +1000,7 @@ function toStoredSession(row: SessionRow): StoredSession {
     runId: (row.runId ?? null) as RunId | null,
     workspaceId: (row.workspaceId ?? null) as WorkspaceId | null,
     transcriptObjectId: (row.transcriptObjectId ?? null) as ObjectId | null,
+    planObjectId: (row.planObjectId ?? null) as ObjectId | null,
     phase: JSON.parse(row.phaseJson) as SessionPhase,
   };
 }
