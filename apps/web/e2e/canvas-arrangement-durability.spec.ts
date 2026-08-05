@@ -386,22 +386,11 @@ test.describe("(c) a contained node's own arrangement", () => {
         {},
       );
       const id = workstream.workstream.id;
-      // The derived layout stacks children in rows, so the first is above the
-      // second. The lower one is the one dragged, deliberately: the derived
-      // rows put the second child against the frame's bottom edge, where a
-      // downward push would have nowhere to go — dragging upward pushes the
-      // upper child down, into room that exists.
-      const upper = await createCommandInWorkstream(
-        base,
-        id,
-        `${label} contained push subject`,
-      );
-      const lower = await createCommandInWorkstream(
-        base,
-        id,
-        `${label} contained drag subject`,
-      );
-      workstreams.push({ id, children: [upper, lower] });
+      const children = [
+        await createCommandInWorkstream(base, id, `${label} contained child a`),
+        await createCommandInWorkstream(base, id, `${label} contained child b`),
+      ];
+      workstreams.push({ id, children });
     }
 
     await page.goto(`${base}/`);
@@ -422,12 +411,39 @@ test.describe("(c) a contained node's own arrangement", () => {
       );
     }
     const workstreamId = subject.id;
-    const pushedId = subject.children[0] as string;
-    const draggedId = subject.children[1] as string;
 
     const containerWrapper = page.locator(
       `[data-testid="rf__node-${workstreamId}"]`,
     );
+
+    // **Which child is dragged is decided by where the layout actually put
+    // them, never by the order they were created in.** A container's children
+    // go through `gridPositions` with no `rowPriority`, so every child scores 0
+    // and the comparator falls through to `a.localeCompare(b)` on the node ids
+    // (`placement/derive.ts`) — random uuids, so creation order decided nothing
+    // and the old assignment was a coin flip that landed wrong here.
+    //
+    // It is a fatal coin flip, because the direction of the push is what this
+    // test asserts. The lower child is flush against the frame's bottom edge
+    // (the second derived row overflows the frame, #206), and a downward push
+    // correctly has nowhere to go: `contained-push.ts` leaves the overlap
+    // rather than shoving a child through its own workstream's wall. Dragging
+    // the lower child *upward* pushes the upper one into room that exists.
+    const relativeY = async (id: string): Promise<number> => {
+      const child = await flowPosition(
+        page.locator(`[data-testid="rf__node-${id}"]`),
+      );
+      const frame = await flowPosition(containerWrapper);
+      return child.y - frame.y;
+    };
+    const [first, second] = subject.children as [string, string];
+    const byRow =
+      (await relativeY(first)) < (await relativeY(second))
+        ? { upper: first, lower: second }
+        : { upper: second, lower: first };
+    const pushedId = byRow.upper;
+    const draggedId = byRow.lower;
+
     const draggedWrapper = page.locator(
       `[data-testid="rf__node-${draggedId}"]`,
     );
@@ -447,19 +463,36 @@ test.describe("(c) a contained node's own arrangement", () => {
 
     const pushedBefore = await relativeOf(pushedWrapper);
 
-    // Land the dragged child on its sibling: inside a container the push is
-    // the same rigid-body rule as the top level (§5), and this is the half of
-    // it that used to stop at the container's edge.
+    // Land the dragged child **overlapping** its sibling, still below it:
+    // inside a container the push is the same rigid-body rule as the top level
+    // (§5), and this is the half of it that used to stop at the container's
+    // edge.
+    //
+    // The gap is what makes the outcome one thing rather than two. `separate`
+    // pushes along the axis of least penetration and away from the *mover's*
+    // centre (`solver/push.ts`), so a card landed exactly on its sibling has
+    // equal centres and the `>=` tie-break sends the sibling **down**, while a
+    // drag that arrives a pixel short sends it **up**. Dropping precisely on
+    // top therefore makes the direction a function of sub-pixel drag arrival —
+    // it passed locally and pushed the other way in CI. Stopping deliberately
+    // short leaves 68px of overlap with the centres a clear 40px apart, so the
+    // sibling is pushed up, and up is where the room is.
+    const OVERLAP_GAP = 40;
     const from = await draggedCard.boundingBox();
     const onto = await pushedCard.boundingBox();
     if (!from || !onto) throw new Error("a contained card had no bounding box");
+    expect(OVERLAP_GAP).toBeLessThan(onto.height);
     await dragNodeBy(page, draggedCard, {
       x: onto.x - from.x,
-      y: onto.y - from.y,
+      y: onto.y - from.y + OVERLAP_GAP,
     });
 
     const pushedAfter = await relativeOf(pushedWrapper);
+    // Not merely "it moved": the direction is the thing this test exists to
+    // get right, and an inverted rule would move the sibling the same distance
+    // the other way and satisfy a bare inequality.
     expect(pushedAfter).not.toEqual(pushedBefore);
+    expect(pushedAfter.y).toBeLessThan(pushedBefore.y);
 
     // Persisted on the **server**, and as an offset inside the container
     // rather than an absolute position — which is exactly what the canvas
