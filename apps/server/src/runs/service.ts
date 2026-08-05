@@ -32,7 +32,6 @@ import {
   type SessionLaunchChoices,
   type SessionRuntimeAdapter,
   type SessionStatus,
-  type VersionId,
   type Workspace,
   type WorkspaceKind,
   type WorkspaceKindConfig,
@@ -51,6 +50,7 @@ import { driveSession } from "../sessions/driver.js";
 import type { SessionHub } from "../sessions/hub.js";
 import type { ApiStores } from "../routes/api.js";
 import { toCommandNode, toEdge, toPlacedNode } from "../routes/mappers.js";
+import { announceTranscriptPublished } from "../routes/announce.js";
 import { reindexSessionSearch } from "../search/session-index.js";
 import type { BudgetService } from "../budgets/service.js";
 import type { ClaimService } from "../claims/service.js";
@@ -1889,15 +1889,12 @@ export class RunService {
     });
 
     if (published) {
-      bus.publish({
-        entity: "session_transcript",
-        verb: "created",
-        sessionId: sessionId as SessionId,
-        publication: published.publication,
-        objectId: published.objectId,
-        versionId: published.versionId as VersionId,
-        author: sessionAuthor(sessionId as SessionId),
-      });
+      announceTranscriptPublished(
+        bus,
+        sessionId,
+        published,
+        sessionAuthor(sessionId as SessionId),
+      );
     }
 
     reindexSessionSearch(stores, sessionId);

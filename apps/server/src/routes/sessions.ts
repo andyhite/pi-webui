@@ -8,8 +8,6 @@ import {
   sessionTimeline,
   systemMillisClock,
   transcriptRenderings,
-  type SessionId,
-  type VersionId,
 } from "@plotroom/core";
 import { destroySession } from "../approvals/destruction.js";
 import type { ClaimService } from "../claims/service.js";
@@ -17,7 +15,10 @@ import { atomically } from "../events/atomic.js";
 import { validateJsonBody } from "../http/validate.js";
 import type { RunService } from "../runs/service.js";
 import { reindexSessionSearch } from "../search/session-index.js";
-import { announceRestoration } from "./announce.js";
+import {
+  announceRestoration,
+  announceTranscriptPublished,
+} from "./announce.js";
 import {
   actorOf,
   body,
@@ -219,16 +220,7 @@ export function sessionRoutes(
     // A checkpoint versions the transcript (§3.6); catch the search index up
     // to it, same as session end does.
     reindexSessionSearch(stores, id);
-
-    stores.bus.publish({
-      entity: "session_transcript",
-      verb: "created",
-      sessionId: id as SessionId,
-      publication: published.publication,
-      objectId: published.objectId,
-      versionId: published.versionId as VersionId,
-      author,
-    });
+    announceTranscriptPublished(stores.bus, id, published, author);
 
     return c.json({ published });
   });

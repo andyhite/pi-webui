@@ -1,5 +1,5 @@
-import type { Author } from "@plotroom/core";
-import type { NodeRemoval } from "@plotroom/db";
+import type { Author, SessionId, VersionId } from "@plotroom/core";
+import type { NodeRemoval, PublishTranscriptResult } from "@plotroom/db";
 import type { EventSink } from "../events/bus.js";
 import { toEdge, toPlacedNode } from "./mappers.js";
 
@@ -64,4 +64,31 @@ export function announceRestoration(
       author,
     });
   }
+}
+
+/**
+ * The one shape a transcript's `session_transcript created` event takes,
+ * wherever the transcript versions (checkpoint gesture, session end, a
+ * crashed session finalized on the way out) — extracted so those three call
+ * sites cannot drift on the event's fields (#70). `publishTranscript` itself
+ * already returns `null` for "nothing new" (§3.6); this only ever announces
+ * an actual publication, so callers still decide for themselves whether a
+ * null result skips reindexing or not — that choice differs by caller on
+ * purpose and stays theirs.
+ */
+export function announceTranscriptPublished(
+  sink: EventSink,
+  sessionId: string,
+  published: PublishTranscriptResult,
+  author: Author,
+): void {
+  sink.publish({
+    entity: "session_transcript",
+    verb: "created",
+    sessionId: sessionId as SessionId,
+    publication: published.publication,
+    objectId: published.objectId,
+    versionId: published.versionId as VersionId,
+    author,
+  });
 }
