@@ -1,7 +1,7 @@
 /**
- * Escape-hatch CSS for the primitive set (#102, decision 0002 §5): the two
- * rules a plain utility cannot express because each is a pseudo-class paired
- * with a token that is itself a shorthand (a border, not a colour).
+ * Escape-hatch CSS for the primitive set (#102, decision 0002 §5): a
+ * pseudo-class paired with a token that is itself a shorthand (a border, not
+ * a colour), and a keyframe — the two shapes a plain utility cannot express.
  *
  * Everything else a primitive needs — colour, radius, shadow, font-family —
  * has a Tailwind utility already, because `theme.generated.css`'s `@theme
@@ -28,5 +28,17 @@
   .pr-focus-ring:focus-visible {
     outline: var(--pr-focus-ring);
     outline-offset: var(--pr-focus-ring-offset);
+  }
+
+  /*
+   * `Spinner`'s continuous rotation (#102) — a keyframe, which a utility
+   * cannot express, and the one animation in the system that is not §10's
+   * hover/press/state tween (the spinner signals "still running", not a
+   * state change).
+   */
+  @keyframes pr-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 }
