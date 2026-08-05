@@ -35,15 +35,11 @@ export type { RuntimeScript, ScriptedSubmission } from "./scripted.js";
  * otherwise be a way to fake work in a real installation: with
  * `PLOTROOM_RUNTIME` unset there is no such adapter to name.
  *
- * The session host (issue #73) is opt-in because it is not finished. Its
- * permission gate is issue #81, so `OMP_CAPABILITIES.enforcesPermissions` is
- * still false and `checkPermissionEnforcement` refuses **every** verb that would
- * produce a live session on it — start, resume and fork alike, loudly, at the
- * gesture, which is the C6 rule doing its job rather than a gap to remember.
- * Naming one verb here is how that gap hid the first time: the check was in
- * `start` alone, and a handoff, a resume and both fork branches went round it.
- * Selecting this runtime therefore boots a server that spawns nothing until #81
- * lands; the log below says so rather than leaving it to be discovered.
+ * The session host (issue #73) is opt-in while it is still catching up to pi's
+ * feature set. Its permission gate (issue #81) is wired and asserted at boot
+ * (`OMP_CAPABILITIES.enforcesPermissions` is true, and the sidecar refuses to
+ * accept a prompt until its own gate handler denies a synthetic call), so a
+ * session on it runs gated exactly like one on pi.
  */
 export function createRuntimeRegistry(
   config: ServerConfig,
@@ -76,10 +72,9 @@ export function createRuntimeRegistry(
       }),
       { default: true },
     );
-    logger.warn(
-      "session-host runtime selected, but its permission gate is not wired yet (issue #81): every run will be refused as permissions_advisory_only",
-      { program: config.runtime.sessionHostProgram },
-    );
+    logger.info("session-host runtime selected", {
+      program: config.runtime.sessionHostProgram,
+    });
     return registry;
   }
 

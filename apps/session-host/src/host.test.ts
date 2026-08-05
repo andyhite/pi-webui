@@ -7,6 +7,7 @@ import {
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent";
 
 import { runSessionHost, type HostedSession } from "./host.js";
+import { createRequestBridge, type RequestBridge } from "./request-bridge.js";
 
 /** The SDK session, replayed: what the loop did to it is what is under test. */
 class FakeSession implements HostedSession {
@@ -140,20 +141,26 @@ interface Harness {
   readonly input: FakeInput;
   readonly frames: SessionHostEvent[];
   readonly run: Promise<void>;
+  readonly requestBridge: RequestBridge;
 }
 
 function host(): Harness {
   const session = new FakeSession();
   const input = new FakeInput();
   const frames: SessionHostEvent[] = [];
+  const requestBridge = createRequestBridge(
+    (frame) => frames.push(frame),
+    () => 1_000,
+  );
   const run = runSessionHost({
     session,
     ref: session.sessionFile,
     writeFrame: (frame) => frames.push(frame),
     input,
     now: () => 1_000,
+    requestBridge,
   });
-  return { session, input, frames, run };
+  return { session, input, frames, run, requestBridge };
 }
 
 /** Let the loop drain what has been pushed. */
@@ -388,9 +395,9 @@ describe("the session host loop", () => {
   });
 
   it("refuses an answer to a request nothing raised", async () => {
-    // The gate is issue #81 and owns the pending-call registry an answer
-    // settles. A silent success here would tell PlotRoom a blocked call had been
-    // released when nothing was blocked.
+    // A silent success here would tell PlotRoom a blocked call had been
+    // released when nothing was blocked — or blocked twice, for a second
+    // `respond` naming an id the bridge already settled.
     const harness = host();
     harness.input.send({
       type: "respond",
@@ -404,6 +411,69 @@ describe("the session host loop", () => {
       type: "nack",
       id: "c1",
       error: "no request req-1 is pending in this session",
+    });
+
+    harness.input.end();
+    await harness.run;
+  });
+
+  it("settles a request the gate or the ask tool raised, and acks (issue #81)", async () => {
+    const harness = host();
+
+    // Stands in for the permission gate's `bridge.raise` — the request-raised
+    // frame it emits is the same fact whichever caller raised it.
+    const answered = harness.requestBridge.raise({
+      kind: "tool-permission",
+      toolName: "bash",
+      input: { command: "ls" },
+    });
+
+    const raisedFrame = harness.frames.find(
+      (frame) =>
+        frame.type === "observation" &&
+        frame.observation.kind === "request-raised",
+    );
+    const rawRequestId =
+      raisedFrame?.type === "observation" &&
+      raisedFrame.observation.kind === "request-raised"
+        ? raisedFrame.observation.requestId
+        : undefined;
+    expect(rawRequestId).toBeDefined();
+    const requestId = rawRequestId as string;
+
+    harness.input.send({
+      type: "respond",
+      id: "c1",
+      requestId,
+      outcome: { kind: "allow" },
+    });
+    await settle();
+
+    expect(harness.frames).toContainEqual({ type: "ack", id: "c1" });
+    expect(await answered).toEqual({ kind: "allow" });
+    expect(harness.frames).toContainEqual({
+      type: "observation",
+      observation: {
+        kind: "request-settled",
+        requestId,
+        outcome: { kind: "allow" },
+        at: 1_000,
+      },
+    });
+
+    // A second `respond` for the same id is now "nothing pending", not a
+    // second success.
+    harness.input.send({
+      type: "respond",
+      id: "c2",
+      requestId,
+      outcome: { kind: "allow" },
+    });
+    await settle();
+    expect(harness.frames).toContainEqual({
+      type: "nack",
+      id: "c2",
+      error: `no request ${requestId} is pending in this session`,
     });
 
     harness.input.end();

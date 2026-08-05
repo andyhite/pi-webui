@@ -126,12 +126,13 @@ export const OMP_CAPABILITIES: RuntimeCapabilities = {
   // and carried onto the turn's usage, so the meter reports rather than
   // estimates.
   reportsContextWindow: true,
-  // The gate is issue #81: an inline tool-call extension calling back into
-  // PlotRoom's decision path, with liveness asserted at boot rather than
-  // configured. Until that lands and is proven, this adapter says it cannot
-  // enforce a decision — and `checkPermissionEnforcement` is what refuses to
-  // run work on it, so no session can be started ungated by accident.
-  enforcesPermissions: false,
+  // The gate is an inline `tool_call` extension bridging back to PlotRoom's
+  // decision path over the frame channel (issue #81), with a non-negotiable
+  // boot assertion: the sidecar refuses to accept a prompt unless its own
+  // gate handler denies a synthetic call first (`main.ts`). A config change
+  // that unloaded the extension fails the assertion rather than silently
+  // making this claim false.
+  enforcesPermissions: true,
 };
 
 /** One live session-host process, as the adapter needs it. */

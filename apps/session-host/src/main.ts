@@ -1,6 +1,7 @@
 import { writeSync } from "node:fs";
 import {
   FRAME_FD,
+  OMP_ASK_TOOL_NAME,
   resolveOmpForkTarget,
   type SessionHostEvent,
 } from "@plotroom/core";
@@ -10,8 +11,14 @@ import {
   createAgentSession,
 } from "@oh-my-pi/pi-coding-agent";
 import { parseThinkingLevel } from "@oh-my-pi/pi-coding-agent/thinking";
+import { createAskToolExtension } from "./ask-tool.js";
 import { parseSessionHostArgs } from "./args.js";
 import { runSessionHost } from "./host.js";
+import {
+  BOOT_ASSERTION_TOOL_NAME,
+  createPermissionGateHandler,
+} from "./permission-gate.js";
+import { createRequestBridge, type RequestBridge } from "./request-bridge.js";
 import { PINNED_TOOL_NAMES } from "./tools.js";
 import { dispatchWorkerSelector } from "./worker-dispatch.js";
 
@@ -108,6 +115,7 @@ async function main(): Promise<number> {
   }
 
   let session;
+  let bridge: RequestBridge;
   try {
     const sessionManager =
       args.resume === null
@@ -115,6 +123,9 @@ async function main(): Promise<number> {
         : await SessionManager.open(args.resume, args.sessionDir, undefined, {
             initialCwd: args.cwd,
           });
+
+    bridge = createRequestBridge(writeFrame, () => Date.now());
+    const gateHandler = createPermissionGateHandler(bridge);
 
     const created = await createAgentSession({
       cwd: args.cwd,
@@ -148,8 +159,74 @@ async function main(): Promise<number> {
       // behind PlotRoom's back.
       agentRegistry: new AgentRegistry(),
       sessionManager,
+      // The permission gate (§3.4/§6.6, C6) and §6.4's questions, both bridged
+      // to PlotRoom over the frame channel rather than answered in-process —
+      // the decision path is `apps/server/src/sessions/gate.ts`'s, in the
+      // server this sidecar is not (issue #81).
+      extensions: [
+        (pi) => pi.on("tool_call", gateHandler),
+        createAskToolExtension(bridge),
+      ],
     });
     session = created.session;
+
+    // The boot assertion, non-negotiable (issue #81): `enforcesPermissions`
+    // is a claim about this process, and a claim a config change can falsify
+    // silently is worse than no claim at all (principle 7). Both halves run
+    // before anything may reach the model.
+    if (created.extensionsResult.errors.length > 0) {
+      writeFrame({
+        type: "fatal",
+        message: `the session host's own extensions failed to load: ${created.extensionsResult.errors.map((error) => error.error).join("; ")}`,
+      });
+      return 4;
+    }
+    const askToolLoaded = created.extensionsResult.extensions.some((ext) =>
+      ext.tools.has(OMP_ASK_TOOL_NAME),
+    );
+    if (!askToolLoaded) {
+      writeFrame({
+        type: "fatal",
+        message: `the session host's own ${OMP_ASK_TOOL_NAME} tool did not load`,
+      });
+      return 4;
+    }
+    // Not just "some extension loaded without errors": a future change that
+    // dropped the gate factory from `extensions` while keeping the ask tool's
+    // would still pass both checks above and run every call ungated. This
+    // checks the *exact* function reference the SDK's own loader stores
+    // (`ExtensionAPI.on` pushes the handler verbatim, no wrapping), so only
+    // this gate — the one about to be probed below — counts as loaded.
+    const gateWired = created.extensionsResult.extensions.some((ext) =>
+      // `HandlerFn` is `(...args: unknown[]) => Promise<unknown>` and not
+      // exported — the cast is to that shape, not away from type safety: the
+      // check is identity (`includes`), which needs no narrower type.
+      (ext.handlers.get("tool_call") ?? []).includes(
+        gateHandler as unknown as (...args: unknown[]) => Promise<unknown>,
+      ),
+    );
+    if (!gateWired) {
+      writeFrame({
+        type: "fatal",
+        message:
+          "the session host's own permission gate did not register its tool_call handler",
+      });
+      return 4;
+    }
+    const probe = await gateHandler({
+      type: "tool_call",
+      toolName: BOOT_ASSERTION_TOOL_NAME,
+      toolCallId: "boot-assertion",
+      input: {},
+    });
+    if (probe.block !== true) {
+      writeFrame({
+        type: "fatal",
+        message:
+          "the session host's permission gate did not deny its own boot assertion",
+      });
+      return 4;
+    }
   } catch (error) {
     writeFrame({
       type: "fatal",
@@ -214,6 +291,7 @@ async function main(): Promise<number> {
       writeFrame,
       input: stdinChunks(),
       now: () => Date.now(),
+      requestBridge: bridge,
     });
     return 0;
   } finally {
