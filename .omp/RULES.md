@@ -12,12 +12,16 @@ that must stay in view.
 - **Move tracked state the moment it changes** — claim before your first edit,
   record a blocker when it becomes true, close when the work lands. Work tracking
   lives outside this repository; an item nobody moved reads as work available.
-- **Conventional Commits**, one logical change per commit. `main` is fast-forward
-  only: rebase onto it immediately before landing, and never merge it into a branch.
+- **Nothing reaches `main` except through a pull request**, which its author merges
+  once the checks are green and the review is answered. No direct push, no local
+  fast-forward, no exception for one line. `main` stays linear: squash or rebase,
+  never a merge commit, and rebase onto `main` immediately before merging.
+- **Conventional Commits**, one logical change per commit.
 - **Green `pnpm verify` is not proof.** It shows nothing broke, not that what you
-  built works — exercise the change itself, and run
+  built works — exercise the change itself (`docs/development.md`), and run
   `pnpm --filter @plotroom/web e2e` when you touched a surface it covers.
-- **Somebody who did not write the change reads it** before it lands.
+- **Somebody who did not write the change reads it** before it lands, and the review
+  is recorded on the pull request.
 - **Rules are enforced, not documented.** One predicate in `@plotroom/core`, called
   by every surface; never re-derive a rule at a call site.
 - **Never truncate silently.** Content that was cut says so.

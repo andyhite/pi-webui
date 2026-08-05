@@ -33,12 +33,17 @@ workspace builds, typechecks and tests normally. Install it from
 
 | Command        | Does                                                       |
 | -------------- | ---------------------------------------------------------- |
+| `pnpm dev`     | the product: server on 4600, renderer on **4601**          |
 | `pnpm verify`  | everything CI checks — run before pushing                  |
 | `pnpm build`   | `tsc -b` across the project graph                          |
 | `pnpm test`    | Vitest                                                     |
 | `pnpm lint`    | ESLint                                                     |
 | `pnpm format`  | Prettier, writing changes                                  |
 | `pnpm compile` | the session host as this platform's standalone binary, run |
+
+[`docs/development.md`](docs/development.md) is the runbook behind that first row —
+what `pnpm dev` starts, why the page is on 4601, what the product needs before it can
+run any work, how to exercise a change, and the shape each kind of change takes.
 
 `pnpm compile` is not part of `verify`: it produces ~400MB (the binary plus the
 agent SDK's native addon staged beside it) for the platform it runs on, and only
@@ -65,15 +70,33 @@ directory. A worktree you did not create is another session's: never write to on
    git worktree add ../plotroom-feat-session-delete -b feat/session-delete origin/main
    ```
 2. **Commit** in small, single-purpose Conventional Commits (see below).
-3. **Verify** — `pnpm verify`, plus the e2e suite when you touched surfaces it covers.
-4. **Review.** Somebody who did not write the change reads it (see "Review expectations").
-5. **Rebase** onto `main` immediately before landing — another agent may have landed meanwhile — and never merge `main` into your branch.
+3. **Verify** — `pnpm verify`, plus the e2e suite when you touched surfaces it covers,
+   and then **exercise the change itself** ([`docs/development.md`](docs/development.md)).
+4. **Rebase** onto `main` — another agent may have landed meanwhile — and never merge
+   `main` into your branch.
    ```sh
-   git fetch origin
-   git rebase origin/main
+   git fetch origin && git rebase origin/main
    ```
-6. **Land** as a fast-forward or a squash. No merge commits.
-7. **Clean up** your branch and its worktree. Yours only: leave every other worktree alone.
+5. **Open the pull request.** Its body says what changed, why, and how it was exercised.
+   ```sh
+   git push -u origin HEAD
+   gh pr create
+   ```
+6. **Review, then merge it yourself** when the checks are green and the review is
+   answered. Somebody who did not write the change reads it (see "Review
+   expectations") and the review goes on the pull request; then rebase again if `main`
+   moved while you waited. Nothing reaches `main` any other way.
+   ```sh
+   gh pr checks --watch
+   gh pr merge --squash --subject "type(scope): description"   # --rebase when every commit stands alone
+   ```
+7. **Clean up** your worktree and local branch — GitHub deletes the remote one on
+   merge. Yours only: leave every other worktree alone.
+   ```sh
+   git -C ~/plotroom pull --ff-only
+   cd ~/plotroom && git worktree remove ../plotroom-feat-session-delete && git worktree prune
+   git branch -D feat/session-delete    # -D: a squash merge leaves no merge ancestry
+   ```
 
 ## Commit messages
 
@@ -121,24 +144,47 @@ Refs: OXY-2982
 
 Bad: `updated stuff`, `WIP`, `Fix bug.`, `feat: Added new canvas feature.`
 
-## History policy: fast-forward only
+## History policy: pull requests, linear history
 
-`main` is a linear history.
+**Every change reaches `main` through a pull request, merged by its author.** No
+direct push, no local fast-forward, no exception for a one-line fix or a docs
+change — the commitlint-over-the-range and merge-commit checks only run on a pull
+request, so a change that skipped it skipped them.
 
-- **No merge commits on `main`**, from any source.
-- A branch lands as a **fast-forward** (already rebased on `main`) or as a **squash** into one Conventional Commit.
-- Integrate upstream work with `git rebase`, never `git merge`.
-- If a squash is used, the squashed subject must itself be a valid Conventional Commit — it becomes the permanent record.
+`main` is a linear history:
+
+- **No merge commits, from any source.** GitHub offers only squash and rebase here,
+  and CI rejects a merge commit in a pull request.
+- **Squash** when the branch is one logical change; **rebase** when each of its
+  commits stands alone and is itself a valid Conventional Commit. A squashed subject
+  becomes the permanent record, so it must be a real Conventional Commit.
+- Integrate upstream work with `git rebase`, never `git merge`, and rebase again
+  immediately before merging.
 
 ```sh
-# land from the worktree that holds the work; the remote refuses a non-fast-forward
-git fetch origin
-git rebase origin/main
-git push origin HEAD:main
+# from the worktree that holds the work
+git fetch origin && git rebase origin/main
+pnpm verify
+git push -u origin HEAD
+gh pr create
+gh pr checks --watch
+gh pr merge --squash --subject "type(scope): description"   # --rebase when every commit stands alone
 
 # then bring the primary checkout forward without ever switching its branch
 git -C ../plotroom pull --ff-only
 ```
+
+**Pass the squash subject yourself.** It becomes the permanent record and nothing lints
+it: commitlint runs over the branch's commits before the squash, and the default
+subject is the pull-request title with ` (#N)` appended, which is over 72 characters
+more often than not.
+
+The one thing that does not go through a pull request is a release: `pnpm release` cuts
+from `main` and commits there (decision 0003).
+
+You merge your own work. Nobody else is waiting to press the button, so a pull
+request whose checks are green and whose review is answered and which nobody merged
+is simply unfinished work.
 
 Never `git switch` or `git checkout` in the primary checkout — another agent or the
 operator may be relying on it, and switching it breaks every concurrent session at

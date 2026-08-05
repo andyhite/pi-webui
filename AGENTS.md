@@ -122,6 +122,33 @@ CHECK that only provenance edges may be `system`).
 **Stores take an injectable clock** (`ObjectStore(state, () => seconds)`).
 Retention, drift, and idempotency are untestable against a real clock.
 
+### The design gate — in force
+
+**Nothing in the product decides how it looks yet.** No authored CSS, no `className`,
+no CSS-in-JS, no colour system, no icon set, no typography, no theme: the only
+stylesheet in the tree is xyflow's. What exists instead is a small number of inline
+`style` props carrying **mechanics** — where a thing sits, and the minimum mark that
+makes a mechanic legible, such as the border that distinguishes the two selection
+concepts on a canvas node from each other. Black, white and a border width are that
+minimum; a palette, a font or a shadow is not.
+
+Add one only when a mechanic is invisible without it, and annotate it with the
+mechanic it serves — the existing sites read as "not a styling decision" precisely
+because they say so. This is also why plugins contribute a card as title, lines and
+actions rather than markup, and why a live region is rendered visible: hiding text is
+a visual decision too.
+
+The gate lifts when the design system lands (decision 0002 — `@plotroom/toolkit` does
+not exist yet, and neither does the Tailwind that record describes). Until then
+"it's just a colour" is the thing being refused.
+
+### How a change is made and proved
+
+[`docs/development.md`](docs/development.md) is how you run the product, exercise a
+change, and pick the shape it takes — six of them, each with the files in order, the
+example to copy, and the test the repo expects. Read it before your first commit in
+an area you have not touched before.
+
 ## Many agents work here at once
 
 Assume it. Several agents and the operator run against this repository at the
@@ -189,11 +216,49 @@ refactor(graph)!: address outputs as output@n
 BREAKING CHANGE: `output` references no longer resolve implicitly to latest.
 ```
 
-### History rules — fast-forward only
+### How work lands — a pull request, merged by its author
 
-- **`main` accepts fast-forward merges only. No merge commits, ever.**
-- A branch must land on `main` as either a **fast-forward** or a **squash** (a single Conventional Commit).
-- Rebase onto `main` to integrate upstream work — never merge `main` into a branch.
+**Nothing reaches `main` except through a pull request.** No direct push, no local
+fast-forward, no exception for a one-line fix or a docs change. The rule is not about
+approval — you merge your own work — it is about the checks: commitlint over the
+range and the merge-commit rejection are pull-request-scoped, so a change that
+skipped the pull request skipped them.
+
+The author merges, once **all four** are true:
+
+1. every check on the pull request is green;
+2. `pnpm verify` passed locally after the last rebase, plus
+   `pnpm --filter @plotroom/web e2e` when the change touches a surface it covers;
+3. the change was actually exercised, not merely compiled (see
+   [`docs/development.md`](docs/development.md));
+4. it has been read by somebody who did not write it — a person or an agent with
+   fresh context — and that review is recorded on the pull request, with its blockers
+   fixed.
+
+Nobody else is waiting to press the button. An unmerged pull request whose checks are
+green and whose review is answered is an item nobody has finished.
+
+**One exception, and it is a script rather than a person:** `pnpm release` cuts from
+`main`, commits `chore(release): vX.Y.Z` there with `ALLOW_MAIN_COMMIT=1`, and prints
+the push for the operator to run (decision 0003). A release is the one thing that
+writes to `main` without a pull request. Nothing else is.
+
+### History rules — linear, always
+
+- **`main` is a linear history. No merge commits, ever**, from any source. GitHub is
+  configured to offer only squash and rebase, and CI rejects a merge commit in a pull
+  request, so the rule is enforced rather than remembered.
+- Merge with **squash** when the branch is one logical change, or **rebase** when its
+  commits each stand alone and each is a valid Conventional Commit.
+- **A squashed subject is the permanent record, and nothing lints it.** CI runs
+  commitlint over the branch's own commits, before the squash; the release script later
+  refuses any range containing a commit commitlint rejects. So pass the subject
+  yourself — `gh pr merge --squash --subject "<type>(<scope>): <description>"` — rather
+  than accepting the default, which is the pull-request title with ` (#N)` appended and
+  is over 72 characters more often than not.
+- Rebase onto `main` to integrate upstream work — never merge `main` into a branch —
+  and rebase **immediately** before merging, because another agent may have landed
+  while your checks were running.
 - Recommended local config (already set in this clone; set it in yours):
   ```sh
   git config merge.ff only
@@ -241,14 +306,20 @@ Rules:
 - **Agents MUST do all work in a worktree and NEVER change the branch of the primary checkout.** No `git checkout`/`git switch` in the primary checkout, ever — another agent or the operator may be relying on it, and switching it breaks every concurrent session at once. Create a worktree for your branch and work there; if you find the primary checkout on anything other than `main`, report it rather than "fixing" it.
 - **A worktree you did not create belongs to another session.** Expect several to exist at once — one per change in flight, because a worktree lives until its branch lands. Read one if your task is to review it; never write to one: no edits, commits, installs, builds, or `git worktree remove`, not even for a branch that looks merged or abandoned (you cannot tell a landed branch from one mid-rebase). To run something against another branch's commit, check it out detached in a tree of your own. Anything else you find wrong with it is reported where work is tracked, not fixed in place.
 - Never create a worktree inside the repo directory.
-- One worktree per branch, and one agent per worktree; remove it when the branch lands: `git worktree remove ../plotroom-<branch>` then `git worktree prune`.
-- **Agents clean up after themselves — and only after themselves.** Once your work has merged to `main`, removing your worktree (and deleting the merged topic branch) is part of the task — not optional, not someone else's job. A task is not complete while its worktree still exists. The only worktree you remove is one you created, and not even that one if the operator or your orchestrator asked you to leave it in place.
+- One worktree per branch, and one agent per worktree; remove it once the pull request
+  has merged: `git worktree remove ../plotroom-<branch>` then `git worktree prune`.
+- **Agents clean up after themselves — and only after themselves.** Once your pull
+  request has merged, removing your worktree and its branch is part of the task — not
+  optional, not someone else's job (GitHub deletes the remote branch on merge; the
+  local branch and the worktree are yours). A task is not complete while its worktree
+  still exists. The only worktree you remove is one you created, and not even that one
+  if the operator or your orchestrator asked you to leave it in place.
 - The primary checkout stays on `main` and is never removed.
 
 ## Agent working agreement
 
 - **Assume other agents are working right now.** Their branches are the other worktrees, and those are off limits (see "Many agents work here at once").
-- Work in a worktree on a topic branch, never directly on `main` and never by switching the primary checkout's branch (see "Worktrees").
+- Work in a worktree on a topic branch, never directly on `main` and never by switching the primary checkout's branch (see "Worktrees"). Land it through a pull request you merge yourself (see "How work lands").
 - Keep commits small and single-purpose; one logical change per commit.
 - Do not commit generated artifacts, secrets, or local machine paths.
 - Never make a documentation edit a condition of merging unrelated work (see "Documentation").
@@ -259,9 +330,12 @@ Rules:
 
 - **`pnpm verify` green, plus `pnpm --filter @plotroom/web e2e` when the change
   touches a surface that suite covers.** Green verify alone never means done:
-  it proves nothing broke, not that the thing you built works.
+  it proves nothing broke, not that the thing you built works. How to run the product
+  and exercise a change is [`docs/development.md`](docs/development.md), which also
+  records the shape each kind of change takes and the test expected of it.
 - **Somebody who did not write the change reads it** before it lands — a person,
-  or an agent with fresh context.
+  or an agent with fresh context — and the review is recorded on the pull request,
+  because a review nobody can find is one the next reader has to redo.
 - Review judges the change against the spec sections it claims to implement and
   against the cross-cutting rules: the four §15 invariants wherever schema is
   touched, no silent truncation, rules **enforced rather than documented**, and
@@ -282,20 +356,32 @@ the only record of work inside it is `CHANGELOG.md`.
   contradiction is recorded where work is tracked and fixed on its own. The PR is
   not blocked by it; a contradiction nobody wrote down is the actual failure.
 - `docs/decisions/` holds decision records in prose (ADRs) when a decision deserves
-  more than the tracker, and `docs/architecture/` holds the subsystem notes — why
-  each area's schema and predicates are shaped as they are. `.omp/RULES.md` is the
-  handful of hard rules that must stay in view across a long session; it is a subset
-  of this file, never a second source of truth (a user-level `RULES.md` shadows it
-  rather than adding to it, which is the other reason the full statement of a rule
-  belongs here). `AGENTS.md` holds **standing conventions an agent must follow** —
-  not the decision archive.
+  more than the tracker — [its `README.md`](docs/decisions/README.md) is the house
+  style, including how a number is claimed while other lanes are writing records too.
+  `docs/architecture/` holds the subsystem notes: why each area's schema and
+  predicates are shaped as they are. `docs/development.md` is the runbook for running,
+  exercising and shaping a change. `.omp/RULES.md` is the handful of hard rules that
+  must stay in view across a long session; it is a subset of this file, never a second
+  source of truth (a user-level `RULES.md` shadows it rather than adding to it, which
+  is the other reason the full statement of a rule belongs here). `AGENTS.md` holds
+  **standing conventions an agent must follow** — not the decision archive.
+- **A doc's opening paragraph says what it is, who it is for, and whether it is still
+  true.** The four genres here — spec, contract, decision record, architecture note,
+  runbook — are read differently, and `docs/attention-contract.md` is the standing
+  example of the cost: a handoff note between two tracks, stamped with the weeks it was
+  written in, sitting in `docs/` as a permanent "contract".
 
 ## Repository layout
 
 ```
 docs/product-spec.md   Product specification (north star, behavior only)
+docs/development.md    Running it, proving a change, and the shape each change takes
 docs/architecture/     Per-subsystem notes — why each area is shaped as it is
-docs/decisions/        Decision records (ADRs), when a decision deserves prose
+docs/decisions/        Decision records (ADRs), and README.md for their house style
+docs/plugin-contract.md  The frozen v1 plugin contract
+docs/attention-contract.md  The attention read/write contract
+docs/deployment.md     Packaging, updates, remote backends, backup
+docs/design/           Designer reference, and checked-in design exports
 AGENTS.md              This file — canonical conventions
 .omp/RULES.md          The hard rules, re-attached near every turn
 CHANGELOG.md           Completed work, one section per release
