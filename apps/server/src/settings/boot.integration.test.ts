@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -167,6 +168,165 @@ describe("persisted host/port/allowNonLoopbackBind take effect on the next boot 
     expect(withAuth.status).toBe(200);
 
     void second;
+  });
+});
+
+/**
+ * #87: a stored `port` that is *legal* — it passes `checkBindPolicy` and the
+ * catalog's bound — can still be unbindable on this machine (already taken by
+ * something else). No bound can catch that ahead of time; only a failed
+ * `listen()` can, and boot must fall back to the env-derived default rather
+ * than exit on every subsequent boot.
+ */
+describe("a stored host/port that is legal but unbindable falls back and is reported (#87)", () => {
+  it("binds the env-derived port instead, and reports the stored one as ignored", async () => {
+    const dir = stateDir();
+    const firstPort = await ephemeralPort();
+    const occupiedPort = await ephemeralPort();
+
+    const { handle: first } = await boot(baseOverrides(dir, firstPort));
+    const written = await fetch(
+      `http://127.0.0.1:${firstPort}/api/settings/port`,
+      {
+        method: "PUT",
+        headers: {
+          origin: `http://localhost:${firstPort}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ value: occupiedPort }),
+      },
+    );
+    expect(written.status).toBe(200);
+    await first.close();
+    handles.pop();
+
+    // Something else holds `occupiedPort` for the whole of the second boot —
+    // a plain listener is enough, this is only about the port being taken.
+    const blocker = createServer();
+    await new Promise<void>((resolve) => {
+      blocker.listen(occupiedPort, "127.0.0.1", resolve);
+    });
+    try {
+      // Asked for `firstPort` again (free, since the first server released
+      // it) — the stored override still wins the *attempt*, but it cannot
+      // bind, so the server ends up on the env-derived default rather than
+      // failing to start at all.
+      const { handle: second, port: secondPort } = await boot(
+        baseOverrides(dir, firstPort),
+      );
+      expect(secondPort).toBe(firstPort);
+
+      const report = await fetch(
+        `http://127.0.0.1:${firstPort}/api/settings/port`,
+        { headers: { origin: `http://localhost:${firstPort}` } },
+      );
+      const body = (await report.json()) as {
+        setting: { overridden: boolean; ignoredReason?: string };
+      };
+      expect(body.setting.overridden).toBe(false);
+      expect(body.setting.ignoredReason).toMatch(
+        new RegExp(`${occupiedPort}.*could not be bound`),
+      );
+
+      void second;
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
+  });
+
+  it("attributes an unbindable port to the port alone, leaving a good host override standing", async () => {
+    // Both `host` and `port` are stored overrides here, and only one of them
+    // is actually the reason the bind fails — a single combined OS error
+    // cannot say which, so this proves the fallback isolates it rather than
+    // discarding a perfectly good override alongside the bad one.
+    const dir = stateDir();
+    const firstPort = await ephemeralPort();
+    const occupiedPort = await ephemeralPort();
+
+    const { handle: first } = await boot(baseOverrides(dir, firstPort));
+    for (const [key, value] of [
+      ["host", "localhost"],
+      ["port", occupiedPort],
+    ] as const) {
+      const res = await fetch(
+        `http://127.0.0.1:${firstPort}/api/settings/${key}`,
+        {
+          method: "PUT",
+          headers: {
+            origin: `http://localhost:${firstPort}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ value }),
+        },
+      );
+      expect(res.status, key).toBe(200);
+    }
+    await first.close();
+    handles.pop();
+
+    // No host argument: `localhost` resolves dual-stack on this machine
+    // (IPv6 `::1` ahead of `127.0.0.1`), so a blocker bound to one alone
+    // would leave the stored port bindable on the other — occupy both.
+    const blocker = createServer();
+    await new Promise<void>((resolve) => {
+      blocker.listen(occupiedPort, resolve);
+    });
+    try {
+      const { handle: second, port: secondPort } = await boot(
+        baseOverrides(dir, firstPort),
+      );
+      expect(secondPort).toBe(firstPort);
+
+      // The bound host is the overridden "localhost", not "127.0.0.1" —
+      // fetch through the same name so this resolves to whichever address
+      // (`::1` or `127.0.0.1`) actually ended up listening.
+      const hostReport = await fetch(
+        `http://localhost:${firstPort}/api/settings/host`,
+        { headers: { origin: `http://localhost:${firstPort}` } },
+      );
+      const hostBody = (await hostReport.json()) as {
+        setting: { overridden: boolean; ignoredReason?: string };
+      };
+      // The host override was never at fault, so it is still in effect —
+      // reverting only the port already fixed the bind.
+      expect(hostBody.setting.overridden).toBe(true);
+      expect(hostBody.setting.ignoredReason).toBeUndefined();
+
+      const portReport = await fetch(
+        `http://localhost:${firstPort}/api/settings/port`,
+        { headers: { origin: `http://localhost:${firstPort}` } },
+      );
+      const portBody = (await portReport.json()) as {
+        setting: { overridden: boolean; ignoredReason?: string };
+      };
+      expect(portBody.setting.overridden).toBe(false);
+      expect(portBody.setting.ignoredReason).toMatch(
+        new RegExp(`${occupiedPort}.*could not be bound`),
+      );
+
+      void second;
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
+  });
+
+  it("still fails a boot whose own config (not a stored override) cannot bind", async () => {
+    // Unchanged behaviour for the case #87 does not cover: nothing was
+    // overridden, so there is nothing to fall back to beyond what the caller
+    // already asked for.
+    const dir = stateDir();
+    const port = await ephemeralPort();
+    const { handle: first } = await boot(baseOverrides(dir, port));
+
+    const collision = startServer(
+      loadServerConfig({}, baseOverrides(stateDir(), port)),
+    );
+    handles.push(collision);
+    await expect(collision.listening).rejects.toMatchObject({
+      code: "EADDRINUSE",
+    });
+
+    void first;
   });
 });
 

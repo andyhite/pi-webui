@@ -136,6 +136,14 @@ export interface AppRuntime {
    * bind would be one whose failure is a product that will not start (§10.2).
    */
   readonly plugins: PluginService;
+  /**
+   * The settings service (§11), exposed so `apps/server/src/index.ts` can mark
+   * a stored `host`/`port` as ignored *after* the fact — the one case where
+   * whether an override "took" is not known until the socket says so
+   * (#87). Every other reason a value is ignored is known at boot, before this
+   * runs.
+   */
+  readonly settings: SettingsService;
 }
 
 /**
@@ -560,5 +568,6 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     integrations,
     integrationRefresh,
     plugins,
+    settings,
   };
 }
