@@ -17,10 +17,10 @@ import {
   type SessionId,
   type SessionObservationState,
   type SessionStatus,
-  type VersionId,
 } from "@plotroom/core";
 import type { SessionStore, StoredSession } from "@plotroom/db";
 import type { EventBus } from "../events/bus.js";
+import { announceTranscriptPublished } from "../routes/announce.js";
 import type { Logger } from "../logging/logger.js";
 import {
   parseSubmission,
@@ -376,15 +376,7 @@ async function endFromObservation(
   const author = sessionAuthor(input.sessionId as SessionId);
 
   if (published) {
-    deps.bus.publish({
-      entity: "session_transcript",
-      verb: "created",
-      sessionId: input.sessionId as SessionId,
-      publication: published.publication,
-      objectId: published.objectId,
-      versionId: published.versionId as VersionId,
-      author,
-    });
+    announceTranscriptPublished(deps.bus, input.sessionId, published, author);
   }
 
   const status = deps.sessions.status(input.sessionId, {
