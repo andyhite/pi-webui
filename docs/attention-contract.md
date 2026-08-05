@@ -17,6 +17,9 @@ Track B's Stage-2 wiring needs, in one place:
   `items` is the contract's list, already ranked and **already hidden**: muted and
   snoozed items are not in it. `states` is additive and only for a surface that
   wants to show what an outbound route would have caught; ignore it otherwise.
+  Operator-only, enforced by the actor (issue #119), like the triage verbs below:
+  every row is worded for whoever answers it, so a session reading this would read
+  every other session's questions and approvals.
 - **WS `attention` events**, full-entity like every other entity on the stream:
   `{entity: "attention", verb: "created"|"updated", item}` and
   `{entity: "attention", verb: "deleted", itemId, reason: "resolved"|"triaged"}`.
@@ -24,8 +27,8 @@ Track B's Stage-2 wiring needs, in one place:
   snapshot, apply, then deliver. Ids are stable across a resync.
 - **Triage:** `POST /api/attention/:id/acknowledge | snooze | mute` (snooze takes
   `{snoozedUntil}`, in Unix seconds, and refuses a time in the past), and
-  `DELETE /api/attention/:id/triage` to undo one. All four are operator-only,
-  enforced by the actor.
+  `DELETE /api/attention/:id/triage` to undo one. These four, and the queue read
+  above, are operator-only, enforced by the actor.
 - **The two answer hooks:** `answerQuestion` → `POST /api/questions/:id/answer`
   with `{optionId}` (already on main), `decideApproval` →
   `POST /api/approvals/:id/answer` with `{decision: "approve-once"|"deny", reason}`.
