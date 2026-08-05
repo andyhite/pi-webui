@@ -183,15 +183,60 @@ export function startServer(config = loadServerConfig()) {
   });
   injectWebSocket(server);
 
-  logger.info("server started", {
-    host: effectiveConfig.host,
-    port: effectiveConfig.port,
-    // Never from `effectiveConfig`: stateDir cannot be a stored override
-    // (see the note above `openDatabase`), so `config.stateDir` is the only
-    // value this ever was or could be.
-    stateDir: config.stateDir,
-    nonLoopback: effectiveConfig.allowNonLoopbackBind,
-  });
+  /**
+   * The address the socket actually got, which is not always the one asked for:
+   * port 0 means "whichever the OS has free", and the caller cannot learn that
+   * number from its own config. Test harnesses are the reason it exists —
+   * probing for a free port and then binding it is a race, because the probe has
+   * to close the socket before the server can have it, and something else on the
+   * machine can take the port in between (a leaked server, a parallel suite);
+   * observed on CI as one suite's `EADDRINUSE` and another's `ECONNREFUSED` on
+   * the same port in one run. Asking for 0 and being told what was bound cannot
+   * race with anything.
+   *
+   * It rejects on a bind failure, which is otherwise an `error` event nobody is
+   * listening to: the process dies with a raw stack far from the call that
+   * caused it. That listener is detached the moment this settles — a socket error
+   * *after* the bind (accept-time `EMFILE`, say) has nothing to do with starting
+   * up, and delivering it to a settled promise would discard it silently.
+   */
+  const listening = new Promise<{ host: string; port: number }>(
+    (resolve, reject) => {
+      const failed = (err: unknown) => {
+        server.off("listening", report);
+        reject(err);
+      };
+      const report = () => {
+        server.off("error", failed);
+        const address = server.address();
+        if (address === null || typeof address === "string") {
+          reject(
+            new Error(
+              `${SERVER_NAME}: listening on ${String(address)}, which carries no port`,
+            ),
+          );
+          return;
+        }
+        // Both from the socket, never from the config: under `port: 0` the
+        // configured port is literally `0`, and a startup line that says so is
+        // worse than no line. `address.address` is the same for `host` — a
+        // hostname resolves, and what it resolved to is what is reachable.
+        const bound = { host: address.address, port: address.port };
+        logger.info("server started", {
+          ...bound,
+          // Never from `effectiveConfig`: stateDir cannot be a stored override
+          // (see the note above `openDatabase`), so `config.stateDir` is the only
+          // value this ever was or could be.
+          stateDir: config.stateDir,
+          nonLoopback: effectiveConfig.allowNonLoopbackBind,
+        });
+        resolve(bound);
+      };
+      server.once("error", failed);
+      if (server.listening) report();
+      else server.once("listening", report);
+    },
+  );
 
   return {
     app,
@@ -202,6 +247,11 @@ export function startServer(config = loadServerConfig()) {
     recovered,
     /** Resolves once every in-box and directory plugin has reported its health. */
     pluginsBooted,
+    /**
+     * Resolves with the address the socket actually bound — the only way to learn
+     * it under `port: 0` — and rejects if the bind failed.
+     */
+    listening,
     plugins: runtime.plugins,
     hub: runtime.hub,
     runs: runtime.runs,
@@ -257,7 +307,14 @@ export function startServer(config = loadServerConfig()) {
 // allowed by the lint config specifically for this kind of last-resort exit.
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
-    startServer();
+    // A bind failure arrives after `startServer` has returned — the socket is
+    // still connecting — so it needs its own report. Without this it is an
+    // unhandled rejection: the same exit, minus the one line saying the port was
+    // already taken.
+    startServer().listening.catch((err: unknown) => {
+      console.error(`${SERVER_NAME}: failed to start: ${String(err)}`);
+      process.exit(1);
+    });
   } catch (err) {
     console.error(`${SERVER_NAME}: failed to start: ${String(err)}`);
     process.exit(1);

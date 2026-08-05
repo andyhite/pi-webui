@@ -8,7 +8,6 @@ import { loadServerConfig } from "../config.js";
 import { createEventBus } from "../events/bus.js";
 import { startServer } from "../index.js";
 import { createStores } from "../routes/api.js";
-import { ephemeralPort } from "../testing/harness.js";
 
 /**
  * The search backfill (§6.8, Epic 8.2): a session that ended before this
@@ -32,13 +31,14 @@ afterEach(async () => {
 });
 
 async function boot(stateDir: string) {
-  const port = await ephemeralPort();
+  // Port 0, and the bound one comes back from the socket: probing for a free port
+  // and binding it second leaves a window for something else to take it.
   const handle = startServer(
     loadServerConfig(
       {},
       {
         host: "127.0.0.1",
-        port,
+        port: 0,
         stateDir,
         credential: null,
         allowNonLoopbackBind: false,
@@ -52,6 +52,9 @@ async function boot(stateDir: string) {
     ),
   );
   handles.push(handle);
+  // Before `recovered`, so a bind failure is this line's error rather than an
+  // unhandled `error` event surfacing as whatever times out next.
+  const { port } = await handle.listening;
   await handle.recovered;
   return { handle, port };
 }

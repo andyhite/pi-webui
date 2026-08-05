@@ -449,8 +449,9 @@ describe("health alerts, from observation only (§7.2)", () => {
 describe("outbound routing (§7.3)", () => {
   it("fires once per occurrence, and never carries a content body", async () => {
     const received: unknown[] = [];
-    const port = await ephemeralPort();
-    const webhook = await listen(port, (body) => received.push(body));
+    const { server: webhook, port } = await listen((body) =>
+      received.push(body),
+    );
 
     try {
       const harness = await boot(repository());
@@ -557,8 +558,9 @@ describe("outbound routing (§7.3)", () => {
 
   it("only matches the state it attaches to", async () => {
     const received: unknown[] = [];
-    const port = await ephemeralPort();
-    const webhook = await listen(port, (body) => received.push(body));
+    const { server: webhook, port } = await listen((body) =>
+      received.push(body),
+    );
 
     try {
       const harness = await boot(repository());
@@ -607,11 +609,17 @@ describe("what changed while I was away (§7.3)", () => {
 
 /* ------------------------------------------------------------- a webhook */
 
+/**
+ * The receiver binds port 0 and reports what it got, rather than being handed a
+ * port a probe found first: the probe has to close its socket before this one can
+ * bind it, and anything on the machine can take it in between. That failure used
+ * to be invisible here — the `error` handler below swallows it — and surfaced as
+ * a webhook that was never called, which reads like the delivery being broken.
+ */
 function listen(
-  port: number,
   onBody: (body: unknown) => void,
-): Promise<Server> {
-  return new Promise((resolve) => {
+): Promise<{ server: Server; port: number }> {
+  return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const chunks: Buffer[] = [];
       req.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -623,9 +631,20 @@ function listen(
     // A socket torn down while the harness is shutting down is not a failure of
     // anything under test: the delivery it belonged to is already recorded as
     // route health (§7.3), and an unhandled 'error' here would fail the run.
+    // Until it is listening, though, an error is exactly what the caller needs
+    // to hear.
     server.on("clientError", () => {});
-    server.on("error", () => {});
-    server.listen(port, "127.0.0.1", () => resolve(server));
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        reject(new Error("the webhook receiver bound no port"));
+        return;
+      }
+      server.off("error", reject);
+      server.on("error", () => {});
+      resolve({ server, port: address.port });
+    });
   });
 }
 

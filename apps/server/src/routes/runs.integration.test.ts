@@ -15,7 +15,6 @@ import { openDatabase, RunStore, SessionStore } from "@plotroom/db";
 import { loadServerConfig, type ServerConfigOverrides } from "../config.js";
 import { startServer } from "../index.js";
 import type { RuntimeScript } from "../runtime/scripted.js";
-import { ephemeralPort } from "../testing/harness.js";
 
 /**
  * The run spine, over the real app (Epics 4.1/4.2).
@@ -28,10 +27,13 @@ import { ephemeralPort } from "../testing/harness.js";
  * tests prove about the spine is true of a real session too.
  */
 /**
- * Ports come from the OS, not from a counter. A static band collides with a leaked
- * server or another suite, and the failure is not always a clean EADDRINUSE — it can
- * be requests landing on the other server, which surfaces far away as something
- * else. `ephemeralPort` is the shared bind probe.
+ * Ports come from the OS, not from a counter, and not from a probe either: every
+ * boot here asks for port 0 and reads back what it actually bound
+ * (`handle.listening`). A static band collides with a leaked server or another
+ * suite, and probing for a free port then binding it leaves a window in which
+ * something else can take it — the failure is not always a clean EADDRINUSE, it
+ * can be requests landing on the other server, which surfaces far away as
+ * something else.
  */
 
 interface Harness {
@@ -97,13 +99,13 @@ async function boot(
   const workspaceDir = join(stateDir, "workspaces");
   mkdirSync(workspaceDir, { recursive: true });
 
-  const thisPort = await ephemeralPort();
+  // No port here: `port: 0` below, and the bound one comes back from the socket.
   const handle = startServer(
     loadServerConfig(
       {},
       {
         host: "127.0.0.1",
-        port: thisPort,
+        port: 0,
         stateDir,
         credential: null,
         allowNonLoopbackBind: false,
@@ -123,6 +125,9 @@ async function boot(
       },
     ),
   );
+  // First, so a bind failure is this line's error rather than an unhandled
+  // `error` event surfacing as whatever times out next.
+  const { port: thisPort } = await handle.listening;
   await handle.recovered;
 
   const base = `http://127.0.0.1:${thisPort}/api`;
