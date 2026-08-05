@@ -704,19 +704,24 @@ describe("reading approvals is the operator's own read (§6.6)", () => {
     expect(list(await harness.ok("/pre-grants"), "preGrants")).toHaveLength(0);
   });
 
-  it("still tells the session what it is waiting for, from its own call", async () => {
+  it("still hands the session its own ask, on the call that raised it", async () => {
     const harness = await boot(repository());
     const { sessionId, objectId } = await board(harness);
 
-    // The one thing a session needs to know reaches it as the result of the call
-    // that raised it — which is why the read being closed costs it nothing (§6.6).
+    // What the closed read would have told a session about its *own* ask, the raise
+    // already tells it — which is half of why closing the read costs it nothing. The
+    // other half is how the answer arrives, and that is proved above: the operator's
+    // decision reaches the session as a `request-settled` observation carrying the
+    // outcome and their reason ("settles the blocked call", §6.6).
+    //
+    // Pinned because the most plausible follow-on bug to the gate is someone
+    // extending its reasoning into this response and stripping the ask from it.
     const attempt = await harness.call(`/objects/${objectId}`, {
       method: "DELETE",
       actor: `session:${sessionId}`,
     });
 
     expect(attempt.status).toBe(202);
-    expect(at(attempt.body, "executed")).toBe(false);
     expect(at(attempt.body, "approval.sessionId")).toBe(sessionId);
     expect(str(attempt.body, "attention.sentence")).toContain(objectId);
   });

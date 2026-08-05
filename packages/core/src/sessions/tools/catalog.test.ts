@@ -194,7 +194,7 @@ const OPERATOR_ONLY_ROUTES: readonly {
   },
   {
     path: "/api/attention",
-    why: "\u00a77's queue is where the operator decides what to look at. A session reading it would be reading the human's own attention state \u2014 every fact in it is already the session's own record where it is the session's business.",
+    why: "\u00a77's queue is where the operator decides what to look at. A session reading it would be reading the human's own attention state \u2014 every fact in it is already the session's own record where it is the session's business. Tool-less **and** 403 for a session actor (issue #119): every row is worded for whoever answers it, so this read hands over every other session's questions and approvals whole, which is the disclosure closing `/api/approvals` was about coming through the other door.",
   },
   {
     path: "/api/attention/:id/acknowledge",
