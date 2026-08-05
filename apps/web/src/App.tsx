@@ -468,6 +468,20 @@ function Board() {
   // level): a command node id stays in this set for exactly as long as its
   // POST /api/runs is outstanding, so a double-click cannot mint a second
   // initiation key before the first request settles — see run-guard.ts.
+  //
+  // The guard's decision has to be synchronous (issue #226): React does not
+  // promise a `setState` updater runs during the `setState` call itself —
+  // it happens to, most of the time, via the eager-state optimization,
+  // which applies only while that hook's update queue is empty. When it is
+  // not (a previous run's own settle-time update still pending, or a
+  // StrictMode double-invocation), the updater runs later and a decision
+  // read out of a variable it assigns is stale by the time the caller
+  // branches on it — which is what silently dropped a run gesture rather
+  // than sending it. `runsInFlightRef` is the single authoritative set the
+  // guard reads and writes synchronously; `runsInFlight` state exists only
+  // to trigger a render (`runningCommandNodeIds` below), and every write to
+  // one is paired with the identical write to the other, in that order.
+  const runsInFlightRef = useRef<ReadonlySet<string>>(new Set());
   const [runsInFlight, setRunsInFlight] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -1004,28 +1018,29 @@ function Board() {
       log(`offline mode: running ${commandNodeId} was not started`);
       return;
     }
-    // The gesture-level guard (§4.1, principle 9): a double-click — or a held
-    // `R` — before the first request settles must not mint a second
-    // initiation key. Checked and applied via one state update, so two
-    // gestures handled in the same tick cannot both read "not yet in flight".
-    let guardedIn = false;
-    setRunsInFlight((current) => {
-      const guard = beginRun(current, commandNodeId);
-      guardedIn = guard.allowed;
-      return guard.inFlight;
-    });
-    if (!guardedIn) {
+    // The gesture-level guard (§4.1, principle 9): a double-click — or a
+    // held `R` — before the first request settles must not mint a second
+    // initiation key. Decided synchronously off `runsInFlightRef` (issue
+    // #226) — never out of a `setState` updater, whose timing React does
+    // not guarantee — so two gestures handled in the same tick cannot both
+    // read "not yet in flight".
+    const guard = beginRun(runsInFlightRef.current, commandNodeId);
+    if (!guard.allowed) {
       log(
         `run already in flight for ${commandNodeId}; ignoring the extra gesture`,
       );
       return;
     }
+    runsInFlightRef.current = guard.inFlight;
+    setRunsInFlight(guard.inFlight);
 
     const commandNode = graph?.nodes.find((node) => node.id === commandNodeId);
     if (!commandNode?.refId) {
-      setRunsInFlight((current) => endRun(current, commandNodeId));
+      runsInFlightRef.current = endRun(runsInFlightRef.current, commandNodeId);
+      setRunsInFlight(runsInFlightRef.current);
       return;
     }
+
     // The client's own idea of "this gesture" (principle 9): a retry with the
     // same key would get the same run and session back, never a second one —
     // a fresh key per gesture is exactly one run per gesture.
@@ -1033,7 +1048,11 @@ function Board() {
     void actions
       .runCommand({ commandId: commandNode.refId, initiationKey })
       .then((result) => {
-        setRunsInFlight((current) => endRun(current, commandNodeId));
+        runsInFlightRef.current = endRun(
+          runsInFlightRef.current,
+          commandNodeId,
+        );
+        setRunsInFlight(runsInFlightRef.current);
         if (!result.ok) {
           log(`refused: ${result.refusal.reason} - ${result.refusal.message}`);
           return;
