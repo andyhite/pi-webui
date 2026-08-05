@@ -603,6 +603,11 @@ export const sessions = sqliteTable(
     transcriptObjectId: text("transcript_object_id").references(
       () => objects.id,
     ),
+    /**
+     * The runtime's plan, projected as a document (§3.1) and versioned on the
+     * same checkpoint rule, on the same publication row (migration 34).
+     */
+    planObjectId: text("plan_object_id").references(() => objects.id),
     /** Derived by PlotRoom, never agent-reported (principle 7). */
     phaseJson: text("phase_json").notNull(),
     turns: integer("turns").notNull().default(0),
@@ -692,6 +697,13 @@ export const sessionTranscriptPublications = sqliteTable(
     versionId: text("version_id")
       .notNull()
       .references(() => objectVersions.id),
+    /**
+     * The plan's own object/version for this same publish event, nullable
+     * because a session with no plan yet publishes a transcript with none
+     * beside it (migration 34).
+     */
+    planObjectId: text("plan_object_id").references(() => objects.id),
+    planVersionId: text("plan_version_id").references(() => objectVersions.id),
     at: integer("at").notNull(),
   },
   (table) => [primaryKey({ columns: [table.sessionId, table.ordinal] })],
