@@ -3,9 +3,9 @@ import { z } from "zod";
 import type { Author } from "@plotroom/core";
 import { forbidden } from "../http/errors.js";
 import { validateJsonBody } from "../http/validate.js";
+import { findSetting } from "../settings/catalog.js";
 import type { SettingsService } from "../settings/service.js";
 import { actorOf, body, param, type ApiEnv } from "./api.js";
-
 const setBody = z.object({ value: z.unknown() });
 
 /**
@@ -58,8 +58,25 @@ export function settingsRoutes(settings: SettingsService): Hono<ApiEnv> {
 
   app.delete("/settings/:key", (c) => {
     const key = param(c, "key");
-    requireOperatorFor(settings, key, actorOf(c), "reverting a setting");
-    return c.json({ setting: settings.remove(key, actorOf(c)) });
+    const actor = actorOf(c);
+
+    // A retired key — one this build's catalog no longer declares — has no
+    // `humanOnly` flag to read, so it gets the same conservative default
+    // every declared setting holds today (principle 1): a session cannot
+    // clear an operator's stored override just because this build stopped
+    // recognizing it (#89).
+    if (findSetting(key) === undefined) {
+      if (actor.kind !== "human") {
+        throw forbidden(
+          `clearing a retired setting ("${key}") is the operator's control (§11, principle 1); a session cannot make it`,
+        );
+      }
+      settings.clearRetired(key);
+      return c.json({ key, retired: true });
+    }
+
+    requireOperatorFor(settings, key, actor, "reverting a setting");
+    return c.json({ setting: settings.remove(key, actor) });
   });
 
   return app;

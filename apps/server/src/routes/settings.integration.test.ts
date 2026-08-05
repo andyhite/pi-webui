@@ -323,6 +323,60 @@ describe("settings (§11, Epic 8.3)", () => {
     ).toContain("readable JSON");
   });
 
+  it("clears a retired key's stored row via DELETE, unreachable through remove()'s require() (#89)", async () => {
+    const first = await boot();
+    const stateDir = first.stateDir;
+    await first.handle.close();
+
+    // Exactly what an older build's write left behind once this build
+    // retired the key: a stored row `findSetting` no longer resolves.
+    const { openDatabase, SettingsStore } = await import("@plotroom/db");
+    const state = openDatabase({ stateDir });
+    new SettingsStore(state).set("retiredKnob", JSON.stringify(true));
+    state.close();
+
+    const second = await boot({ logLevel: "warn" }, { stateDir });
+    const logs = list(await second.ok("/logs?level=error"), "entries");
+    const ignored = logs.find(
+      (entry) =>
+        at(entry, "msg") === "ignored a stored setting" &&
+        at(entry, "key") === "retiredKnob",
+    );
+    expect(ignored).toBeDefined();
+    expect(String(at(ignored, "reason"))).toContain("declares no such setting");
+
+    // A session cannot clear it either — the same conservative default
+    // every declared setting holds today (principle 1), even though there
+    // is no catalog entry to read a `humanOnly` flag off.
+    const refused = await second.call("/settings/retiredKnob", {
+      method: "DELETE",
+      actor: "session:sess_1",
+    });
+    expect(refused.status).toBe(403);
+
+    const removed = await second.ok("/settings/retiredKnob", {
+      method: "DELETE",
+    });
+    expect(at(removed, "retired")).toBe(true);
+    expect(at(removed, "key")).toBe("retiredKnob");
+
+    // Clearing an already-gone key is a no-op, not an error — the operator
+    // asking twice is not a mistake.
+    const removedAgain = await second.ok("/settings/retiredKnob", {
+      method: "DELETE",
+    });
+    expect(at(removedAgain, "retired")).toBe(true);
+    await second.handle.close();
+
+    // The next boot no longer logs it — the row is actually gone, not
+    // merely hidden.
+    const third = await boot({ logLevel: "warn" }, { stateDir });
+    const laterLogs = list(await third.ok("/logs?level=error"), "entries");
+    expect(
+      laterLogs.find((entry) => at(entry, "key") === "retiredKnob"),
+    ).toBeUndefined();
+  });
+
   it("a persisted override survives a restart of the same state directory", async () => {
     const first = await boot();
     await first.ok("/settings/concurrencyLimit", {
