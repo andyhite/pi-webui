@@ -155,9 +155,9 @@ Settled deliberately, because the board once had two of them saying the same thi
 A grouping that duplicates another is drift; when two surfaces can disagree about
 one fact, retire one of them.
 
-Kind labels are the fourth axis and every item carries one: `bug`, `enhancement`,
-`documentation`, `decision`, `epic`, `follow-up`, `directional`. The `track:*` label
-and the `Track` field are two copies of one fact and must agree.
+Kind labels are the fourth axis and every item carries exactly one: `bug`,
+`documentation`, `decision`, `epic`, `follow-up`, `idea`. `Track` is retired —
+sub-issue containment (epics) and milestones are the only grouping left.
 
 ## Scheduling and the roadmap
 

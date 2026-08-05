@@ -29,10 +29,8 @@ Work from the data, not from memory. Report each finding as `#n — what — the
 - an open issue that is not a board item at all (`gh issue list` minus `/tmp/board.json`);
 - a board item with no `Track` (or `Track = unscheduled` that is not one of the
   deliberate exceptions on the map: #43, #55–#61, #117, #112);
-- an item whose `track:*` label and `Track` field disagree — the label and the field
-  are two copies of one fact and must agree;
-- an item with no kind label (`bug`, `enhancement`, `documentation`, `decision`,
-  `epic`, `follow-up`, `directional`).
+- an item with no kind label (`bug`, `documentation`, `decision`, `epic`,
+  `follow-up`, `idea`).
 
 **Containment**
 
