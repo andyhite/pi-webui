@@ -132,7 +132,7 @@ export class IntegrationService {
       pluginId: input.pluginId,
       producerId: input.producerId,
       name: input.name,
-      system: producer.id,
+      system: producer.pluginId,
       scope: input.scope ?? null,
     });
     const integration = this.publish(connected, "created", actor);

@@ -190,6 +190,33 @@ describe("refresh: reconciliation, drift, and honest failure (§9.1, §3.1, §3.
     expect(objects[0]?.externalId).toBe("FAKE-1");
   });
 
+  it("reconciles across two producers of the same plugin, not just within one (#85)", async () => {
+    // Same plugin, two producer ids — e.g. an issue producer and an
+    // epics-as-collections producer, each connected as its own integration but
+    // both reading from the one Jira. `external_system` must key on the plugin,
+    // not the producer, or the same ticket lands as two unreconciled rows.
+    registry.register(createFakeProducer(fakeState, { id: "fake-tickets-2" }));
+    const first = integrations.connect(
+      { pluginId: "fake-plugin", producerId: "fake-tickets", name: "First" },
+      humanAuthor,
+    );
+    const second = integrations.connect(
+      {
+        pluginId: "fake-plugin",
+        producerId: "fake-tickets-2",
+        name: "Second",
+      },
+      humanAuthor,
+    );
+
+    await integrations.refresh(first.id);
+    await integrations.refresh(second.id);
+
+    const objects = stores.objects.live();
+    expect(objects).toHaveLength(1);
+    expect(objects[0]?.externalId).toBe("FAKE-1");
+  });
+
   it("writes no new version when the source content did not change", async () => {
     const integration = connect();
     await integrations.refresh(integration.id);

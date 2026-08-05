@@ -72,10 +72,10 @@ function renderTicket(ticket: FakeTicket): ProducedObject {
  */
 export function createFakeProducer(
   state: FakeIntegrationState,
-  options: { readonly refreshSeconds?: number } = {},
+  options: { readonly refreshSeconds?: number; readonly id?: string } = {},
 ): IntegrationProducer {
   return {
-    id: "fake-tickets",
+    id: options.id ?? "fake-tickets",
     pluginId: "fake-plugin",
     kinds: ["ticket"],
     refresh: { kind: "interval", seconds: options.refreshSeconds ?? 300 },
