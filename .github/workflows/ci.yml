@@ -175,19 +175,40 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # The install step *is* the regression test. Without
+      # `neverBuiltDependencies`, pnpm synthesises `install: node-gyp rebuild`
+      # for better-sqlite3 and this step is what fails on a Windows runner,
+      # exactly as it did in #183's original log.
       - name: Install with scripts
         run: pnpm install --frozen-lockfile
 
-      # Nothing here may compile: a green run that quietly built the addon
-      # would say the compiler was available, not that we stopped needing it.
-      - name: Refuse a compiled addon
+      # What can be asserted on top of that, and what cannot. "Did pnpm run a
+      # build?" is **not** reliably observable after the fact: pnpm's
+      # side-effects cache replays a build performed by an earlier install, so
+      # a warm store neither runs the script nor prints that it did (measured
+      # both ways locally), and `binding.gyp` degrades its targets to
+      # `type: none` when a prebuild matches the host, so even a real node-gyp
+      # run emits only `.stamp` files. A guard on any of those passes when it
+      # should fail.
+      #
+      # What is observable, and is the claim a Windows installer actually
+      # rests on, is *which binary loads*: `lib/binding.js` prefers
+      # `build/Release/better_sqlite3.node` and falls back to `prebuilds/`. If
+      # a compile ever succeeds here, the first exists and this fails.
+      - name: Refuse a compiled binding
         shell: bash
         run: |
-          if find node_modules/.pnpm/better-sqlite3*/node_modules/better-sqlite3/build -name '*.node' 2>/dev/null | grep -q .; then
-            echo "better-sqlite3 was compiled; the prebuild should have been used instead"
+          pkg=$(echo node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3)
+          test -d "$pkg" || { echo "better-sqlite3 not found at $pkg"; exit 1; }
+          test -f "$pkg/prebuilds/win32-x64.node" || {
+            echo "no win32-x64 prebuild shipped; this platform would need a compiler"
+            exit 1
+          }
+          if [ -f "$pkg/build/Release/better_sqlite3.node" ]; then
+            echo "a compiled binding exists and would load in preference to the prebuild"
             exit 1
           fi
-          echo "no compiled addon: the shipped prebuild is what will load"
+          echo "the shipped prebuild is what will load"
 
       # A round trip through the native module, which is the whole claim: the
       # server's SQLite is what a Windows installer has to ship, and an
