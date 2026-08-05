@@ -8,6 +8,7 @@ import {
   ScopeRefused,
   WorkspaceRefused,
 } from "@plotroom/db";
+import { SessionHostNotReady, SessionHostSilent } from "@plotroom/core";
 import { ApiError, notFound, refused } from "./errors.js";
 
 /**
@@ -39,6 +40,14 @@ export function toApiError(err: unknown): ApiError | null {
     err instanceof WorkspaceRefused
   ) {
     return refused(err.refusal);
+  }
+
+  // A runtime that would not start is a refused run, not a broken server: the
+  // reason is a sentence about a live process the operator can look at, and
+  // answering 500 `internal_error` would throw it away (issue #108). These two
+  // are the adapter's own, so they carry no `refusal` of their own to pass on.
+  if (err instanceof SessionHostNotReady || err instanceof SessionHostSilent) {
+    return refused({ reason: "runtime_would_not_start", message: err.message });
   }
 
   return null;

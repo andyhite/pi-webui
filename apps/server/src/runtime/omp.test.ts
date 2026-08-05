@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { INHERIT_APP_TOOLS } from "@plotroom/core";
 import type {
+  Delay,
   RuntimeObservation,
   RuntimeSessionHandle,
   SessionRuntimeAdapter,
@@ -44,8 +45,25 @@ afterAll(() => {
   if (workdir) rmSync(workdir, { recursive: true, force: true });
 });
 
-function runtime(): SessionRuntimeAdapter {
-  return createOmpRuntime({ stateDir: workdir, program: sidecar });
+function runtime(delay?: Delay): SessionRuntimeAdapter {
+  return createOmpRuntime({
+    stateDir: workdir,
+    program: sidecar,
+    ...(delay === undefined ? {} : { delay }),
+  });
+}
+
+/**
+ * The adapter's own bound, capped so a suite need not wait for it.
+ *
+ * `Math.min`, not a constant: the adapter arms two bounds of different lengths
+ * and a helper that returned one number for both would silently retune the other
+ * one too.
+ */
+function shortened(ms: number, cap: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, Math.min(ms, cap)).unref();
+  });
 }
 
 async function drain(
@@ -219,6 +237,53 @@ describe("the session host as a spawned process", () => {
 
     await handle.stop("abort");
   }, 20_000);
+
+  it("answers rather than hanging when the session host never reports a session (issue #108)", async () => {
+    // A real bound, deliberately: an instantly-expiring one would reject a
+    // *healthy* start too, and a test that cannot tell the two apart proves only
+    // that the bound fires. Two seconds is the documented real-clock exception
+    // this file already takes for `gone()` — process startup is the operating
+    // system's, and the launches above settle in tens of milliseconds.
+    const bounded = runtime((ms) => shortened(ms, 2_000));
+
+    // Started, alive, framing nothing: indistinguishable from a healthy start
+    // from outside, which is why nothing above the adapter could escalate.
+    await expect(
+      bounded.start({
+        ...LAUNCH,
+        launch: { ...LAUNCH.launch, model: "never-ready" },
+        workspacePath: workdir,
+      }),
+    ).rejects.toThrow(/did not report a session within/);
+
+    // The other direction, under the same bound: a sidecar that does report one
+    // is not refused. Without this the assertion above passes for any bound at
+    // all, including one that fires before the process has spawned.
+    const healthy = await bounded.start({ ...LAUNCH, workspacePath: workdir });
+    expect(healthy.ref).toBe("stand-in-session");
+    await healthy.stop("abort");
+  }, 20_000);
+
+  it("answers rather than hanging when the session host never acknowledges (issue #108)", async () => {
+    // The other half of the hang, and the one a ready bound alone does not reach:
+    // `ready` arrives, so the adapter has a session — and then `open()` awaits the
+    // prompt's acknowledgement, which never comes.
+    const bounded = runtime((ms) => shortened(ms, 2_000));
+
+    await expect(
+      bounded.start({
+        ...LAUNCH,
+        launch: { ...LAUNCH.launch, model: "never-acks" },
+        workspacePath: workdir,
+      }),
+    ).rejects.toThrow(/did not acknowledge a prompt command within/);
+
+    // Same bound, healthy sidecar: not refused. Without this the assertion above
+    // passes for a bound that fires before the prompt was ever written.
+    const healthy = await bounded.start({ ...LAUNCH, workspacePath: workdir });
+    expect(healthy.ref).toBe("stand-in-session");
+    await healthy.stop("abort");
+  }, 20_000);
 });
 
 /**
@@ -273,6 +338,10 @@ process.stdin.on("data", (chunk) => {
   for (const line of lines) {
     if (line.trim().length === 0) continue;
     const command = JSON.parse(line);
+
+    // Alive, reading, and answering nothing: the ready frame already went out,
+    // so from outside this is a healthy session (issue #108).
+    if (process.argv.includes("never-acks")) continue;
 
     if (command.type === "prompt") {
       if (command.text === "unauthenticated") {
@@ -334,5 +403,13 @@ process.stdin.on("data", (chunk) => {
   }
 });
 
-write({ type: "ready", ref: "stand-in-session" });
+// Two models select the two shapes of an alive, silent session host (issue #108).
+// never-ready reports no session at all; never-acks reports one and then answers
+// no command. Both are indistinguishable from a healthy start from outside,
+// which is why the adapter has to bound the waits itself.
+if (process.argv.includes("never-ready")) {
+  setInterval(() => {}, 1000);
+} else {
+  write({ type: "ready", ref: "stand-in-session" });
+}
 `;

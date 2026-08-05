@@ -9,6 +9,7 @@ import {
   systemMillisClock,
   FRAME_FD,
   OMP_ADAPTER_ID,
+  type Delay,
   type OmpConnect,
   type SessionHostProcess,
   type SessionRuntimeAdapter,
@@ -41,6 +42,12 @@ export interface OmpRuntimeOptions {
   readonly program?: string | null;
   /** The Bun program that runs this build's entry. */
   readonly bunProgram?: string;
+  /**
+   * The adapter's bounded waits. Defaults to real time; overridden by the tests
+   * that prove the bounds over real pipes, because a suite cannot honestly spend
+   * three minutes proving a three-minute bound (issue #108).
+   */
+  readonly delay?: Delay;
   readonly logger?: Logger;
 }
 
@@ -108,10 +115,30 @@ export function createOmpRuntime(
     return new SessionHostChildProcess(child, options.logger);
   };
 
-  return createOmpAdapter({ connect, now: systemMillisClock, sessionDir });
+  return createOmpAdapter({
+    connect,
+    now: systemMillisClock,
+    sessionDir,
+    delay: options.delay ?? systemDelay,
+  });
 }
 
 export { OMP_ADAPTER_ID };
+
+/**
+ * The real timer behind `@plotroom/core`'s `Delay`, which declares the seam and
+ * implements none of it because that package owns no transport.
+ *
+ * `unref`, because a bound that outlived the wait it bounded would hold the
+ * process open for the rest of it — a server whose work was done would sit there
+ * until the longest bound any session ever armed came due.
+ */
+export const systemDelay: Delay = (ms) =>
+  // The executor form because this project's `lib` predates
+  // `Promise.withResolvers`, which is also why the adapter uses it.
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms).unref();
+  });
 
 /**
  * Where this build keeps the session host.

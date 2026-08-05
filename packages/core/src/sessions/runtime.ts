@@ -18,6 +18,22 @@ import type { SessionEnd, BudgetScope } from "./end-states.js";
 /** Milliseconds since the epoch, as the adapter stamped it. */
 export type EpochMillis = number;
 
+/**
+ * A bounded wait, as a dependency — the same argument `Clock` makes, for the
+ * other half of time.
+ *
+ * An adapter has to bound waits a runtime can leave open for ever: a sidecar
+ * that starts, stays alive and never reports a session would otherwise hang the
+ * request behind it with nothing to escalate, because from outside the process
+ * looks healthy (issue #108).
+ *
+ * Declared here and implemented by the host, like `CommandExec`: this package
+ * owns no transport and its lib does not even name a timer (decision 0001), and
+ * injecting it is also what lets a three-minute bound be tested without waiting
+ * three minutes.
+ */
+export type Delay = (ms: number) => Promise<void>;
+
 /** Opaque native identity, persisted so resume/fork survive a restart. */
 export type RuntimeSessionRef = string;
 

@@ -1,4 +1,5 @@
 import type {
+  Delay,
   EpochMillis,
   InjectedInput,
   InjectionReceipt,
@@ -46,6 +47,67 @@ export const OMP_ADAPTER_ID = "omp-session-host";
  * the largest thing in the log.
  */
 const UNREADABLE_FRAME_PREVIEW = 200;
+
+/**
+ * How long the sidecar has to report its native session before PlotRoom stops
+ * waiting (issue #108).
+ *
+ * Generous on purpose: the first start on a machine can be the vendor's native
+ * addon downloading (296MB, decision 0005) or a credential store answering, and
+ * a bound that fired through a legitimate cold start would be worse than the
+ * hang it replaced. What it is not is unbounded — a sidecar that never frames
+ * `ready` looks healthy from outside, so nothing else can escalate.
+ *
+ * Exported because the tests select an armed bound by its length, which is the
+ * only thing that tells the three apart.
+ */
+export const READY_TIMEOUT_MS = 180_000;
+
+/**
+ * How long a command has to be acknowledged (issue #108).
+ *
+ * An acknowledgement is queue acceptance and nothing more, so the shipped
+ * sidecar sends one synchronously; this is the bound on a runtime that is alive
+ * and answering nothing, not on a runtime that is busy.
+ */
+export const ACK_TIMEOUT_MS = 30_000;
+
+/**
+ * How long PlotRoom waits for the frame channel to end after it has asked the
+ * sidecar to leave and closed the process (issue #108).
+ *
+ * The channel outliving the process is possible: anything still holding the
+ * write end keeps it open, which is reachable through a foreign executable named
+ * by `PLOTROOM_SESSION_HOST` (#92). Short, because by this point the process the
+ * frames came from is already gone.
+ */
+export const STREAM_END_TIMEOUT_MS = 5_000;
+
+/**
+ * The sidecar started, stayed alive, and never reported a session.
+ *
+ * Its own error rather than the stream's "ended before it answered": nothing was
+ * observed to go wrong, which is precisely the failure — and a run refused with
+ * this sentence tells the operator to look at a live process, not a dead one.
+ */
+export class SessionHostNotReady extends Error {
+  constructor(withinMs: number) {
+    super(
+      `the session host did not report a session within ${(withinMs / 1000).toString()}s, so PlotRoom stopped waiting and aborted it`,
+    );
+    this.name = "SessionHostNotReady";
+  }
+}
+
+/** The sidecar is alive and did not answer a command PlotRoom wrote it. */
+export class SessionHostSilent extends Error {
+  constructor(command: string, withinMs: number) {
+    super(
+      `the session host did not acknowledge a ${command} command within ${(withinMs / 1000).toString()}s`,
+    );
+    this.name = "SessionHostSilent";
+  }
+}
 
 export const OMP_CAPABILITIES: RuntimeCapabilities = {
   // Native branching exists (`session.branch(entryId)`) but its arithmetic is
@@ -106,6 +168,13 @@ export interface OmpAdapterOptions {
    * record (decision 0001).
    */
   readonly sessionDir: string;
+  /**
+   * Bounded waits, supplied by the host like the clock and the process itself.
+   * Required rather than defaulted: the default would have to name a timer this
+   * package deliberately cannot see, and a caller that silently got real time
+   * would make the two bounds below untestable (issue #108).
+   */
+  readonly delay: Delay;
 }
 
 /**
@@ -136,12 +205,26 @@ export function createOmpAdapter(
     prompt: string | null,
   ): Promise<SessionHostHandle> {
     const process = await options.connect(launch);
-    const handle = new SessionHostHandle(process, options.now);
-    // A handle is only returned once the sidecar has reported the native ref:
-    // it is what resume is addressed by, and a session recorded without it is
-    // one PlotRoom could never pick up again (§3.6).
-    await handle.started();
-    if (prompt !== null) await handle.prompt(prompt);
+    const handle = new SessionHostHandle(process, options.now, options.delay);
+
+    try {
+      // A handle is only returned once the sidecar has reported the native ref:
+      // it is what resume is addressed by, and a session recorded without it is
+      // one PlotRoom could never pick up again (§3.6).
+      await handle.started();
+      // Bounded too, and for the same reason (issue #108): the acknowledgement
+      // settles only on a frame or on the stream's end, so a sidecar that framed
+      // `ready` and then answered nothing hung this line — with the process
+      // looking healthy from outside, exactly like the wait above it.
+      if (prompt !== null) await handle.prompt(prompt);
+    } catch (error) {
+      // No session is being returned, so nothing above will ever stop this
+      // process: it holds a workspace and a provider connection, and leaving it
+      // running is the leak that made the hang expensive as well as wrong.
+      await process.close("abort");
+      throw error;
+    }
+
     return handle;
   }
 
@@ -222,21 +305,63 @@ class SessionHostHandle implements RuntimeSessionHandle {
   #stopRequested: "user" | null = null;
   /** Set once the frame stream has ended; what a later command rejects with. */
   #ended: Error | null = null;
+  /** The one in-flight `started()` wait, so a second call joins it. */
+  #startedWait: Promise<void> | null = null;
   readonly #pump: Promise<void>;
 
-  constructor(process: SessionHostProcess, now: () => EpochMillis) {
+  readonly #delay: Delay;
+
+  constructor(
+    process: SessionHostProcess,
+    now: () => EpochMillis,
+    delay: Delay,
+  ) {
     this.#process = process;
     this.#now = now;
+    this.#delay = delay;
     this.#pump = this.#read();
   }
 
-  /** Resolves when the sidecar has a native session, rejects if it never will. */
+  /**
+   * Resolves when the sidecar has a native session, rejects if it never will —
+   * including because it never said so in time (issue #108).
+   *
+   * The bound is here rather than at each caller because the need for it is this
+   * adapter's own property: `ready` is a frame, and a sidecar that starts, stays
+   * alive and never sends one looks healthy from outside, so nothing above can
+   * tell the difference or escalate. The pi adapter derives its ref synchronously
+   * from the transport and has nothing to wait for.
+   *
+   * The wait is memoized. A second call used to overwrite `#ready` and orphan the
+   * first caller's resolver, which was a lost wakeup before this bound existed
+   * and is worse with it: the orphan's own bound would still come due and refuse
+   * a session the second caller had already been handed.
+   */
   started(): Promise<void> {
     if (this.#readyResult === "ready") return Promise.resolve();
     if (this.#readyResult !== null) return Promise.reject(this.#readyResult);
-    return new Promise<void>((resolve, reject) => {
+    this.#startedWait ??= this.#awaitReady();
+    return this.#startedWait;
+  }
+
+  async #awaitReady(): Promise<void> {
+    const ready = new Promise<void>((resolve, reject) => {
       this.#ready = { resolve, reject };
     });
+
+    const outcome = await Promise.race([
+      ready.then(() => "ready" as const),
+      this.#delay(READY_TIMEOUT_MS).then(() => "timed-out" as const),
+    ]);
+    if (outcome === "ready") return;
+
+    // Said before throwing, so the stream's own end reports this rather than
+    // "ended before it answered" — which would describe a dead process and send
+    // whoever reads it looking in the wrong place. Aborting the process is
+    // `open()`'s job: it aborts on any start failure, and doing it in both places
+    // would signal twice.
+    this.#fatal = `the session host did not report a session within ${(READY_TIMEOUT_MS / 1000).toString()}s`;
+    throw new SessionHostNotReady(READY_TIMEOUT_MS);
   }
 
   observations(): AsyncIterable<RuntimeObservation> {
@@ -299,7 +424,50 @@ class SessionHostHandle implements RuntimeSessionHandle {
     }
 
     await this.#process.close(mode);
-    await this.#pump;
+
+    // The pump ends when the frame channel does, and the channel can outlive the
+    // process: anything still holding its write end keeps it open, which a
+    // foreign executable named by `PLOTROOM_SESSION_HOST` can arrange (#92). An
+    // unbounded wait here hangs the stop gesture and the request behind it, so
+    // the wait is bounded, escalated once, and then PlotRoom stops waiting.
+    if (await this.#pumpEnded()) return;
+
+    if (mode === "graceful") {
+      // A graceful close returns as soon as the process has gone, which leaves
+      // whatever else holds the channel alive. The abort signals the group, which
+      // reaps the holder — so this is the escalation, not a second guess.
+      await this.#process.close("abort");
+      if (await this.#pumpEnded()) return;
+    }
+
+    // Nothing left to wait for that PlotRoom can influence. The stream is over
+    // from here whatever the fd says, and saying so is what ends the observation
+    // stream — a caller still iterating it would otherwise wait for ever for a
+    // session that has already stopped (principle 11's distinction is about which
+    // end state, never about whether there is one).
+    //
+    // Reported as an observation and **not** as `#fatal`: the operator asked for
+    // this stop, and `#endReason` reads `#fatal` before `#stopRequested`, so
+    // setting it would record a stop the operator chose as a *failed* run
+    // (`RunService` folds `failed` straight into `runs.fail`). What failed was
+    // PlotRoom's cleanup, not the session.
+    this.#queue.push({
+      kind: "runtime-error",
+      message:
+        "the session host's frame channel stayed open after the process left, so PlotRoom stopped reading it",
+      fatal: false,
+      at: this.#now(),
+    });
+    this.#settleEnded();
+  }
+
+  /** True if the frame stream ended within the bound. */
+  async #pumpEnded(): Promise<boolean> {
+    const outcome = await Promise.race([
+      this.#pump.then(() => "ended" as const),
+      this.#delay(STREAM_END_TIMEOUT_MS).then(() => "waiting" as const),
+    ]);
+    return outcome === "ended";
   }
 
   #nextId(): string {
@@ -307,6 +475,21 @@ class SessionHostHandle implements RuntimeSessionHandle {
     return `plotroom-${this.#commandSeq.toString()}`;
   }
 
+  /**
+   * Write a command and wait for the sidecar to take it — bounded, because this
+   * is the same shape as the `ready` wait (issue #108) and the same threat model:
+   * an acknowledgement settles only on a frame or on the stream ending, so a
+   * sidecar that is alive and silent — a foreign executable named by
+   * `PLOTROOM_SESSION_HOST`, or one wedged before it reads stdin — would hang
+   * whoever is awaiting this for ever. `open()` awaits one on the start path, so
+   * unbounded here means `POST /api/runs` never answers even with `ready` in hand.
+   *
+   * The command is rejected rather than the process killed: an injection nobody
+   * acknowledged is a refused injection, which the ledger has a state for (§6.5),
+   * and killing a working session because one command went unanswered would be a
+   * worse answer than reporting it. The start path aborts, because a session that
+   * never received its instruction is not a session — that decision is `open()`'s.
+   */
   async #send(command: SessionHostCommand): Promise<void> {
     // A command written after the frame stream ended can never be answered: the
     // drain below has already run, so nothing would ever settle this promise —
@@ -319,7 +502,17 @@ class SessionHostHandle implements RuntimeSessionHandle {
       this.#pending.set(command.id, { resolve, reject });
     });
     this.#process.write(encodeSessionHostCommand(command));
-    return settled;
+
+    const outcome = await Promise.race([
+      settled.then(() => "acknowledged" as const),
+      this.#delay(ACK_TIMEOUT_MS).then(() => "timed-out" as const),
+    ]);
+    if (outcome === "acknowledged") return;
+
+    // Dropped from `#pending` so a late acknowledgement settles nothing twice,
+    // and so the stream's end does not reject a promise nobody holds.
+    this.#pending.delete(command.id);
+    throw new SessionHostSilent(command.type, ACK_TIMEOUT_MS);
   }
 
   async #read(): Promise<void> {
@@ -343,6 +536,22 @@ class SessionHostHandle implements RuntimeSessionHandle {
         at: this.#now(),
       });
     }
+
+    this.#settleEnded();
+  }
+
+  /**
+   * Everything that has to be true once PlotRoom is no longer reading frames:
+   * waiters settled, the end recorded, the observation stream closed.
+   *
+   * Idempotent, because it has two callers — the pump finishing, and `stop`
+   * deciding not to wait for it any longer (issue #108) — and either can be
+   * second. The queue already ignores a push after `end()`, so the guard is
+   * about not settling `#ready` or the pending commands twice with a different
+   * reason than the first one won with.
+   */
+  #settleEnded(): void {
+    if (this.#ended !== null) return;
 
     const ended = new Error(
       this.#fatal ?? "the session host ended before it answered",

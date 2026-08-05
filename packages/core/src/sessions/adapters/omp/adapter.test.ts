@@ -7,6 +7,7 @@ import {
   type SessionObservationState,
 } from "../../phases.js";
 import type {
+  Delay,
   RuntimeObservation,
   RuntimeSessionHandle,
   SessionRuntimeAdapter,
@@ -15,7 +16,12 @@ import type {
 import { makeLaunchChoices } from "../../testing.js";
 import {
   createOmpAdapter,
+  ACK_TIMEOUT_MS,
+  READY_TIMEOUT_MS,
   SessionHostForkUnavailable,
+  SessionHostNotReady,
+  SessionHostSilent,
+  STREAM_END_TIMEOUT_MS,
   type SessionHostProcess,
 } from "./adapter.js";
 import {
@@ -45,6 +51,14 @@ class FakeSessionHost implements SessionHostProcess {
   readonly commands: SessionHostCommand[] = [];
   readonly closed: ("graceful" | "abort")[] = [];
   autoAck = true;
+  /**
+   * The frame channel stays open after the process goes — what anything else
+   * holding its write end looks like from here (issue #108, #92). An `abort`
+   * still ends it, because that signals the whole group.
+   */
+  holdsChannelOpen = false;
+  /** Not even the group signal reaps the holder: the worst case (issue #108). */
+  ignoresAbort = false;
 
   #chunks: string[] = [];
   #waiting: {
@@ -101,6 +115,11 @@ class FakeSessionHost implements SessionHostProcess {
 
   async close(mode: "graceful" | "abort"): Promise<void> {
     this.closed.push(mode);
+    // A graceful close returns once the process has gone; only the group signal
+    // reaches whatever else is holding the channel.
+    if (this.holdsChannelOpen && (mode === "graceful" || this.ignoresAbort)) {
+      return;
+    }
     this.end();
   }
 
@@ -123,24 +142,74 @@ class FakeSessionHost implements SessionHostProcess {
   }
 }
 
+/**
+ * The adapter's two bounds, under the test's control (issue #108).
+ *
+ * A wait that never settles is what "no bound fired" means, which is the right
+ * default for every test that is about something else: a real timer here would
+ * make those tests depend on how long they took to run.
+ */
+class ManualDelay {
+  readonly armed: { readonly ms: number; readonly fire: () => void }[] = [];
+
+  // The executor form because this package's `lib` predates
+  // `Promise.withResolvers`, which is also why the adapter itself uses it.
+  readonly delay: Delay = (ms) =>
+    new Promise<void>((resolve) => {
+      this.armed.push({ ms, fire: resolve });
+    });
+}
+
 function adapterOver(
   host: FakeSessionHost,
   now: () => number = () => 1_000,
+  delay: Delay = () => new Promise<void>(() => undefined),
 ): SessionRuntimeAdapter {
   return createOmpAdapter({
     connect: () => Promise.resolve(host),
     now,
     sessionDir: "/state/runtime/session-host",
+    delay,
   });
 }
 
 async function started(
   host: FakeSessionHost,
   ref = "/state/runtime/session-host/a.jsonl",
+  delay?: Delay,
 ): Promise<RuntimeSessionHandle> {
-  const pending = adapterOver(host).start(START);
+  const pending = adapterOver(host, undefined, delay).start(START);
   host.emit({ type: "ready", ref });
   return pending;
+}
+
+/**
+ * Yield until the adapter has armed a bound of exactly this length, then take it.
+ *
+ * By length, because the two bounds are told apart by nothing else and a handle
+ * that has already started still holds its unfired `ready` bound. Microtasks
+ * only — no timer and no sleep: `start()` and `stop()` are several awaits deep
+ * before they reach the wait being bounded, and a fixed sleep would be a guess
+ * that races on a loaded machine.
+ */
+async function nextBound(
+  bounds: ManualDelay,
+  ms: number,
+): Promise<{ readonly ms: number; readonly fire: () => void }> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    // The **newest** match, because a wait the adapter armed and then stopped
+    // caring about stays in this list: a handle that has started still holds the
+    // unfired bound from its `ready` wait and from the prompt it acknowledged, and
+    // firing one of those would do nothing to the wait under test.
+    const index = bounds.armed.findLastIndex((armed) => armed.ms === ms);
+    const found = bounds.armed[index];
+    if (found) {
+      bounds.armed.splice(index, 1);
+      return found;
+    }
+    await Promise.resolve();
+  }
+  throw new Error(`the adapter armed no ${ms.toString()}ms bound`);
 }
 
 async function collect(
@@ -244,6 +313,48 @@ describe("frame parsing", () => {
 });
 
 describe("the session-host adapter", () => {
+  it("keeps its three bounds distinguishable, which is how the tests below pick one", () => {
+    // `nextBound` finds an armed wait by its length, because that is the only
+    // thing that tells them apart. Two of them converging would make every test
+    // below silently select the wrong one, so the coupling is asserted rather
+    // than left to be discovered.
+    expect(READY_TIMEOUT_MS).not.toBe(ACK_TIMEOUT_MS);
+    expect(ACK_TIMEOUT_MS).not.toBe(STREAM_END_TIMEOUT_MS);
+    expect(READY_TIMEOUT_MS).not.toBe(STREAM_END_TIMEOUT_MS);
+  });
+
+  it("stops waiting for a command the session host never acknowledges (issue #108)", async () => {
+    const host = new FakeSessionHost();
+    const bounds = new ManualDelay();
+    // Reports a session, then answers nothing — the half of the hang the ready
+    // bound alone does not reach, because `open()` awaits the prompt's ack next.
+    host.autoAck = false;
+    const pending = adapterOver(host, () => 1_000, bounds.delay).start(START);
+    host.emit({ type: "ready", ref: "/sessions/a.jsonl" });
+
+    (await nextBound(bounds, ACK_TIMEOUT_MS)).fire();
+
+    await expect(pending).rejects.toThrow(SessionHostSilent);
+    // Aborted for the same reason the ready bound aborts: no session is being
+    // returned, so nothing above would ever stop this process.
+    expect(host.closed).toEqual(["abort"]);
+  });
+
+  it("refuses an unacknowledged injection without killing the session", async () => {
+    const host = new FakeSessionHost();
+    const bounds = new ManualDelay();
+    const handle = await started(host, "/sessions/a.jsonl", bounds.delay);
+    host.autoAck = false;
+
+    const injected = handle.inject({ id: "inj-1", text: "look at this" });
+    (await nextBound(bounds, ACK_TIMEOUT_MS)).fire();
+
+    // A refused injection is a state the ledger has (§6.5); killing a working
+    // session because one command went unanswered would be the worse answer.
+    await expect(injected).rejects.toThrow(SessionHostSilent);
+    expect(host.closed).toEqual([]);
+  });
+
   it("returns a handle only once the sidecar reported its native ref", async () => {
     const host = new FakeSessionHost();
     const handle = await started(host, "/sessions/native.jsonl");
@@ -254,6 +365,91 @@ describe("the session-host adapter", () => {
     expect(host.commands).toEqual([
       { type: "prompt", id: "plotroom-1", text: START.prompt },
     ]);
+  });
+
+  it("stops waiting for a session host that never reports one (issue #108)", async () => {
+    const host = new FakeSessionHost();
+    const bounds = new ManualDelay();
+    // Alive, framing nothing. From outside it looks healthy, which is why
+    // nothing above the adapter can tell the difference or escalate.
+    const pending = adapterOver(host, () => 1_000, bounds.delay).start(START);
+
+    // Named by the lookup: a bound of another length is a different bound.
+    (await nextBound(bounds, READY_TIMEOUT_MS)).fire();
+
+    await expect(pending).rejects.toThrow(SessionHostNotReady);
+    // Aborted rather than left running: it holds a workspace and a provider
+    // connection, and PlotRoom has just decided it is not going to be a session.
+    expect(host.closed).toEqual(["abort"]);
+  });
+
+  it("names the bound rather than reporting a process that died", async () => {
+    const host = new FakeSessionHost();
+    const bounds = new ManualDelay();
+    const pending = adapterOver(host, () => 1_000, bounds.delay).start(START);
+    (await nextBound(bounds, READY_TIMEOUT_MS)).fire();
+
+    await expect(pending).rejects.toThrow(
+      /did not report a session within 180s/,
+    );
+  });
+
+  it("stops waiting for a frame channel that outlived the process (issue #108)", async () => {
+    const host = new FakeSessionHost();
+    const bounds = new ManualDelay();
+    const handle = await started(host, "/sessions/a.jsonl", bounds.delay);
+    const observed = collect(handle);
+    // Something else holds the channel's write end, so a graceful close returns
+    // and the frame stream stays open — reachable through a foreign executable
+    // named by `PLOTROOM_SESSION_HOST` (#92).
+    host.holdsChannelOpen = true;
+
+    const stopped = handle.stop("graceful");
+    // The bound on the frame stream ending, which the holder keeps open.
+    (await nextBound(bounds, STREAM_END_TIMEOUT_MS)).fire();
+
+    await expect(stopped).resolves.toBeUndefined();
+    // Escalated once: the abort signals the group, which reaps the holder.
+    expect(host.closed).toEqual(["graceful", "abort"]);
+    // And the observation stream ended, so a caller iterating it is not left
+    // waiting for a session that has already stopped.
+    expect((await observed).at(-1)).toMatchObject({
+      kind: "session-ended",
+      reason: { kind: "stopped", by: "user" },
+    });
+  });
+
+  it("ends the observation stream even when nothing ever closes the channel", async () => {
+    const host = new FakeSessionHost();
+    const bounds = new ManualDelay();
+    const handle = await started(host, "/sessions/a.jsonl", bounds.delay);
+    const observed = collect(handle);
+    // Not even the group signal reaps it: the worst case, and the one where an
+    // unbounded wait hung the stop gesture and the request behind it for ever.
+    host.holdsChannelOpen = true;
+    host.ignoresAbort = true;
+
+    const stopped = handle.stop("abort");
+    (await nextBound(bounds, STREAM_END_TIMEOUT_MS)).fire();
+
+    await expect(stopped).resolves.toBeUndefined();
+
+    const stream = await observed;
+    // Still a **stop**, not a failure. The operator asked for this, and
+    // `RunService` folds a `failed` end straight into `runs.fail` — so recording
+    // PlotRoom's own cleanup trouble as the session's outcome would report a run
+    // the operator stopped as one that broke.
+    expect(stream.at(-1)).toEqual({
+      kind: "session-ended",
+      reason: { kind: "stopped", by: "user" },
+      at: 1_000,
+    });
+    // The trouble is still in the record, as its own non-fatal observation.
+    expect(stream.at(-2)).toMatchObject({
+      kind: "runtime-error",
+      fatal: false,
+      message: expect.stringContaining("stayed open after the process left"),
+    });
   });
 
   it("seeds a fork from PlotRoom's own transcript", async () => {
