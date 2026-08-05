@@ -3,3 +3,8 @@ memory:
 
 autolearn:
   enabled: true
+
+# The delivery workflow (tracker skill, dev-loop skill) drives GitHub through
+# gh; the github tool adds pr_create, run_watch and search on top of it.
+github:
+  enabled: true

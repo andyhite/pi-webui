@@ -1,7 +1,7 @@
 # PlotRoom — Product Specification
 
-**Status:** North Star v1 · **Date:** 2026-07-31
-**Purpose:** the definitive statement of what PlotRoom is and how it behaves — the entrypoint to a ground-up rebuild. This document describes features and behavior, never implementation. It supersedes Draft v3 and incorporates the complete feature inventory.
+**Status:** North Star v2 · **Date:** 2026-08-05
+**Purpose:** the definitive statement of what PlotRoom is and how it behaves — the reference every other document, and the product itself, is corrected against. This document describes features and behavior, never implementation. It supersedes North Star v1, folding in the decisions made while building the first cut.
 
 ---
 
@@ -30,7 +30,7 @@ These are constraints, not features. Every capability in this document operates 
 
 3. **Completion is proven, not claimed.** Whether work got done is decided by checking the world — an artifact exists and validates, a pull request is open, checks are green — never by an agent's own statement that it finished.
 
-4. **Isolation is a guarantee, not a convention.** Concurrent work cannot corrupt other concurrent work's material state. Between workstreams, the guarantee is exclusive workspaces (§3.4); within a workstream, it is **path claims**: one writer per path, always (§3.4). The model enforces both; neither depends on discipline.
+4. **Isolation is a guarantee, not a convention — and its edge is recorded, not implied.** Concurrent work cannot corrupt other concurrent work's material state. Between workstreams, the guarantee is exclusive workspaces (§3.4); within a workstream, it is **path claims**: one writer per path, always (§3.4). The model enforces both; neither depends on discipline. The guarantee covers the filesystem: a resource that is not a path — a running process, a bound port, a live kernel — sits outside the claim vocabulary, and that limit is written down (§3.4) rather than left as a promise the ledger cannot keep.
 
 5. **The graph is a complete record of what agents know — and there is never an invisible session.** Anything that influenced a session — typed at it by a human, injected by a peer session, delegated to a child — appears on the graph as content and edges. Every session the product runs appears on the graph; there is exactly one way to start one, and it is in the app. (What some other tool runs in the same directory is outside the product — accepted, not prevented; its effects arrive honestly, as workspace divergence.) The picture is never missing an input or an actor.
 
@@ -38,7 +38,7 @@ These are constraints, not features. Every capability in this document operates 
 
 7. **Derive from observation, never from inference.** The product does not guess at what an external process is doing from indirect signals. If it cannot observe something exactly, it does not claim it.
 
-8. **Agents and the UI are peers — with one enforced asymmetry.** Every gesture a human has is available to an agent as a tool, over the same vocabulary, so the two surfaces cannot drift apart and there is no privileged mode. The asymmetry is _reflexivity_: a session may author context, dispatch commands, and spend budget in service of other work, but nothing it does may expand its own knowledge, capabilities, or budget without a human (principle 1) — and destroying authored state goes through approval (§6.6). What an agent may not do is enforced, not merely undocumented.
+8. **Agents and the UI are peers — with one enforced asymmetry.** Every gesture a human has is available to an agent as a tool, over the same vocabulary, so the two surfaces cannot drift apart and there is no privileged mode. The vocabulary is declared once — one catalog of gestures drives both surfaces, one gate decides every call, a refusal is identical whichever surface asked, and a refused call has no side effect. Every gesture names its actor — the operator, or a specific session — and the product authenticates that identity rather than believing a label; the gestures reserved to the operator refuse a session where they are enforced, not in a document. The asymmetry is _reflexivity_: a session may author context, dispatch commands, and spend budget in service of other work, but nothing it does may expand its own knowledge, capabilities, or budget without a human (principle 1) — and destroying authored state goes through approval (§6.6). What an agent may not do is enforced, not merely undocumented.
 
 9. **One gesture creates one thing.** A retry, a reconnect, or a double-click can never produce two sessions, two workspaces, or two runs for one request.
 
@@ -118,6 +118,8 @@ The mechanism's rules, each of which comes up in the first week of use:
 
 Claims also sharpen two things for free. **Divergence becomes precise:** a session's picture is stale if a path it read was written by a different claim holder — not "the workspace changed somehow" — so continuation is blocked far less often and always for a reason the product can name. **The operator is an implicit claim holder:** a human editing files alongside sessions is the normal case, not an anomaly, so hand edits are a named divergence class of their own — they stale a session only when they touch paths that session read, never wholesale. Without this, co-working with an agent in one workspace would torch every session's continuability on the first keystroke. And **conflict prediction gains an intra-workstream form:** overlapping waitlisted paths are a real, cheap signal, and cross-workstream prediction reuses the same path vocabulary.
 
+**What claims do not cover, stated so the ledger never promises it.** The claim vocabulary is paths, and principle 4's enforcement today covers the filesystem. A session's work can also hold resources that are not paths — a supervised process, a bound port, a browser tab, a live evaluation kernel — and no path claim bounds them. The recorded position: anything whose reach crosses the workspace boundary (the machine's desktop, the operator's own browser) is refused outright; a session-scoped resource is admitted unclaimed but **observed**, so what a session holds is at least visible; and whether the claim vocabulary itself extends to named non-path extents — which would need a machine scope beside workspace and path — is an open decision, recorded as such (§13). An exclusion list is not an isolation guarantee, and the product does not pretend otherwise.
+
 - **Provisioning.** Creating a workstream creates its workspace. For git: a branch, named from a configurable template (ticket, project, repository, title slug). An existing branch is never renamed or re-derived; a branch that exists remotely is taken from the remote, so a checkout of someone else's branch has that branch's actual commits.
 - **Readiness, not just existence.** A fresh checkout has no installed dependencies, so nothing can be verified in it. A workspace has a **ready** state: a declared per-repository setup step runs after creation and before anything may run there. Not-ready blocks work with the reason visible; setup output is inspectable; a failed setup is reported rather than silently producing failures downstream. The setup declaration lives with the repository where possible — traveling with the code, reviewable — with a settings override for repositories you cannot commit to.
 - **Live status.** Current branch, uncommitted changes, ahead/behind — kept current so a change made by any session _or by a terminal_ is reflected everywhere it is shown.
@@ -134,6 +136,8 @@ A command is **a named, reusable set of marching orders**: the instruction, the 
 - **Command nodes** — an instance on the graph: a definition plus its wiring. Dragging a definition onto a target (a ticket, a workstream) instantiates a node with the target wired as context. A command with no parameters must be usable in one gesture.
 
 **Parameters.** A definition may declare inputs it asks for when used, so a reusable recipe does not hardcode values wrong in every other repository. Defaults may be suggested where honestly derivable from the target — a proposal the user confirms, never a guess applied silently.
+
+**A model is named by identity or by intent.** A definition names its model as one concrete identity or as a **role** — the planning model, the cheap model, the reviewing model — resolved at launch, so a definition shipped in the box is portable across operators and providers instead of refusing wherever one provider's credentials are absent. The role is the definition's intent; **the concrete model that executed each turn is the recorded truth**, observed from the runtime, and the two are never interchangeable in history (§15). A definition's effort speaks the same vocabulary a session's does: no level reachable at launch is unreachable from a definition.
 
 **The most common gesture, stated.** Dropping a command definition onto a bare ticket at top level **creates a workstream** — the ticket becomes its subject, the command node lands inside with the ticket wired as context. The workstream exists in the same instant as the gesture; **the workspace is provisioned at first run, not at creation** — a gesture is 200ms, provisioning is 90 seconds of paid setup, and the run preview is where that cost belongs. The readiness gate (§3.4) already governs the interval between.
 
@@ -155,12 +159,14 @@ A command is **a named, reusable set of marching orders**: the instruction, the 
 A session is a live or completed agent run inside a workstream — and **a record the product owns**: readable, resumable, forkable, deletable, always. There is no distinction between a live session and a stored one, and no read-only mode.
 
 - **Phases**, derived continuously and shown everywhere a session appears: thinking, responding, running a named tool, compacting, waiting for approval, waiting for input, waiting on a claim, stopped, failed, idle. Each phase carries whether the session is busy and whether it wants attention. (Phases derive from events the runtime emits about itself — that is _observation of the runtime_, consistent with principle 7. What stays untrusted is an agent's claims about the world: those are proven, never believed — principle 3.)
-- **Per-session choices**, made at launch and visible after: model and effort, tool permissions (a session can be launched narrower than the app).
+- **Per-session choices**, made at launch and visible after: model and effort, tool permissions (a session can be launched narrower than the app), and **delivery tempo** — whether mid-flight input interrupts the work in progress or waits for the turn to finish (§6.5).
 - **Accounting per session**: turns, elapsed, tokens, cost, time since last activity — plus a context-window meter with warning thresholds.
 - **End states**: a producing session ends on proven completion; an open session when the user ends it; any session by stop, by unrecoverable failure, or by **running out of budget — its own outcome, distinct from failure.** The work did not fail; the money ran out. A different thing to a human reading the card, and something a retry must not blindly re-run.
 - **Delegation.** A session may delegate to child sessions — and, more generally, may author context for and dispatch work to other sessions (principle 1). Every delegated or dispatched session is visible on the graph with its provenance, never hidden inside a tool call; its spend counts against every budget that binds the initiating work (principle 2).
 - Sessions persist; **the transcript is content** like anything else, wireable as context, with its delta being its new turns. **A live transcript versions on checkpoint, not on every turn:** a wired transcript that drifted its consumers per turn would bury the drift feed in noise (§4.5); its consumers drift when the session ends or when someone — the session included — explicitly checkpoints it.
+- **The plan is content.** A session's own task list — the runtime's continuous account of what the session thinks it is doing — is observed like any phase, shown wherever the session appears, and projects onto the graph as a document, versioning on the same checkpoint rule the transcript uses: wireable, searchable, and comparable across runs of one definition. A producing command may seed the plan its definition expects. The plan is read and rendered, never acted on — no task in it starts anything (principle 2) — and it proves nothing: completion stays with the world (principle 3).
 - **Interruption is honest.** A crash or restart with sessions in flight reports each of them as **interrupted** — a distinct end state alongside stopped and failed (principle 11): the work did not fail and nobody stopped it. An interrupted session is a session like any other — readable, resumable, forkable — and resuming it is a human or agent gesture, never automatic (principle 2).
+- **A run is what the product said it was.** The configuration a session actually executed under is recorded from the runtime's own account of itself, isolated from the machine's ambient configuration so nothing moves underneath a run unrecorded. A model substituted mid-run — a fallback, a promotion — is an observed configuration change on the record, never a silent replacement; ending is taken from the runtime's own completion contract, never inferred from silence; and secrets are redacted before a transcript persists, because a credential that reaches the record outlives every rotation.
 
 ### 3.7 The graph itself
 
@@ -169,11 +175,12 @@ A session is a live or completed agent run inside a workstream — and **a recor
 - No cycles in **command topology**: a command's output cannot be, transitively, its own input. This rule is about commands, explicitly not about running sessions — session ↔ session injection is legitimately bidirectional (§6.5), governed by the lineage rule and budgets, not by acyclicity.
 - **The legal connections, exhaustively:** content → command, and content → running session. Nothing else. This is the list the mid-drag refusal (§5) enforces.
 - **Run history** records, for every run: exactly what went in (the assembled content and its versions, in order), the configuration it ran under, what came out, and what it cost. This is what makes any two runs comparable for as long as both are retained (§4.4) — history that recorded less would leave runs uncomparable even while retained, and **pinning is how a run becomes comparable forever**.
+- **Everything on the graph is addressable.** An object, a version, a run's output at a specific run, a transcript, the queue, the budgets that bind a session — one address grammar names them all, from the canvas and from inside a session alike, and _latest_ is a special case of a general address, never the only case (§4.4, §15). An address names something already on the graph — it creates no content and no edge — and a read through one passes the same predicates as the same read from any other surface: one rule, identical refusals (principle 8). Addressed content is read at the range it is needed, which is what makes a large context consultable instead of pasted whole (§3.5).
 
 ### 3.8 Notes and standing instructions
 
 - **Notes** are human-authored content created directly in the app — the fastest path from a thought to something on the graph — and **editable**: a note you cannot edit is not a note. Editing extends to promoted content; each edit is a new version, drifting consumers like any other change. (A full editor for files and documents is directional, §13.)
-- **Standing instructions** are content marked as applying everywhere — "this repository uses pnpm, never npm," "never touch the generated directory" — available as context to every workstream that wants it, so parallel sessions stop rediscovering the same facts at a paid turn each. **Agents can propose additions; a human accepts them** (principle 1).
+- **Standing instructions** are content marked as applying everywhere — "this repository uses pnpm, never npm," "never touch the generated directory" — available to every workstream that opts in, so parallel sessions stop rediscovering the same facts at a paid turn each. Only a note or a document at world scope can stand: a kind whose content is somebody else's to change — a ticket, a transcript — cannot, because a re-sync would rewrite the rules every workstream runs under with nobody deciding it. **Agents can propose additions; a human accepts them** (principle 1) — no pre-grant covers the acceptance, and an object already standing, or already proposed, is never proposed twice. **A repository's own instruction files arrive the same way:** discovering them is a read; each found file is projected as a world-scoped document and proposed, never injected silently into a prompt.
 
 ---
 
@@ -188,9 +195,9 @@ Work is initiated by humans — and by sessions acting on other work, within bud
 - **Run what's missing** — the run affordance never disables; a blocked command shows _waiting on: …_ and offers to reveal and run the upstream chain that would unblock it, asking once.
 - **Re-run all drifted** — within a workstream, or fleet-wide.
 
-**Every scoped run previews exactly what it will execute and what it may cost before it starts, and accepts a spend cap.** This is how "hand off and walk away" works with no scheduler anywhere in the product. **A cost estimate states its basis and its uncertainty** — "based on 12 prior runs of this definition," or "no history; input size only" — and renders as a range, never a bare number: an authoritative-looking wrong number is worse than an honest one (principle 7 applied to the product's own predictions).
+**Every scoped run previews exactly what it will execute and what it may cost before it starts, and accepts a spend cap.** This is how "hand off and walk away" works with no scheduler anywhere in the product. **A cost estimate states its basis and its uncertainty** — "based on 12 prior runs of this definition," or "no history; input size only" — and renders as a range, never a bare number: an authoritative-looking wrong number is worse than an honest one (principle 7 applied to the product's own predictions). **The preview is also where impossibility is caught:** a run whose model no credential can satisfy is refused at the preview, before a workspace is provisioned — not after ninety seconds of paid setup.
 
-**The concurrency limit.** A configurable global limit bounds how many sessions run at once. Initiation beyond it **queues**: a queued run is visible as queued, shows its position, and can be cancelled before it starts. Queuing is admission of already-initiated work, not scheduling — the human (or session) gesture already happened; the system is only deciding _when_, never _whether_. With agents able to fan work out, this went from a nicety to load-bearing. **The preview is the contract:** a queued run executes exactly what it previewed, and if its inputs drifted while it waited, it says so and asks rather than silently running something else.
+**The concurrency limit.** A configurable global limit bounds how many sessions run at once. Initiation beyond it **queues**: a queued run is visible as queued, shows its position, and can be cancelled before it starts. Queuing is admission of already-initiated work, not scheduling — the human (or session) gesture already happened; the system is only deciding _when_, never _whether_. With agents able to fan work out, this went from a nicety to load-bearing. The limit ships as a real number — a default the operator can change, like the global ceiling (§8) — and session concurrency is not the only capacity in play (§8). **The preview is the contract:** a queued run executes exactly what it previewed, and if its inputs drifted while it waited, it says so and asks rather than silently running something else.
 
 ### 4.2 Batch gestures
 
@@ -232,7 +239,7 @@ The graph is the primary surface. Everything else — the queue, the palette, se
 - **Speech bubbles attributed to their sender.** A message draws as a bubble on the node that produced it — a command shows the prompt it dispatched, a session shows what it is saying, a tool in flight shows as a distinct chip. Attribution is the point: on a canvas where several nodes drive one conversation, _who said this_ is the thing worth knowing. Bubbles never obscure the minimap or controls, never exceed the width of what they attach to, collapse to a count when a node is unfocused, and cap how many show at once — fifteen sessions must not become a comic strip.
 - **Off-screen attention markers** — a pointer at the canvas edge aimed at any node wanting attention outside the view, clustering with a count, withdrawing the moment the node scrolls into view.
 - **Minimap, legend, live counts. Multi-select** by marquee or modified click, with a contextual bar of the actions that apply to the whole selection.
-- **Undo for destructive operations** — deleting a workstream, clearing a region, removing nodes or edges — including when an agent did the deleting (principle 10).
+- **Undo for destructive operations** — deleting a workstream, clearing a region, removing nodes or edges — including when an agent did the deleting (principle 10). Deleted things stay listed and restorable after the moment passes: recovery is a surface, not a keystroke with an expiry.
 - **Graph warnings, never refusals.** Topologies that are legal but probably wrong are flagged on the card and in the editor: a chain that cannot run because nothing upstream has produced its input, content assembled beyond the model's window, a command with no context at all, a published output nobody consumes, an unreachable node. **Warnings are readable by agents too**, so a session that produced a mistake can see and fix it in the same turn. Impossible things are refused; questionable things are flagged — a check that blocks authoring is a check people route around.
 
 ---
@@ -242,6 +249,8 @@ The graph is the primary surface. Everything else — the queue, the palette, se
 ### 6.1 The transcript
 
 Streaming responses; reasoning rendered distinctly from output; tool calls with their inputs and outputs; message-level actions; export to a portable document. **Bounded transcripts with recoverable release:** a long-running session's transcript stays within a size budget by releasing the largest old tool outputs first, with a visible marker where content was released and a way to load it back. Nothing is silently deleted, and an export of a released transcript is complete.
+
+Two more things the transcript never does silently. Secrets are redacted before a transcript persists — a credential that reaches the record, and its full-text index, outlives every rotation. And every path by which the runtime itself elides content is marked in the transcript exactly as the product's own releases are: an elision without a marker is silent truncation (principle 12), wherever it happened.
 
 ### 6.2 Drafts and history
 
@@ -264,9 +273,13 @@ Content added to a running session mid-flight arrives as a new turn — and as c
 
 Broadcast is the product's largest spend amplifier — one decision, twelve paid turns — so it is **bounded per session per window**, its **induced spend counts against the sender's budget chain** (the sender caused it; anything else lets a session spend from budgets that do not bind it, a hole in principle 2's transitive guarantee), and **the operator sees it**: a session-originated broadcast appears in the queue and in each recipient workstream's activity history. An agent telling twelve other agents something is exactly the class of event worth knowing happened.
 
+**Delivery tempo is chosen, not inherited.** Whether an injection interrupts the work in progress — worth paying for _"stop, that grep is wasted money"_ — or waits for the turn to finish — right for _"when you're done, read this"_ — is a per-session launch choice (§3.6), and a single injection can override the session's default in either direction. Both are the same gesture at two tempos, and the tempo is the sender's call, never a fixed property of the runtime.
+
 ### 6.6 Approvals
 
 A session requesting a capability it does not have — a command to run, a write to an external system, a claim outside every standing policy — raises an **approval**, surfaced on every in-app attention surface and routed outbound (§7.3), answerable without opening the session. (Answering from the outbound route itself, rather than returning to the machine, is directional — §13.) Approvals can be **pre-granted** per session or per workstream — a human decision about capability made in advance, which is different in kind from a timer that spends. Destructive gestures against authored state requested by an agent go through this same channel. **Irreversibility pierces pre-grants:** every integration write action declares whether it is reversible (§9.2), and an irreversible one — merge, force-push, delete — always raises an approval regardless of what was pre-granted. The same declarations are what mark where a session touched the outside world (§6.3), so fork-cleanliness comes from the source of truth rather than a heuristic.
+
+**A granted destruction is atomic, and its record is the truth.** What was approved is what happened — entire, reflected immediately in search and in the record, and recoverable like every operation on authored state (principle 10). A cascade that half-happened, or an approval record that disagrees with what was actually destroyed, is the same failure as no approval at all.
 
 ### 6.7 Stopping
 
@@ -284,7 +297,7 @@ Search spans every session, including archived ones, ranked over title, location
 
 ### 7.1 The queue
 
-A single ranked list of everything wanting a decision, keyboard-driven, where each row carries enough context to answer _without opening anything_. Selecting a row moves the canvas to it — the queue is a lens, not a place. Fed by: unanswered questions, pending approvals, drift, health alerts, and completions. Every feed supports acknowledge, snooze, and mute (§4.5) — without triage verbs, the queue becomes the inbox you cannot clear, which is the failure it exists to prevent.
+A single ranked list of everything wanting a decision, keyboard-driven, where each row carries enough context to answer _without opening anything_. Selecting a row moves the canvas to it — the queue is a lens, not a place. Fed by: unanswered questions, pending approvals, drift, health alerts, completions, and session-originated broadcasts (§6.5). Every feed supports acknowledge, snooze, and mute (§4.5) — without triage verbs, the queue becomes the inbox you cannot clear, which is the failure it exists to prevent.
 
 ### 7.2 Health alerts
 
@@ -295,6 +308,8 @@ Derived from observation, never reported by the agent:
 - **Conflict predicted** — overlapping paths, in either form: two active workstreams changing the same paths in the same repository (a merge conflict you will hit later), or overlapping waitlisted claims inside one workstream (contention you are hitting now). Same path vocabulary, both directions.
 - **Unanswered** — a question or approval nobody replied to.
 - **Blocked on you** — time a session spent waiting on a human — approvals, questions, claim grants outside policy — tracked separately from time spent working, so it is possible to see when the bottleneck is the operator. A claim wait past a threshold alerts on its own.
+- **Blocked, by the session's own account** — a task the session's plan marks blocked, with its one-line reason (§3.6). The plan is runtime state, observed like any phase; the alert opens a decision and proves nothing.
+- **A guardrail that keeps firing** — the same refusal or warning hit again and again is a session stuck on a rule, not one protected by it.
 
 ### 7.3 Away from the screen
 
@@ -305,8 +320,10 @@ The attention system cannot assume eyes on the canvas; the real failure is sever
 ## 8. Accounting and observability
 
 - **Cost outlives the session that spent it.** Spend accumulates and persists per session, per workstream, and fleet-wide; totals do not reset when sessions end. Everything else here depends on this.
+- **Cost is what the provider said it was** — premium requests and service tiers carried as charged, never re-derived from a price sheet.
 - **Spend surfaces:** on the session, rolled up on the workstream card, and a fleet view — today's total, the biggest spender, and running sessions against the concurrency limit.
 - **Budgets at three scopes:** a single run or batch, a workstream, and a global ceiling. Budgets are the mechanism that makes agent-initiated work safe (principle 2): a session can see what remains of every budget that binds it and plan within it, and reaching a cap cuts work off as its own outcome (§3.6), distinct from failure, which a retry must not blindly re-run. A capped run previews what it will do and what it may cost before starting. **The product ships with a default global ceiling** — a real number the operator can raise or remove, not an empty field with a recommendation — because with agent fan-out, one gesture can otherwise authorize unbounded spend. **Near a cap, the defined behavior is to stop cleanly**: wrap up, report, leave the workspace coherent. Racing the budget — skipping verification to fit under it — is a failure mode, and the product's guidance to agents says so explicitly.
+- **Capacity is not budget.** How many sessions may run at once, how many requests a provider will serve in flight, what remains of a provider's quota — capacity is observed and surfaced beside spend, and never counted against any budget: a budget answers _may this spend more_, capacity answers _can this run now_. The limits know about each other — a run admitted under the concurrency limit but starved by its provider is a stall with a name, not a mystery.
 - **Session timeline:** where the time and money went, as a temporal view of turns and tool calls — including for finished sessions, so it is the post-mortem for something that failed overnight.
 - **Run history and cross-run outcomes** as specified in §4.4.
 - **Structured logs** with a consistent shape across the whole system, level adjustable at runtime, sensitive values redacted, viewable in the app.
@@ -345,24 +362,26 @@ Concept producers · write actions · agent tools (declared inputs, outputs, per
 
 ### 10.2 Lifecycle and trust
 
-Install, enable, disable, remove — per plugin, without restarting. Plugin health is a first-class surface: connected, misconfigured, failing, out of date. **Declared permissions:** a plugin states what it needs — network, filesystem, which credentials, which core capabilities — and the user grants them; a plugin cannot silently gain reach. Versioning against a declared contract version, with refusal or warning rather than obscure failure. Distribution as a self-contained package: in the box, from a directory, or from a source the user configures. **Failure isolation:** a plugin that throws, hangs, or fails to load degrades to _that plugin being unavailable_, reported — never a product that won't start. **Plugins cannot author intent** (principle 1): a plugin produces content, offers tools, and renders things; it does not draw connections between them.
+Install, enable, disable, remove — per plugin, without restarting. Plugin health is a first-class surface: connected, misconfigured, failing, out of date. **Declared permissions:** a plugin states what it needs — network, filesystem, which credentials, which core capabilities — and the user grants them; a plugin cannot silently gain reach. Versioning against a declared contract version, with refusal or warning rather than obscure failure. Distribution as a self-contained package: in the box or from a local directory — distribution from a configured remote source is directional (§13), deferred until fetching, verification, and an update path that cannot silently widen permissions exist together. **Failure isolation:** a plugin that throws, hangs, or fails to load degrades to _that plugin being unavailable_, reported — never a product that won't start. **Plugins cannot author intent** (principle 1): a plugin produces content, offers tools, and renders things; it does not draw connections between them.
 
 ---
 
 ## 11. The application
 
-- **A dock rail with a panel registry** — panels registered, including by plugins; one open at a time; closing is cheap because state persists. In the box: **Conversation** (transcript and composer for the selected session, with status, a session switcher, and export), **Diff** (a workspace's changes — file tree and patches, read-only), **Fleet** (spend and running work across everything), **Logs** (the structured log, filtered), **Timeline** (a session's turn-by-turn breakdown).
+- **A dock rail with a panel registry** — panels registered, including by plugins; one open at a time; closing is cheap because state persists. In the box: **Conversation** (transcript and composer for the selected session, with status, a session switcher, and export), **Diff** (a workspace's changes — file tree and patches, read-only), **Queue** (the attention queue, §7.1), **Fleet** (spend and running work across everything), **Search** (§6.8), **Notes** (§3.8), **Warnings** (the graph's legal-but-probably-wrong flags, §5), **What changed** (§7.3), **Restorable** (recoverable deletions, principle 10), **Stop** (§6.7), **Plugins** (plugin health, §10.2), **Logs** (the structured log, filtered), **Timeline** (a session's turn-by-turn breakdown), and **Settings**.
 - **Command palette:** one keyboard entry point for navigation and every verb.
 - **Keyboard access to the high-frequency verbs**, not just navigation: move through the queue, answer the selected item, run the selected node, stop the selected session. Every binding appears in a shortcuts overlay — a binding cannot exist undocumented.
 - **Accessibility as a system property:** dialogs trap and restore focus; listboxes and comboboxes announce themselves; streaming text announces on start and completion rather than per token; every interactive surface is keyboard-reachable.
 - **Settings:** grouped, searchable, applied without restart. Everything configurable is a setting; environment variables only supply defaults.
+- **Appearance is specified separately.** A design-system document owns the visual language — the tokens, the node card, the chrome, every state a surface can draw — and this specification defers to it on how things look, never on how they behave.
 
 ---
 
 ## 12. Platform and deployment
 
-- **Local-first.** Runs as a desktop application and in a browser against a local server. Packaged installers for desktop platforms.
-- **Single operator by design.** No accounts, no identity, no presence. Access control is an operator credential (an optional shared secret locally; real authentication required for a non-local backend) — not a user system.
+- **Local-first.** Runs as a desktop application and in a browser against a local server. Packaged installers for desktop platforms — signed, and self-updating from a feed the operator can see and decline.
+- **Single operator by design.** No accounts, no identity, no presence. Access control is an operator credential (an optional shared secret locally; real authentication required for a non-local backend) — not a user system. The desktop application keeps its backend credential in the platform keychain, never in a file.
+- **Every gesture names its actor.** The operator and each session are distinct callers; the product authenticates the identity rather than believing a declaration, and the gestures reserved to the operator — setting budgets, withdrawing pre-grants, force-releasing claims, maintenance — refuse a session at the door (principle 8).
 - **Bound to the local machine by default**; remote access is expected to be tunnelled rather than exposed. The desktop application can also connect to a **remote backend** instead of starting its own, remembering and switching between backends. When the backend is remote, workspaces, diffs, and file browsing refer to the _backend's_ machine, not the operator's — the canvas is a window onto where the work lives.
 - **All state is durable and portable.** The canvas, workstreams, sessions and their content, run history, settings — stored together, surviving restarts, backupable, movable.
 - **Reset and cleanup:** clearing the arrangement, clearing derived state, or clearing everything — each stated separately, each saying exactly what it will remove before doing it.
@@ -378,6 +397,8 @@ Install, enable, disable, remove — per plugin, without restarting. Plugin heal
 - **Answering from an outbound route** — approving, replying, or unblocking directly from the push notification or chat message, rather than being told at lunch and unblocked at the desk. Being unblocked away from the machine is half of the routing feature's own motivation.
 - **A shared task list several sessions claim from.** (Direct messaging between sessions is not directional — it exists, as cross-session injection, §6.5. Any richer channel inherits the same constraint: it is content on the graph, per principle 5.)
 - **Multi-root workspaces** — one workstream spanning two repositories (a frontend and a backend changed for one ticket). Today's answer is two workstreams coordinated by published outputs; the workspace-kind contract (§10.1) is written so a composite kind can exist without a new concept.
+- **Claims over resources that are not paths** — whether the claim vocabulary extends to named non-path extents (a process, a port), which would need a machine scope beside workspace and path (§3.4). Today's recorded position: refuse what crosses the workspace boundary, observe what does not.
+- **Plugin distribution from a configured remote source** (§10.2) — deferred until fetching, verification, and an update path that cannot silently widen permissions exist together.
 
 ## 14. Non-goals
 
@@ -395,11 +416,11 @@ Install, enable, disable, remove — per plugin, without restarting. Plugin heal
 
 ---
 
-## 15. What must exist in the first cut
+## 15. The schema-shaped invariants
 
-This document is a rebuild input, and four things in it are schema-shaped rather than feature-shaped: get them wrong at the start and every historical record is permanently degraded, because a rebuild will naturally do them second unless the spec says otherwise. Everything else in this document is additive. These are not:
+This document began as a rebuild input, and four things in it are schema-shaped rather than feature-shaped: get them wrong and every historical record is permanently degraded. The first cut built them first; they are now the four invariants no change may regress. Everything else in this document is additive. These are not:
 
-1. **Run history records the full assembled content and configuration** — not just versions. A history that recorded less leaves every past run uncomparable forever (§3.7, §4.4).
+1. **Run history records the full assembled content and configuration** — not just versions, and the configuration recorded is the one that actually executed: the runtime's own account, with mid-run substitutions observed (§3.6). Where a definition named a role, the concrete model that ran is the recorded truth (§3.5). A history that recorded less leaves every past run uncomparable forever (§3.7, §4.4).
 2. **Every context edge records its author** — human or session. Retrofitting means every pre-existing edge has an unknown author, and the graph stops being able to say who decided what agents know (principle 1).
 3. **Version retention with the compaction rule** — run-referenced versions retained, unreferenced intermediates compacted after a window, pinned runs never (§3.2). "Retain everything forever" is a decision either way; make it deliberately.
-4. **Per-run output addressing** — _latest_ as a special case of a general address, never the only case (§4.4). A system built on "the output" instead of "output@n" cannot grow comparison later.
+4. **Per-run output addressing** — _latest_ as a special case of a general address, never the only case (§4.4), and the address works from inside a session as well as from the canvas (§3.7). A system built on "the output" instead of "output@n" cannot grow comparison later.
