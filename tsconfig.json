@@ -8,6 +8,7 @@
     { "path": "packages/plugins/git" },
     { "path": "packages/plugins/github" },
     { "path": "packages/plugins/jira" },
+    { "path": "packages/toolkit" },
     { "path": "packages/ui" },
     { "path": "apps/server" },
     { "path": "apps/session-host" },

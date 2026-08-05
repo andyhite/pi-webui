@@ -1,0 +1,40 @@
+/**
+ * The one stylesheet (decision 0002 §2). `apps/web` imports it once; no other
+ * package authors CSS or needs a bundler.
+ *
+ * Three deliberate absences, because a stylesheet is also a boundary:
+ *
+ * - **No preflight.** Tailwind's reset is a global change to every element the
+ *   renderer draws, and the arrangement e2e gates measure real DOM sizes
+ *   (decision 0002 §4) — a reset moves them. Restyling product surfaces is #51,
+ *   and it re-baselines those gates once, visibly. The token layer does not.
+ * - **No default theme.** `tailwindcss/theme.css` is not imported, so Tailwind's
+ *   own palette and scales do not exist here: there is no `bg-red-500` to reach
+ *   for and no `text-sm` that means something the design never decided. The only
+ *   values are §18's, which is what makes "visual decisions cannot be made
+ *   outside the toolkit" (decision 0002 §3) true of the stylesheet rather than
+ *   only of the components.
+ * - **No `--spacing` scale.** §18's space scale is non-linear (4 · 6 · 8 · 9 ·
+ *   11 · 12 · 14 · 16 · 18 · 20 · 24 · 28), so mapping it onto `p-1 … p-12`
+ *   would make `p-4` mean 9px and quietly break every reader's expectation.
+ *   Spacing is a variant on the layout primitives (#102), reading
+ *   `var(--pr-space-N)`.
+ *
+ * `source(none)` plus explicit `@source` rules is Tailwind's documented way to
+ * take full control of class detection. It matters here because automatic
+ * detection is anchored at the build's working directory, which differs between
+ * a turbo task and a root script — and because `packages/ui/src` is outside this
+ * package and would never be found on its own.
+ *
+ * Tests are excluded from detection. A test names class strings as fixtures, and
+ * scanning them would compile those fixtures into the shipped artifact — so
+ * deleting a test would change the stylesheet, and the stylesheet would carry
+ * utilities no surface uses.
+ */
+
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@import "./theme.generated.css";
+
+@source "./";
+@source not "./**/*.test.ts";
+@source "../../ui/src";
