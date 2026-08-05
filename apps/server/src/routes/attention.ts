@@ -20,10 +20,14 @@ import { actorOf, body, param, type ApiEnv, type ApiStores } from "./api.js";
  * response and a snoozed one is not either until its time is up. A surface
  * ranks nothing, filters nothing, and holds no ledger of its own — it renders
  * what it is given, and the live stream (`attention` events) keeps it current.
+ * That stream is not actor-filtered, which is its own open question and not this
+ * file's to answer (issue #207); everything below bounds the HTTP reads.
  *
- * These are the operator's own surfaces and carry no agent tool: §7's queue is
- * where the human decides, and a session triaging the queue that reports on it
- * would be a session deciding what the operator gets to see.
+ * These are the operator's own surfaces and carry no agent tool — and the reads
+ * are as much the operator's as the verbs. §7's queue is where the human decides:
+ * a session triaging the queue that reports on it would be deciding what the
+ * operator gets to see, and a session *reading* it would be reading every other
+ * session's questions and approvals, each row worded for whoever answers it.
  */
 const triageBody = z.object({
   /** Snooze only: when it comes back. There is no "snooze forever" (§4.5). */
@@ -124,16 +128,17 @@ function nodeIdOf(stores: ApiStores, sessionId: string | null): string | null {
 }
 
 /**
- * The operator's own gestures, enforced by the actor rather than by the
- * catalog's flag alone — the same way the claim verbs are: a flag describes, and
- * this is the gate. Triaging the queue and configuring where notifications go
- * are decisions about what the human sees and where, and a session making one
- * would be deciding that for them.
+ * The operator's own surface, enforced by the actor rather than by the catalog's
+ * flag alone — the same way the claim verbs are: a flag describes, and this is the
+ * gate. Reading the queue, triaging it, and configuring where notifications go are
+ * all decisions about what the human sees and where; a session making one would be
+ * deciding that for them, and a session *reading* it would be reading every other
+ * session's asks (§7, principle 1).
  */
 function operatorOnly(actor: Author, gesture: string): void {
   if (actor.kind === "human") return;
   throw forbidden(
-    `${gesture} is the operator's own gesture; a session doing it would be deciding what the human sees (§7, principle 1)`,
+    `${gesture} is the operator's own; a session doing it would be reading or deciding what the human sees (§7, principle 1)`,
   );
 }
 
@@ -146,8 +151,17 @@ export function attentionRoutes(
   /**
    * The queue (§7.1). One ranked list of everything wanting a decision, each row
    * carrying enough to answer it without opening anything.
+   *
+   * The operator's, and gated like the triage verbs beside it (issue #119). Every
+   * ask in it is worded for whoever answers it, so a session reading this read
+   * every other session's questions and approvals — the same disclosure closing
+   * `GET /api/approvals` was about, through the other door. A session needs none
+   * of it: every fact here about its own work reaches it as the result of the call
+   * that produced the fact.
    */
   app.get("/attention", (c) => {
+    operatorOnly(actorOf(c), "reading the queue");
+
     const derived = attention.derive();
     return c.json({
       items: attentionItems(derived),

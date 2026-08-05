@@ -404,6 +404,27 @@ describe("triage (§4.5), whose job is hiding", () => {
       true,
     );
   });
+
+  it("is the operator's to read, too: the queue words other sessions' asks (#119)", async () => {
+    const harness = await boot(repository());
+    const { sessionId, questionId } = await askingSession(harness);
+    await itemOfFeed(harness, "question");
+
+    // Closing `GET /api/approvals` to a session actor is worth nothing while this
+    // read is open: every row here is worded for whoever answers it, so the queue
+    // hands over every other session's questions and approvals whole.
+    const refused = await harness.call("/attention", {
+      actor: `session:${sessionId}`,
+    });
+    expect(refused.status).toBe(403);
+    expect(str(refused.body, "error.message")).toContain("the operator's own");
+
+    // And the operator's own read is untouched — this is their surface, not a
+    // capability being taken away from anyone.
+    expect((await items(harness)).map((item) => at(item, "id"))).toContain(
+      `question:${questionId}`,
+    );
+  });
 });
 
 describe("health alerts, from observation only (§7.2)", () => {
