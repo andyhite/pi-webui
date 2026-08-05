@@ -2,20 +2,38 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   ServerNeverBecameHealthyError,
+  ServerNeverReportedItsAddressError,
   createPollingWaiter,
   spawnOrAttach,
 } from "./spawn-or-attach.js";
 import type { HealthWaiter, SpawnedProcess } from "./spawn-or-attach.js";
 
-function fakeProcess(pid: number): SpawnedProcess & { killed: boolean } {
+const PORT = 4600;
+
+function fakeProcess(
+  pid: number,
+  reportedPort: number = PORT,
+): SpawnedProcess & { killed: boolean } {
   const proc = {
     pid,
     killed: false,
+    listening: Promise.resolve({ host: "127.0.0.1", port: reportedPort }),
     async kill() {
       proc.killed = true;
     },
   };
   return proc;
+}
+
+/**
+ * Every test here cares about the *sequence* of health checks, never which
+ * port a probe was built for — `spawnOrAttach` builds one for the pre-spawn
+ * attach check and, separately, one for whatever port the child reports
+ * (#88) — so this ignores the argument and hands back the one shared probe,
+ * preserving the call-counting these tests are actually about.
+ */
+function probeFactory(probe: () => Promise<boolean>) {
+  return () => probe;
 }
 
 describe("spawnOrAttach", () => {
@@ -24,12 +42,13 @@ describe("spawnOrAttach", () => {
     const waitUntilHealthy: HealthWaiter = vi.fn();
 
     const handle = await spawnOrAttach({
-      probe: async () => true,
+      port: PORT,
+      probeFor: probeFactory(async () => true),
       spawn,
       waitUntilHealthy,
     });
 
-    expect(handle.result).toEqual({ mode: "attached" });
+    expect(handle.result).toEqual({ mode: "attached", port: PORT });
     expect(spawn).not.toHaveBeenCalled();
     expect(waitUntilHealthy).not.toHaveBeenCalled();
   });
@@ -37,7 +56,8 @@ describe("spawnOrAttach", () => {
   it("attaching never kills anything on stop — it never spawned anything", async () => {
     const child = fakeProcess(1);
     const handle = await spawnOrAttach({
-      probe: async () => true,
+      port: PORT,
+      probeFor: probeFactory(async () => true),
       spawn: () => child,
       waitUntilHealthy: async () => true,
     });
@@ -54,12 +74,63 @@ describe("spawnOrAttach", () => {
     };
 
     const handle = await spawnOrAttach({
-      probe,
+      port: PORT,
+      probeFor: probeFactory(probe),
       spawn: () => child,
       waitUntilHealthy: async (p) => p(),
     });
 
-    expect(handle.result).toEqual({ mode: "spawned", pid: 42 });
+    expect(handle.result).toEqual({ mode: "spawned", pid: 42, port: PORT });
+  });
+
+  it("health-probes and connects the port the child actually reported, not the one it was asked for", async () => {
+    // A stored override can move the bound port after spawn (#87) — the
+    // fix this guards is using that reported port for the health wait and
+    // the final result, never the port the caller asked to attach at.
+    const reportedPort = 9999;
+    const child = fakeProcess(42, reportedPort);
+    const probedPorts: number[] = [];
+    const probeForPort = (port: number) => {
+      return async () => {
+        probedPorts.push(port);
+        // Nothing is listening at the originally-asked port — only the
+        // port the child actually reports is ever healthy.
+        return port === reportedPort;
+      };
+    };
+
+    const handle = await spawnOrAttach({
+      port: PORT,
+      probeFor: probeForPort,
+      spawn: () => child,
+      waitUntilHealthy: async (p) => p(),
+    });
+
+    expect(handle.result).toEqual({
+      mode: "spawned",
+      pid: 42,
+      port: reportedPort,
+    });
+    expect(probedPorts).toContain(reportedPort);
+  });
+
+  it("throws without ever probing when the child exits before reporting an address", async () => {
+    const child: SpawnedProcess = {
+      pid: 5,
+      listening: Promise.reject(new Error("exited")),
+      kill: async () => {},
+    };
+    const waitUntilHealthy: HealthWaiter = vi.fn();
+
+    await expect(
+      spawnOrAttach({
+        port: PORT,
+        probeFor: probeFactory(async () => false),
+        spawn: () => child,
+        waitUntilHealthy,
+      }),
+    ).rejects.toBeInstanceOf(ServerNeverReportedItsAddressError);
+    expect(waitUntilHealthy).not.toHaveBeenCalled();
   });
 
   it("kills the spawned process when it never becomes healthy in time", async () => {
@@ -68,7 +139,8 @@ describe("spawnOrAttach", () => {
     await expect(
       spawnOrAttach(
         {
-          probe: async () => false,
+          port: PORT,
+          probeFor: probeFactory(async () => false),
           spawn: () => child,
           waitUntilHealthy: async () => false,
         },
@@ -91,12 +163,13 @@ describe("spawnOrAttach", () => {
     };
 
     const handle = await spawnOrAttach({
-      probe,
+      port: PORT,
+      probeFor: probeFactory(probe),
       spawn: () => child,
       waitUntilHealthy: async (p) => p(),
     });
 
-    expect(handle.result).toEqual({ mode: "attached" });
+    expect(handle.result).toEqual({ mode: "attached", port: PORT });
     // The spawn attempt that lost the race is cleaned up, not left running.
     expect(child.killed).toBe(true);
   });
@@ -121,7 +194,8 @@ describe("spawnOrAttach", () => {
 
     await expect(
       spawnOrAttach({
-        probe,
+        port: PORT,
+        probeFor: probeFactory(probe),
         spawn: () => child,
         waitUntilHealthy: async (p) => p(),
       }),
@@ -133,11 +207,12 @@ describe("spawnOrAttach", () => {
   it("stop() kills only the process this call spawned", async () => {
     const child = fakeProcess(9);
     const handle = await spawnOrAttach({
-      probe: async () => false,
+      port: PORT,
+      probeFor: probeFactory(async () => false),
       spawn: () => child,
       waitUntilHealthy: async () => true,
     });
-    expect(handle.result).toEqual({ mode: "spawned", pid: 9 });
+    expect(handle.result).toEqual({ mode: "spawned", pid: 9, port: PORT });
     handle.stop();
     expect(child.killed).toBe(true);
   });

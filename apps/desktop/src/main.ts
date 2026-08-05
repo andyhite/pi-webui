@@ -97,12 +97,34 @@ export function healthProbe(port: number): HealthProbe {
   };
 }
 
+/** The one message `apps/server/src/index.ts`'s bootstrap ever sends over IPC. */
+interface ListeningMessage {
+  readonly type: "listening";
+  readonly host: string;
+  readonly port: number;
+}
+
+function isListeningMessage(value: unknown): value is ListeningMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "listening" &&
+    typeof (value as { host?: unknown }).host === "string" &&
+    typeof (value as { port?: unknown }).port === "number"
+  );
+}
+
 export function spawnServer(
   port: number,
   onUnexpectedExit: (code: number | null) => void,
 ): SpawnedProcess {
   const child = spawnChildProcess(process.execPath, [SERVER_ENTRY], {
-    stdio: "inherit",
+    // A fourth, `"ipc"` channel beside the three inherited ones: stdout/
+    // stderr keep going straight to this process's own (unchanged from
+    // before #88), and the extra channel is the only way to learn which
+    // address the child actually bound — a stored override can move it
+    // (#87), and `port` below is only ever a *request*, never a guarantee.
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
     env: {
       ...process.env,
       PLOTROOM_PORT: String(port),
@@ -120,6 +142,28 @@ export function spawnServer(
     throw new Error("failed to spawn the local server: no pid");
   }
 
+  // The executor form because this project's `lib` predates
+  // `Promise.withResolvers` (`apps/server/src/runtime/omp.ts` states the
+  // same reason).
+  const listening = new Promise<{ host: string; port: number }>(
+    (resolve, reject) => {
+      const onMessage = (message: unknown) => {
+        if (!isListeningMessage(message)) return;
+        child.off("message", onMessage);
+        resolve({ host: message.host, port: message.port });
+      };
+      child.on("message", onMessage);
+      child.once("exit", (code) => {
+        child.off("message", onMessage);
+        reject(
+          new Error(
+            `the local server exited (code ${String(code)}) before reporting the address it bound`,
+          ),
+        );
+      });
+    },
+  );
+
   let expectedShutdown = false;
   child.on("exit", (code) => {
     if (!expectedShutdown) onUnexpectedExit(code);
@@ -127,6 +171,7 @@ export function spawnServer(
 
   return {
     pid,
+    listening,
     kill: () =>
       new Promise<void>((resolve) => {
         expectedShutdown = true;
@@ -187,14 +232,20 @@ async function connectToActiveBackend(
 
   if (backend === null) {
     const handle = await spawnOrAttach({
-      probe: healthProbe(port),
+      port,
+      probeFor: healthProbe,
       spawn: () => spawnServer(port, onLocalServerCrash),
       waitUntilHealthy: createPollingWaiter(250),
     });
+    // The port this loads is whichever one `spawnOrAttach` actually
+    // confirmed healthy — `handle.result.port`, never the caller's own
+    // `port` — because a stored override can move it after spawn (#87), and
+    // an attach can only ever have found something at the resolved `port`
+    // in the first place (#88).
     return {
       ok: true,
       connection: {
-        url: `http://127.0.0.1:${port}/`,
+        url: `http://127.0.0.1:${handle.result.port}/`,
         remoteBackend: null,
         stop: () => handle.stop(),
       },
