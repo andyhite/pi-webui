@@ -1,0 +1,128 @@
+name: Checks
+
+# The checks that apply to *every* change, including a documentation-only one:
+# formatting (Prettier formats Markdown, so this is the check a docs change can
+# actually fail), the commit messages, the shape of the history, and the subject
+# that will become the permanent record.
+#
+# `ci.yml` holds the code checks and is path-filtered off documentation. The split
+# is by workflow rather than by job because GitHub's `paths-ignore` is a trigger
+# filter, not a per-job one: one filtered workflow would have skipped these too.
+#
+# Nothing here needs a build, a browser or Bun, so it stays cheap enough to run
+# unconditionally.
+
+on:
+  push:
+    branches: [main]
+  # `edited` matters: the pull-request title is the subject a squash merge writes, and
+  # it is the one input to these checks that changes without touching the branch. The
+  # default activity types are opened/synchronize/reopened, so without this a title
+  # renamed after a green run is never re-linted.
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Format
+        run: pnpm format:check
+
+  commits:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Commitlint
+        run: >-
+          pnpm commitlint
+          --from ${{ github.event.pull_request.base.sha }}
+          --to ${{ github.event.pull_request.head.sha }}
+          --verbose
+
+  # The message a squash merge writes is the permanent record, and until this job
+  # existed nothing checked its subject: `commits` lints the branch's own commits,
+  # which the squash replaces.
+  #
+  # The two halves have different sources, so they are checked in different places.
+  # The **subject** is `squash_merge_commit_title: PR_TITLE` — this pull request's
+  # title with ` (#N)` appended — which is what this job lints, suffix included,
+  # because the suffix counts against `header-max-length`. The **body** is
+  # `squash_merge_commit_message: COMMIT_MESSAGES`, i.e. the branch's own commit
+  # messages, which `commits` above has already linted line for line. That setting was
+  # `PR_BODY` until this change, and a pull-request body is prose with links and long
+  # lines in it: #220's own body fails `body-max-line-length` on thirteen lines.
+  #
+  # It matters beyond tidiness: `pnpm release` refuses any commit range containing a
+  # commit commitlint rejects, so one bad squash message would break every later
+  # release, and whoever is cutting it would be the one to find out. A `--subject`
+  # override is not linted by anything — that is the deviation, and it is on whoever
+  # passes it.
+  pr-title:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The title goes through the environment rather than into the command line:
+      # it is attacker-controlled text on a fork's pull request, and `${{ }}`
+      # interpolation into a `run:` block is a shell injection.
+      - name: Commitlint the squash subject
+        env:
+          SUBJECT: ${{ github.event.pull_request.title }} (#${{ github.event.pull_request.number }})
+        run: printf '%s' "$SUBJECT" | pnpm commitlint --verbose
+
+  linear-history:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject merge commits
+        run: |
+          merges=$(git rev-list --merges \
+            ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }})
+          if [ -n "$merges" ]; then
+            echo "merge commits are not allowed (see AGENTS.md):"
+            echo "$merges"
+            exit 1
+          fi
