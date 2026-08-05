@@ -3,6 +3,7 @@ import {
   DEFAULT_HEALTH_THRESHOLDS,
   deriveAttention,
   deriveHealthAlerts,
+  epochSeconds,
   type AttentionItem,
   type AttentionSources,
   type AttentionTarget,
@@ -520,9 +521,9 @@ export class AttentionService {
           target: this.sessionTarget(stored.session.id),
           // blocked.since is EpochMillis (decision 0001: observations are
           // stamped in ms); every other health input and the attention
-          // pipeline's own clock are Unix seconds (sessionObservations
-          // above does the same conversion for lastOutputAt).
-          since: Math.floor(blocked.since / 1000),
+          // pipeline's own clock are Unix seconds — epochSeconds is the one
+          // place that conversion happens (phases.ts's own doc comment).
+          since: epochSeconds(blocked.since),
           phaseName: blocked.phaseName,
           taskContent: blocked.content,
           blocker: blocked.blocker,
@@ -561,7 +562,7 @@ export class AttentionService {
         lastOutputAt:
           lastOutputMillis === null
             ? session.startedAt
-            : Math.floor(lastOutputMillis / 1000),
+            : epochSeconds(lastOutputMillis),
         lastWorkspaceChangeAt: lastWrite,
         costSinceWorkspaceChangeMicros: stores.sessions.reportedCostMicrosSince(
           session.id,

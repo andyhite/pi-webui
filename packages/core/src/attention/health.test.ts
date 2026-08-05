@@ -371,7 +371,7 @@ describe("plan blocked", () => {
     );
     expect(alerts.map((alert) => alert.alert)).toEqual(["plan-blocked"]);
     expect(alerts[0]?.id).toBe(
-      "health:plan-blocked:sess-1:Implementation:ship it",
+      "health:plan-blocked:sess-1\u0000Implementation\u0000ship it",
     );
     expect(alerts[0]?.summary).toBe("ship it: waiting on review");
     expect(alerts[0]?.since).toBe(NOW - 500);
@@ -401,8 +401,8 @@ describe("plan blocked", () => {
       }),
     );
     expect(alerts.map((alert) => alert.id)).toEqual([
-      "health:plan-blocked:sess-1:Implementation:ship it",
-      "health:plan-blocked:sess-2:Implementation:ship it",
+      "health:plan-blocked:sess-1\u0000Implementation\u0000ship it",
+      "health:plan-blocked:sess-2\u0000Implementation\u0000ship it",
     ]);
   });
 
@@ -430,9 +430,37 @@ describe("plan blocked", () => {
       }),
     );
     expect(alerts.map((alert) => alert.id)).toEqual([
-      "health:plan-blocked:sess-1:Planning:review",
-      "health:plan-blocked:sess-1:Implementation:review",
+      "health:plan-blocked:sess-1\u0000Planning\u0000review",
+      "health:plan-blocked:sess-1\u0000Implementation\u0000review",
     ]);
+  });
+
+  it("never collides two distinct facts through a ':' in a phase name or task content (#284)", () => {
+    const alerts = deriveHealthAlerts(
+      observations({
+        planBlocks: [
+          {
+            sessionId: "sess-1",
+            target: { nodeId: "node-1", workstreamId: "ws-1" },
+            since: NOW,
+            phaseName: "deploy:prod",
+            taskContent: "check",
+            blocker: "flaky CI",
+          },
+          {
+            sessionId: "sess-1",
+            target: { nodeId: "node-1", workstreamId: "ws-1" },
+            since: NOW,
+            phaseName: "deploy",
+            taskContent: "prod:check",
+            blocker: "waiting on review",
+          },
+        ],
+      }),
+    );
+    const ids = alerts.map((alert) => alert.id);
+    expect(new Set(ids).size).toBe(2);
+    expect(alerts).toHaveLength(2);
   });
 
   it("reports nothing when nothing is blocked", () => {
