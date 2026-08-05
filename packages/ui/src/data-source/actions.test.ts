@@ -600,4 +600,53 @@ describe("createApiActions", () => {
     await actions.setArrangement([{ nodeId: "n1", position: { x: 1, y: 2 } }]);
     expect(patch.mock.calls[1]?.[2]?.keepalive).toBeUndefined();
   });
+
+  it("deleteSession deletes /api/sessions/:id and reports whether it stopped a live session", async () => {
+    const del = vi.fn(async () => ({
+      session: { id: "s1" },
+      end: null,
+      stopped: true,
+      restorable: true,
+    }));
+    const actions = createApiActions(fakeHttp({ delete: del }));
+
+    const result = await actions.deleteSession("s1");
+
+    expect(del).toHaveBeenCalledWith("/api/sessions/s1");
+    expect(result).toEqual({ ok: true, value: { stopped: true } });
+  });
+
+  it("restoreEntity posts to the entity's own restore verb, keyed by kind", async () => {
+    const post = vi.fn(async () => undefined);
+    const actions = createApiActions(fakeHttp({ post }));
+
+    await actions.restoreEntity("session", "s1");
+    expect(post).toHaveBeenCalledWith("/api/sessions/s1/restore");
+
+    await actions.restoreEntity("commandDefinition", "def1");
+    expect(post).toHaveBeenCalledWith("/api/command-definitions/def1/restore");
+  });
+
+  it("restoreEntity surfaces a refusal (e.g. the parent it belongs to is still deleted) rather than throwing", async () => {
+    const post = vi.fn(async () => {
+      throw new HttpError(409, "/api/nodes/n1/restore", {
+        error: {
+          code: "refused",
+          message: "the workstream this node belongs to is still deleted",
+          details: { reason: "parent_deleted" },
+        },
+      });
+    });
+    const actions = createApiActions(fakeHttp({ post }));
+
+    const result = await actions.restoreEntity("node", "n1");
+
+    expect(result).toEqual({
+      ok: false,
+      refusal: {
+        reason: "parent_deleted",
+        message: "the workstream this node belongs to is still deleted",
+      },
+    });
+  });
 });
