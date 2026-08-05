@@ -2,6 +2,7 @@
 description: This is a pnpm workspace — npm, yarn, and npx corrupt the lockfile and bypass pinned versions
 condition: '\bnpm\s+(install|i\b|ci\b|add|run|exec)|\byarn\s+(add|install|run)|\bnpx\s'
 scope: tool
+interruptMode: tool-only
 ---
 
 This repository is a **pnpm 9 workspace** (`packageManager` is pinned):

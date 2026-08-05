@@ -19,7 +19,9 @@ Progress`) before your first edit, record a blocker as an issue comment when
 - **Nothing reaches `main` except a pull request, and only the operator
   merges it.** The merge **is** the approval; an operator comment on an open
   PR **is** a change request — back to `In Progress`, address it, return to
-  `Review`. Agents never merge, never push to `main`, no local fast-forward,
+  `Review`. An agent merges **only on the operator's explicit instruction**
+  — never on its own judgment — and never pushes to `main` (branch
+  protection rejects it anyway), no local fast-forward,
   no exception for one line. `main` stays linear: squash or fast-forward,
   never a merge commit; keep the PR rebased onto `origin/main` while it
   waits.

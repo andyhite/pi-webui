@@ -2,6 +2,7 @@
 description: Worktree discipline — claim before create, one writer, remove only your own after Done
 condition: 'git\s+worktree\s+(add|remove)|rm\s+-\w*r\w*\s[^\n]*plotroom-'
 scope: tool
+interruptMode: tool-only
 ---
 
 Worktree operation detected — check the discipline before it runs:

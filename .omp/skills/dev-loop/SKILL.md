@@ -103,8 +103,10 @@ own checks, exercises the change, and writes any missing e2e coverage.
 
 ## 9. Review — the operator decides on the PR itself
 
-You never merge. **The operator merging the PR is the approval; the operator
-commenting on it is a change request.** There is no approve-then-merge
+You never merge on your own judgment. **The operator merging the PR is the
+approval; the operator commenting on it is a change request.** An explicit
+"merge it" from the operator is the same approval executed by your hands —
+`gh pr merge --squash`, then step 10. There is no approve-then-merge
 two-step.
 
 - Watch CI (`github` tool `run_watch`). Red checks are yours to fix

@@ -2,6 +2,7 @@
 description: Opening a PR carries obligations — title, proof, Closes, board move, QA verdict
 condition: 'gh\s+pr\s+create|gh\s+stack\s+submit'
 scope: tool
+interruptMode: tool-only
 ---
 
 A PR is opening — the checklist that makes it reviewable and trackable:

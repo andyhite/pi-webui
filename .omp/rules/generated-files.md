@@ -3,6 +3,7 @@ description: Generated files are never hand-edited — run the generator instead
 condition:
   - "**/theme.generated.css"
   - "**/pnpm-lock.yaml"
+interruptMode: tool-only
 ---
 
 You are about to write a **generated file** by hand. Don't:
