@@ -26,8 +26,22 @@
       "dependsOn": ["^build"],
       "cache": false
     },
+    // `dependsOn: ["build"]` is the package's **own** build, and it is what
+    // keeps `pnpm typecheck` from corrupting `dist/`. Every package's
+    // `typecheck` script is `tsc -b` — the same command, the same emit, the
+    // same `dist/.tsbuildinfo` as `build`. With only `^build` here the two are
+    // siblings with identical dependencies, so turbo starts them together:
+    // measured overlaps of 124–676ms in ten of eleven packages, two `tsc -b`
+    // processes emitting over each other. What comes out is a `dist` with torn
+    // files in it (`packages/ui/dist/sessions/ConversationPanel.js` read back as
+    // invalid JS; `packages/plugins/github`'s entry loading as `undefined`,
+    // #118) — and worse, turbo stores that half-written tree as `build`'s cache
+    // entry, so the corruption is replayed into later runs instead of being a
+    // one-off. Own-build-first makes the second `tsc -b` a no-op check over an
+    // up-to-date project, which is what a typecheck was always meant to be.
+    // `^build` is implied: `build` already depends on it.
     "typecheck": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["build"],
       "outputs": []
     },
     "lint": {
