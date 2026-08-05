@@ -6,6 +6,7 @@ import type {
   RuntimeRequest,
   RuntimeRequestId,
   SessionEndReason,
+  TodoPhaseSnapshot,
 } from "./runtime.js";
 
 /**
@@ -62,6 +63,13 @@ export interface SessionObservationState {
   readonly fatalError: string | null;
   /** Folded from the same log, in seconds (§3.6 accounting). */
   readonly accounting: SessionAccounting;
+  /**
+   * The runtime's plan, folded from `plan-updated` observations by
+   * {@link reconcilePhases} rather than replaced wholesale — a resumed
+   * session's first snapshot has already had its completed/abandoned tasks
+   * stripped by the runtime, and PlotRoom's own log is what remembers them.
+   */
+  readonly phases: readonly TodoPhaseSnapshot[];
 }
 
 export function initialObservationState(
@@ -79,6 +87,7 @@ export function initialObservationState(
     ended: null,
     fatalError: null,
     accounting: startAccounting(epochSeconds(startedAt)),
+    phases: [],
   };
 }
 
@@ -177,7 +186,51 @@ export function reduceObservation(
       return observation.fatal
         ? { ...base, fatalError: base.fatalError ?? observation.message }
         : base;
+    case "plan-updated":
+      return {
+        ...base,
+        phases: reconcilePhases(base.phases, observation.phases),
+      };
   }
+}
+
+/**
+ * Fold a fresh plan snapshot over what PlotRoom already knew, rather than
+ * replacing it outright.
+ *
+ * The runtime strips `completed` and `abandoned` tasks from its own cache on
+ * resume (§7 of the TTSR/plan lifecycle notes), so a resumed session's first
+ * `plan-updated` observation is missing tasks PlotRoom's own log already has.
+ * A task that was terminal before and is absent from the fresh snapshot is
+ * carried forward; anything else absent was a real `rm`, and stays gone. A
+ * phase present only in the previous snapshot is kept for the same reason —
+ * an omp resume can drop a whole phase's tasks the same way.
+ *
+ * Matched by phase name and, within a phase, by task `content` — the only
+ * identities either side has (`TodoTaskSnapshot`'s own doc comment).
+ */
+function reconcilePhases(
+  previous: readonly TodoPhaseSnapshot[],
+  fresh: readonly TodoPhaseSnapshot[],
+): readonly TodoPhaseSnapshot[] {
+  const previousByName = new Map(previous.map((phase) => [phase.name, phase]));
+  const freshByName = new Map(fresh.map((phase) => [phase.name, phase]));
+  const names = [...new Set([...previousByName.keys(), ...freshByName.keys()])];
+
+  return names.map((name) => {
+    const before = previousByName.get(name);
+    const after = freshByName.get(name);
+    if (after === undefined) return before ?? { name, tasks: [] };
+    if (before === undefined) return after;
+
+    const afterContents = new Set(after.tasks.map((task) => task.content));
+    const carriedForward = before.tasks.filter(
+      (task) =>
+        !afterContents.has(task.content) &&
+        (task.status === "completed" || task.status === "abandoned"),
+    );
+    return { name, tasks: [...carriedForward, ...after.tasks] };
+  });
 }
 
 /** PlotRoom's own state, joined in — it is not observable from the runtime. */

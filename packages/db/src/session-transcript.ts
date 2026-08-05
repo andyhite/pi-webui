@@ -168,6 +168,7 @@ export function transcriptFromObservations(
       case "injection-refused":
       case "session-ended":
       case "runtime-error":
+      case "plan-updated":
         // Observed and stored, but not part of what was *said*: phases, health,
         // and end states read them from the log directly.
         break;
