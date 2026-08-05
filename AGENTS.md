@@ -6,7 +6,6 @@ Canonical operating rules for any agent (or human) working in this repository. R
 
 **PlotRoom** — a context-authoring canvas for operating a fleet of AI agents. A single operator composes context (tickets, PRs, documents, files, notes, prior agent output) as a spatial node graph, wires that context into commands, and runs many agent sessions against it simultaneously.
 
-- **Historical record:** the development plan that carried the rebuild through Phase 8 (with its per-epic landed notes — the best written account of _why_ things are shaped as they are) has been removed from the working tree and lives in **git history**: `git show d336340:docs/development-plan.md`.
 - **Source of truth for behavior:** [`docs/product-spec.md`](docs/product-spec.md) ("North Star v1"). It describes _what_ the product does and never _how_. Treat its 12 governing principles and §15 ("What must exist in the first cut") as binding constraints, not suggestions.
 - **Status:** the rebuild is past its first cut — server, canvas, persistence, plugins and the session sidecar all exist and land continuously. The stack is decided (see "Stack" below); what is planned, claimed or in review is on the tracker, never in this file.
 - **Explicit non-goals** are listed in spec §14. Do not implement workflow control flow, schedulers/triggers that start work, inbound webhooks, inferred relationships, multi-user, or silent truncation.
@@ -376,9 +375,9 @@ the only record of work inside it is `CHANGELOG.md`.
   **standing conventions an agent must follow** — not the decision archive.
 - **A doc's opening paragraph says what it is, who it is for, and whether it is still
   true.** The four genres here — spec, contract, decision record, architecture note,
-  runbook — are read differently, and `docs/attention-contract.md` is the standing
-  example of the cost: a handoff note between two tracks, stamped with the weeks it was
-  written in, sitting in `docs/` as a permanent "contract".
+  runbook — are read differently, and a doc that does not say which one it is, or
+  whose currency a reader cannot tell, is unusable for the same reason an undated one
+  is.
 
 ## Repository layout
 
