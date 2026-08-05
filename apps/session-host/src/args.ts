@@ -15,8 +15,10 @@ export interface SessionHostArgs {
   readonly effort: SessionEffort;
   /** Null inherits PlotRoom's pinned set; a list narrows it (§3.6). */
   readonly toolNames: readonly string[] | null;
-  /** The session file to reopen, for a resume. */
+  /** The session file to reopen, for a resume or a fork. */
   readonly resume: string | null;
+  /** The turn to fork through (§6.3), 1-based and inclusive. Null for a plain resume or a start. */
+  readonly through: number | null;
 }
 
 export class SessionHostArgsError extends Error {}
@@ -28,6 +30,7 @@ const FLAGS: Record<string, true> = {
   "--effort": true,
   "--tools": true,
   "--resume": true,
+  "--through": true,
 };
 
 export function parseSessionHostArgs(argv: readonly string[]): SessionHostArgs {
@@ -82,6 +85,21 @@ export function parseSessionHostArgs(argv: readonly string[]): SessionHostArgs {
     throw new SessionHostArgsError("--tools was empty");
   }
 
+  const throughRaw = values.get("--through");
+  let through: number | null = null;
+  if (throughRaw !== undefined) {
+    const parsed = Number(throughRaw);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      throw new SessionHostArgsError(
+        `--through must be a positive integer, got "${throughRaw}"`,
+      );
+    }
+    if (values.get("--resume") === undefined) {
+      throw new SessionHostArgsError("--through needs --resume");
+    }
+    through = parsed;
+  }
+
   return {
     cwd,
     sessionDir,
@@ -89,6 +107,7 @@ export function parseSessionHostArgs(argv: readonly string[]): SessionHostArgs {
     effort,
     toolNames,
     resume: values.get("--resume") ?? null,
+    through,
   };
 }
 

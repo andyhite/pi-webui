@@ -170,12 +170,18 @@ export function parseSessionHostCommand(
   return command;
 }
 
-export type OmpLaunchMode = "start" | "resume";
+export type OmpLaunchMode = "start" | "resume" | "fork";
 
 export interface OmpLaunchOptions {
   readonly mode: OmpLaunchMode;
-  /** The native session to resume. Required for `resume`, absent for `start`. */
+  /** The native session to resume or fork from. Required for both, absent for `start`. */
   readonly ref?: RuntimeSessionRef;
+  /**
+   * The turn to fork through (§6.3), 1-based and inclusive. Required for
+   * `fork`, absent otherwise — the sidecar resolves it against its own
+   * forkable-message list, because only it can open the source session.
+   */
+  readonly through?: number;
   readonly launch: SessionLaunchChoices;
   /** Absolute path of the workspace the session may touch (§3.4). */
   readonly workspacePath: string;
@@ -216,8 +222,17 @@ export function buildSessionHostArgs(
     args.push("--tools", allowed.join(","));
   }
 
-  if (options.mode === "resume" && options.ref !== undefined) {
+  // A fork opens the source session exactly like a resume — `--resume` reuses
+  // the same sidecar flag — and then rewinds it to `through` before the first
+  // frame goes out (§6.3).
+  if (
+    (options.mode === "resume" || options.mode === "fork") &&
+    options.ref !== undefined
+  ) {
     args.push("--resume", options.ref);
+  }
+  if (options.mode === "fork" && options.through !== undefined) {
+    args.push("--through", options.through.toString());
   }
 
   return args;

@@ -22,6 +22,7 @@ describe("parseSessionHostArgs", () => {
       effort: "medium",
       toolNames: null,
       resume: null,
+      through: null,
     });
   });
 
@@ -64,5 +65,31 @@ describe("parseSessionHostArgs", () => {
       parseSessionHostArgs([...MINIMUM, "--resume", "/sessions/a.jsonl"])
         .resume,
     ).toBe("/sessions/a.jsonl");
+  });
+
+  it("reads a fork's turn, but only alongside a resume", () => {
+    expect(
+      parseSessionHostArgs([
+        ...MINIMUM,
+        "--resume",
+        "/sessions/a.jsonl",
+        "--through",
+        "2",
+      ]).through,
+    ).toBe(2);
+
+    expect(() => parseSessionHostArgs([...MINIMUM, "--through", "2"])).toThrow(
+      "--through needs --resume",
+    );
+
+    expect(() =>
+      parseSessionHostArgs([
+        ...MINIMUM,
+        "--resume",
+        "/sessions/a.jsonl",
+        "--through",
+        "0",
+      ]),
+    ).toThrow('--through must be a positive integer, got "0"');
   });
 });
