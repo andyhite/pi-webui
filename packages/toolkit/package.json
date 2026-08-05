@@ -17,11 +17,12 @@
     "build": "tsc -b && vite build",
     "tokens:emit": "vite build --mode emit",
     "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
-    "lint": "eslint src",
+    "lint": "eslint .",
     "test": "vitest run"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.1.2",
     "eslint": "^9.16.0",
     "tailwindcss": "^4.3.3",
     "vite": "^8.2.0"

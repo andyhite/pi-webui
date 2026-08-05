@@ -14,17 +14,18 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b",
-    "lint": "eslint src",
-    "test": "vitest run --passWithNoTests"
+    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
+    "lint": "eslint .",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@plotroom/core": "workspace:*",
     "better-sqlite3": "^13.0.2",
-    "drizzle-orm": "^0.45.2",
-    "@plotroom/core": "workspace:*"
+    "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^26.1.2",
     "drizzle-kit": "^0.31.10"
   }
 }

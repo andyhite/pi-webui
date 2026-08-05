@@ -6,6 +6,6 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src/**/*"],
-  "exclude": ["src/**/*.test.ts", "src/test-fixtures/**"],
+  "exclude": ["src/**/*.test.ts"],
   "references": [{ "path": "../../plugin-sdk" }]
 }

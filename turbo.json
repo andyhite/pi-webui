@@ -1,6 +1,20 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "ui": "stream",
+  // The configuration every package's tasks read but no package contains. A
+  // task's inputs default to its own package's files, so without this a change
+  // to a shared base replays cached results for every package: relaxing an
+  // eslint rule kept reporting the old warnings, and it would be the same for
+  // a compiler option or the shared test include. The cost is that it is
+  // *global*: a lint-rule tweak busts every package's `build` and `test` cache
+  // too, which per-task `inputs` cannot fix — they may not reach above a
+  // package.
+  "globalDependencies": [
+    "tsconfig.base.json",
+    "tsconfig.tests.base.json",
+    "eslint.config.js",
+    "vitest.base.config.ts"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

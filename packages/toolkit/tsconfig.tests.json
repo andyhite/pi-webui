@@ -1,22 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
 
-  /*
-   * Typecheck the tests too — same reasoning as `packages/core` and
-   * `apps/session-host`: the build excludes `src/**\/*.test.ts` so it cannot emit
-   * declarations for them into the package's own `dist`, and without this project
-   * nothing would typecheck them at all.
-   */
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "noEmit": true,
-    "composite": false,
-    "declaration": false,
-    "declarationMap": false,
-    "emitDeclarationOnly": false,
-    "incremental": true,
-    "tsBuildInfoFile": "dist/.tsbuildinfo.tests"
-  },
+  // Typecheck the tests, which the build excludes so it cannot emit them.
+  // Why this project exists and why it is not a reference:
+  // ../../tsconfig.tests.base.json.
+  "extends": ["./tsconfig.json", "../../tsconfig.tests.base.json"],
+  "compilerOptions": { "tsBuildInfoFile": "dist/.tsbuildinfo.tests" },
   "include": ["src/**/*"],
   "exclude": []
 }

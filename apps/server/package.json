@@ -6,9 +6,9 @@
   "scripts": {
     "build": "tsc -b",
     "dev": "tsx watch --conditions=source src/index.ts",
-    "typecheck": "tsc -b",
-    "lint": "eslint src",
-    "test": "vitest run --passWithNoTests"
+    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
+    "lint": "eslint .",
+    "test": "vitest run"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.17",
@@ -26,6 +26,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/node": "^26.1.2",
     "@types/ws": "^8.18.1",
     "tsx": "^4.23.5"
   }

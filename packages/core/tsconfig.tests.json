@@ -1,30 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
 
-  /*
-   * Typecheck the tests too.
-   *
-   * `tsconfig.json` excludes `src/**\/*.test.ts` because it is the *build*, and a
-   * build that emitted its own tests into `dist/` would ship them. The
-   * consequence was that nothing typechecked them at all: `tsc -b` skipped them,
-   * vitest's esbuild transform strips types without checking them, and eslint is
-   * not type-aware here. Any assertion whose whole point is that something does
-   * *not* typecheck was therefore inert — a `@ts-expect-error` guard nobody ran.
-   *
-   * So this project checks the same sources plus the tests, and emits nothing.
-   * `composite` has to be off (a composite project may not disable emit), and
-   * the build info still lives under `dist/` so deleting `dist/` forces a full
-   * recheck, exactly like every other project in the repo (AGENTS.md).
-   */
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "noEmit": true,
-    "composite": false,
-    "declaration": false,
-    "declarationMap": false,
-    "incremental": true,
-    "tsBuildInfoFile": "dist/.tsbuildinfo.tests"
-  },
+  // Typecheck the tests, which the build excludes so it cannot emit them.
+  // Why this project exists and why it is not a reference:
+  // ../../tsconfig.tests.base.json.
+  "extends": ["./tsconfig.json", "../../tsconfig.tests.base.json"],
+  "compilerOptions": { "tsBuildInfoFile": "dist/.tsbuildinfo.tests" },
   "include": ["src/**/*"],
   "exclude": []
 }
