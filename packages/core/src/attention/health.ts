@@ -237,10 +237,15 @@ function planBlockedAlerts(
     // reconcilePhases' own rule is that content is an identity only within
     // its phase — two phases in one session can share a task name too.
     // healthItemId's rule is that an id names its subject; here that is one
-    // session's one task in one phase, nothing looser.
+    // session's one task in one phase, nothing looser. Joined with U+0000
+    // — the same separator blockedTasksSince already uses for exactly this
+    // reason — because `:` is ordinary text a phase name or task content
+    // can contain, and a plain `:`-join lets two distinct facts collide
+    // onto one id (e.g. phase "deploy:prod"/task "check" and phase
+    // "deploy"/task "prod:check").
     id: healthItemId(
       "plan-blocked",
-      `${block.sessionId}:${block.phaseName}:${block.taskContent}`,
+      `${block.sessionId}\u0000${block.phaseName}\u0000${block.taskContent}`,
     ),
     target: block.target,
     summary: `${block.taskContent}: ${block.blocker}`,
