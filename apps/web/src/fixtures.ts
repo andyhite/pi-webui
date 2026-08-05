@@ -8,6 +8,7 @@
  */
 
 import {
+  APPROVAL_ANSWER_OPTIONS,
   EMPTY_INJECTIONS,
   humanAuthor,
   INHERIT_APP_TOOLS,
@@ -567,6 +568,8 @@ export const FIXTURE_ATTENTION_ITEMS: readonly AttentionItem[] = [
       kind: "approval",
       approvalId: "approval-1",
       capability: "git:force-push",
+      answers: APPROVAL_ANSWER_OPTIONS,
+      effectFailure: null,
     },
     raisedAt: 1_700_000_100,
     snoozeUntil: null,

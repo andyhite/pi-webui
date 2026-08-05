@@ -8,9 +8,14 @@
  * In-place answers reuse the same shape the bubble layer already answers
  * questions with (`BubbleLayer.tsx`'s option buttons) rather than a second
  * question-answering widget: a `question` row renders its options as real
- * buttons, an `approval` row renders approve/deny, and every row — those
- * two included, per §7.1's "every feed supports acknowledge, snooze, and
- * mute" — carries the three triage verbs.
+ * buttons, and an `approval` row renders from **its own** `payload.answers`
+ * (issue #115) — empty, with a "could not be carried out" treatment instead
+ * of buttons, for the row whose authorized effect already failed; real
+ * approve/deny options for the row still asking. Never the imported
+ * `APPROVAL_ANSWER_OPTIONS` constant, which offered both rows the same two
+ * buttons regardless of which kind of row it was. Every row — those two
+ * included, per §7.1's "every feed supports acknowledge, snooze, and mute"
+ * — carries the three triage verbs.
  *
  * **The cursor is the host's** (`useAttentionQueueCursor`), not this panel's,
  * because §11's queue verbs are keyboard verbs first: they have to work
@@ -30,8 +35,6 @@
  *
  * Unstyled: mechanics only until the design package lands (fleet rule 5).
  */
-
-import { APPROVAL_ANSWER_OPTIONS } from "@plotroom/core";
 
 import type { AttentionQueueCursor } from "./use-queue-cursor.js";
 import type { AttentionItem } from "./types.js";
@@ -104,36 +107,48 @@ export function QueuePanel({ cursor }: QueuePanelProps) {
 
           {item.payload.kind === "approval" ? (
             <span>
-              {APPROVAL_ANSWER_OPTIONS.map((option) =>
-                option.requiresReason ? (
-                  <span key={option.decision}>
-                    <input
-                      type="text"
-                      aria-label={`${option.label} reason for ${item.id}`}
-                      value={cursor.denyReason(item.id)}
-                      onChange={(event) =>
-                        cursor.setDenyReason(item.id, event.target.value)
-                      }
-                    />
+              {item.payload.effectFailure !== null ? (
+                // Issue #115: this row asks for no decision — `answerApproval`
+                // refuses every option a surface could offer, since the answer
+                // was already given and it is the authorized effect that
+                // failed. Rendered as what it is rather than as a still-open
+                // ask: no approve/deny buttons (the row's own `answers` is
+                // empty), and the failure named explicitly.
+                <span role="alert">
+                  could not be carried out: {item.payload.effectFailure}
+                </span>
+              ) : (
+                item.payload.answers.map((option) =>
+                  option.requiresReason ? (
+                    <span key={option.decision}>
+                      <input
+                        type="text"
+                        aria-label={`${option.label} reason for ${item.id}`}
+                        value={cursor.denyReason(item.id)}
+                        onChange={(event) =>
+                          cursor.setDenyReason(item.id, event.target.value)
+                        }
+                      />
+                      <button
+                        type="button"
+                        disabled={cursor.denyReason(item.id).trim() === ""}
+                        onClick={() =>
+                          cursor.deny(cursor.denyReason(item.id), item.id)
+                        }
+                      >
+                        {option.label}
+                      </button>
+                    </span>
+                  ) : (
                     <button
+                      key={option.decision}
                       type="button"
-                      disabled={cursor.denyReason(item.id).trim() === ""}
-                      onClick={() =>
-                        cursor.deny(cursor.denyReason(item.id), item.id)
-                      }
+                      onClick={() => cursor.approve(item.id)}
                     >
                       {option.label}
                     </button>
-                  </span>
-                ) : (
-                  <button
-                    key={option.decision}
-                    type="button"
-                    onClick={() => cursor.approve(item.id)}
-                  >
-                    {option.label}
-                  </button>
-                ),
+                  ),
+                )
               )}
             </span>
           ) : null}

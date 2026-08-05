@@ -208,6 +208,12 @@ function approvalRow(source: ApprovalAttentionSource): DerivedAttentionItem {
         // The capability being asked for, in the vocabulary the ask itself uses:
         // the tool where there is one, the kind where there is not (a claim).
         capability: attention.tool ?? attention.askKind,
+        // The row's own answers (issue #115): empty for the effect-failure
+        // row, so a surface rendering exactly these draws no buttons that
+        // can only 409 rather than the imported constant, which offered
+        // both rows the same two buttons regardless of which kind of row it was.
+        answers: attention.answers,
+        effectFailure: attention.effectFailure,
       },
       raisedAt: attention.raisedAt,
       snoozeUntil: null,

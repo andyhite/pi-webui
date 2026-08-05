@@ -29,7 +29,11 @@
  * rather than six bespoke ones.
  */
 
-import type { ApprovalDecision, Author } from "@plotroom/core";
+import type {
+  ApprovalAnswerOption,
+  ApprovalDecision,
+  Author,
+} from "@plotroom/core";
 
 import type { Unsubscribe } from "../data-source/types.js";
 
@@ -92,6 +96,16 @@ export type AttentionAnswerPayload =
       readonly kind: "approval";
       readonly approvalId: string;
       readonly capability: string;
+      /**
+       * The row's own options (issue #115), mirroring `@plotroom/core`'s
+       * `ApprovalAttention.answers` — empty for the effect-failure row,
+       * which asks for no decision. Render exactly these, never the
+       * imported `APPROVAL_ANSWER_OPTIONS` constant, which offered both
+       * rows the same two buttons regardless of which kind of row it was.
+       */
+      readonly answers: readonly ApprovalAnswerOption[];
+      /** Non-null only for the effect-failure row. */
+      readonly effectFailure: string | null;
     }
   | {
       readonly kind: "drift";

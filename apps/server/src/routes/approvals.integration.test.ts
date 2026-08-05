@@ -302,6 +302,13 @@ describe("a session destroying authored state (§6.6, principle 10)", () => {
     );
     expect(item).toBeDefined();
     expect(String(at(item, "summary"))).toContain("could not be carried out");
+    // Issue #115: the row's own payload says it has nothing to answer — a
+    // surface rendering exactly this offers no approve/deny buttons, never
+    // the two-button treatment the still-asking row gets.
+    expect(at(item, "payload.answers")).toEqual([]);
+    expect(String(at(item, "payload.effectFailure"))).toContain(
+      "obj_no-such-object",
+    );
     expect(at(queue, `states.approval:${approvalId}:effect-failed`)).toEqual([
       "failed",
       "anything",
