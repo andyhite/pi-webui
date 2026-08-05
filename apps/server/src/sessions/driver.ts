@@ -194,6 +194,17 @@ export function driveSession(
             );
             break;
 
+          case "injection-refused":
+            // The runtime rejected input already acknowledged as queued (issue
+            // #107) — reported against the injection it was, so the §6.5 ledger's
+            // `refused` state is reachable rather than left `queued` forever.
+            sessions.markRefused(
+              observation.injectionId,
+              epochSeconds(observation.at),
+              observation.reason,
+            );
+            break;
+
           case "tool-started":
             if (observation.toolName === PLOTROOM_SUBMIT_TOOL) {
               await hooks.onSubmission({

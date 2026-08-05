@@ -165,6 +165,7 @@ export function transcriptFromObservations(
       case "compaction-finished":
       case "request-raised":
       case "request-settled":
+      case "injection-refused":
       case "session-ended":
       case "runtime-error":
         // Observed and stored, but not part of what was *said*: phases, health,

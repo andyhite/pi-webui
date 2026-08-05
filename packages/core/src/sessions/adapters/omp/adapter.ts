@@ -15,6 +15,7 @@ import type {
   SessionRuntimeAdapter,
   TranscriptPoint,
 } from "../../runtime.js";
+import { NativeForkUnavailable } from "../../runtime.js";
 import { splitJsonLines } from "../jsonl.js";
 import { ObservationQueue } from "../observation-queue.js";
 import { composeSeededPrompt } from "../seeded-prompt.js";
@@ -110,22 +111,21 @@ export class SessionHostSilent extends Error {
 }
 
 export const OMP_CAPABILITIES: RuntimeCapabilities = {
-  // Native branching exists (`session.branch(entryId)`) but its arithmetic is
-  // exclusive of the branched entry, which is not what `TranscriptPoint` means.
-  // Until that is re-derived (issue #82) PlotRoom seeds from its own transcript,
-  // which `planFork` already does for every runtime that cannot fork natively —
-  // so a fork stays expressible here, and its `runtime_mode` will say truthfully
-  // that it was seeded. Expressible, not yet reachable: nothing at all runs on
-  // this adapter until the gate below is wired, seeded forks included.
-  fork: "none",
+  // Native branching exists at a turn boundary: `session.fork()` for the tip
+  // (copies the whole active branch), `session.branch(entryId)` for an earlier
+  // one (issue #82). Not `"any-point"`: the sidecar can only resolve a target
+  // against its own list of forkable user messages, one per PlotRoom turn, so
+  // a point that is not where a turn started has nothing to branch from.
+  fork: "turn-boundary",
   // A steering message is consumed at the next turn boundary without a new
   // explicit turn — the §6.5 shape natively.
   injection: "between-turns",
   // Per-turn `usage.cost.total` comes from the SDK's own pricing tables.
   reportsCost: true,
-  // Occupancy is available from `getSessionStats()`, which nothing polls yet
-  // (issue #82). Estimated from cumulative usage until it does.
-  reportsContextWindow: false,
+  // `getSessionStats().contextUsage` is read at every `turn_end` (issue #82)
+  // and carried onto the turn's usage, so the meter reports rather than
+  // estimates.
+  reportsContextWindow: true,
   // The gate is issue #81: an inline tool-call extension calling back into
   // PlotRoom's decision path, with liveness asserted at boot rather than
   // configured. Until that lands and is proven, this adapter says it cannot
@@ -177,23 +177,78 @@ export interface OmpAdapterOptions {
   readonly delay: Delay;
 }
 
-/**
- * A fork the session host cannot perform natively.
- *
- * Unreachable while `OMP_CAPABILITIES.fork` is `"none"`, because `planFork`
- * reads that and seeds instead. It exists so that flipping the capability
- * without implementing the call is a failure that names itself rather than a
- * session that silently inherited nothing (principle 7).
- */
-export class SessionHostForkUnavailable extends Error {
-  readonly reason: string;
+/** One SDK user message the sidecar can branch from, keyed by its entry id. */
+export interface OmpForkMessage {
+  readonly entryId: string;
+}
 
+export type OmpForkTarget =
+  | { readonly kind: "tip" }
+  | { readonly kind: "rewound"; readonly entryId: string }
+  | { readonly kind: "unavailable"; readonly reason: string };
+
+/**
+ * Map a PlotRoom transcript point onto the SDK's fork surface (§6.3).
+ *
+ * Two facts have to meet here, and getting the arithmetic wrong silently loses
+ * a turn of inherited context:
+ *
+ * - **PlotRoom** forks *inclusively*: a fork at turn `n` keeps turns `1..n` —
+ *   `transcriptPrefix` in `fork.ts` is the same rule.
+ * - **The SDK's `branch(entryId)` is exclusive of the named entry.** It moves
+ *   to that entry's own parent (`AgentSession.branch` calls
+ *   `createBranchedSession(selectedEntry.parentId)`), dropping the entry
+ *   itself — the opposite of what a caller that assumed `TranscriptPoint`'s
+ *   inclusive convention carried over unchanged would get.
+ *
+ * So the entry to branch from is the one that opens turn `n + 1`, and when `n`
+ * is the last turn there is no such message: the whole active branch is what
+ * `session.fork()` copies with no target at all, which is the `"tip"` case.
+ *
+ * The assumption this rests on, stated because it is an assumption: the k-th
+ * user message the sidecar can branch from opens PlotRoom's k-th turn. That
+ * holds while every turn begins with one user message, which is how PlotRoom
+ * drives this adapter (one prompt per turn, injections included). A point
+ * past the end of that list is `unavailable` rather than clamped, because a
+ * fork that silently inherits a different prefix than the one the operator
+ * picked is worse than a seeded fallback (principle 7).
+ */
+export function resolveOmpForkTarget(
+  messages: readonly OmpForkMessage[],
+  point: TranscriptPoint,
+): OmpForkTarget {
+  if (point.turn < 1) {
+    return {
+      kind: "unavailable",
+      reason: `turn ${point.turn.toString()} is not a turn`,
+    };
+  }
+  if (point.turn > messages.length) {
+    return {
+      kind: "unavailable",
+      reason: `the session host lists ${messages.length.toString()} forkable message${
+        messages.length === 1 ? "" : "s"
+      }, so it cannot fork at turn ${point.turn.toString()}`,
+    };
+  }
+  if (point.turn === messages.length) return { kind: "tip" };
+
+  const next = messages[point.turn] as OmpForkMessage;
+  return { kind: "rewound", entryId: next.entryId };
+}
+
+/**
+ * A native fork the session host could not perform.
+ *
+ * Thrown rather than papered over, and specifically **not** substituted for:
+ * the caller (`RunService.startForkedSession`) seeds a fresh session from
+ * PlotRoom's own transcript instead and records `seeded`, because it is the
+ * caller that holds the plan and writes the record.
+ */
+export class SessionHostForkUnavailable extends NativeForkUnavailable {
   constructor(point: TranscriptPoint, reason: string) {
-    super(
-      `the session host cannot fork at turn ${point.turn.toString()}: ${reason}`,
-    );
+    super(OMP_ADAPTER_ID, point, reason);
     this.name = "SessionHostForkUnavailable";
-    this.reason = reason;
   }
 }
 
@@ -260,11 +315,34 @@ export function createOmpAdapter(
       );
     },
 
-    async fork(_ref: RuntimeSessionRef, point: TranscriptPoint) {
-      throw new SessionHostForkUnavailable(
-        point,
-        "native branching is not wired yet (issue #82); PlotRoom seeds from its own transcript instead",
-      );
+    async fork(
+      ref: RuntimeSessionRef,
+      point: TranscriptPoint,
+      config: RuntimeStartConfig,
+    ) {
+      // Whatever `open()` throws while opening a fork-mode process — the
+      // sidecar's own "cannot fork at turn N" fatal, a timeout, an aborted
+      // process — is reported as this fork being unavailable, never as a raw
+      // error the caller cannot recognize: the fallback is `startForkedSession`
+      // catching `NativeForkUnavailable` and seeding instead (§6.3).
+      try {
+        return await open(
+          {
+            mode: "fork",
+            ref,
+            through: point.turn,
+            launch: config.launch,
+            workspacePath: config.workspacePath,
+            sessionDir: options.sessionDir,
+          },
+          null,
+        );
+      } catch (error) {
+        throw new SessionHostForkUnavailable(
+          point,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     },
   };
 }

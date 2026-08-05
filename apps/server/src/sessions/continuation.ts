@@ -249,10 +249,10 @@ export class ContinuationService {
    * inheriting the conversation up to and including that turn.
    *
    * The runtime half is the contract's two lines, verbatim, and the order matters:
-   * a `native` verdict calls `adapter.fork`, and **`PiForkUnavailable` is caught
-   * and re-run as a seeded start** — because the adapter deliberately does not
-   * substitute one for the other ("a seeded fork is not bit-identical to a native
-   * one, which is the entire reason the two are distinguished"). Whichever branch
+   * a `native` verdict calls `adapter.fork`, and **`NativeForkUnavailable` is
+   * caught and re-run as a seeded start** — because the adapter deliberately does
+   * not substitute one for the other ("a seeded fork is not bit-identical to a
+   * native one, which is the entire reason the two are distinguished"). Whichever branch
    * ran is the mode recorded, so the stored mode is never a claim nothing did.
    */
   async fork(input: {

@@ -10,7 +10,7 @@ import {
   readinessSetupStarted,
   resolveSetup,
   exportTranscript,
-  PiForkUnavailable,
+  NativeForkUnavailable,
   sessionAuthor,
   systemMillisClock,
   transcriptPrefix,
@@ -693,7 +693,7 @@ export class RunService {
    * Start the session a fork plans (§6.3).
    *
    * **The contract's two lines, verbatim, and the order is the point.** A `native`
-   * verdict calls `adapter.fork`; `PiForkUnavailable` is caught here and re-run as
+   * verdict calls `adapter.fork`; `NativeForkUnavailable` is caught here and re-run
    * `start({ seedTranscript })`, because the adapter deliberately does not
    * substitute one for the other — "a seeded fork is not bit-identical to a native
    * one, which is the entire reason the two are distinguished". A `seeded` verdict
@@ -747,7 +747,7 @@ export class RunService {
         ).handle;
         mode = "native";
       } catch (error) {
-        if (!(error instanceof PiForkUnavailable)) throw error;
+        if (!(error instanceof NativeForkUnavailable)) throw error;
         // The seeded branch is the caller's, and this is the caller. The prefix is
         // what a fresh session is started from, and the mode recorded is the one
         // that actually happened.

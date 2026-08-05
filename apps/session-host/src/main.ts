@@ -1,5 +1,9 @@
 import { writeSync } from "node:fs";
-import { FRAME_FD, type SessionHostEvent } from "@plotroom/core";
+import {
+  FRAME_FD,
+  resolveOmpForkTarget,
+  type SessionHostEvent,
+} from "@plotroom/core";
 import {
   AgentRegistry,
   SessionManager,
@@ -161,6 +165,36 @@ async function main(): Promise<number> {
         message: `no authenticated model available for "${args.model}"`,
       });
       return 4;
+    }
+
+    if (args.through !== null) {
+      // §6.3: `session.fork()` copies the whole active branch (the tip case);
+      // `session.branch(entryId)` rewinds to an earlier one. Both mutate this
+      // freshly-opened session's own file in place — never the source's, which
+      // is what makes this safe to run before `ref` is read below.
+      const target = resolveOmpForkTarget(
+        session.getUserMessagesForBranching(),
+        { turn: args.through },
+      );
+      if (target.kind === "unavailable") {
+        writeFrame({ type: "fatal", message: target.reason });
+        return 4;
+      }
+      const forked =
+        target.kind === "tip"
+          ? await session.fork()
+          : !(await session.branch(target.entryId)).cancelled;
+      if (!forked) {
+        // `fork()` also answers `false` when the session is not persisting —
+        // named alongside the more common cancellation rather than assuming
+        // the cause, since either way nothing was forked.
+        writeFrame({
+          type: "fatal",
+          message:
+            "the fork did not complete: a hook cancelled it, or the session was not persisting",
+        });
+        return 4;
+      }
     }
 
     const ref = session.sessionFile;

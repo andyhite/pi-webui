@@ -16,6 +16,7 @@ import type {
 import { makeLaunchChoices } from "../../testing.js";
 import {
   createOmpAdapter,
+  resolveOmpForkTarget,
   ACK_TIMEOUT_MS,
   READY_TIMEOUT_MS,
   SessionHostForkUnavailable,
@@ -272,6 +273,59 @@ describe("buildSessionHostArgs", () => {
       "/state/runtime/session-host/a.jsonl",
     ]);
   });
+
+  it("opens the source and rewinds it in one launch for a fork", () => {
+    const args = buildSessionHostArgs({
+      mode: "fork",
+      ref: "/state/runtime/session-host/a.jsonl",
+      through: 2,
+      launch: START.launch,
+      workspacePath: "/w",
+      sessionDir: "/s",
+    });
+
+    expect(args.slice(-4)).toEqual([
+      "--resume",
+      "/state/runtime/session-host/a.jsonl",
+      "--through",
+      "2",
+    ]);
+  });
+});
+
+describe("resolveOmpForkTarget", () => {
+  const messages = [{ entryId: "e1" }, { entryId: "e2" }, { entryId: "e3" }];
+
+  it("targets the entry that opens the next turn, since branch() excludes the named entry", () => {
+    // Turn 2 opens on `e2`; turn 3 opens on `e3`. Keeping turn 1 inclusive
+    // means branching to the entry `branch()` will exclude: `e2`.
+    expect(resolveOmpForkTarget(messages, { turn: 1 })).toEqual({
+      kind: "rewound",
+      entryId: "e2",
+    });
+    expect(resolveOmpForkTarget(messages, { turn: 2 })).toEqual({
+      kind: "rewound",
+      entryId: "e3",
+    });
+  });
+
+  it("needs no target at the tip: session.fork() already copies the whole branch", () => {
+    expect(resolveOmpForkTarget(messages, { turn: 3 })).toEqual({
+      kind: "tip",
+    });
+  });
+
+  it("refuses a point past what the session host lists rather than clamping", () => {
+    expect(resolveOmpForkTarget(messages, { turn: 4 })).toMatchObject({
+      kind: "unavailable",
+    });
+    expect(resolveOmpForkTarget(messages, { turn: 0 })).toMatchObject({
+      kind: "unavailable",
+    });
+    expect(resolveOmpForkTarget([], { turn: 1 })).toMatchObject({
+      kind: "unavailable",
+    });
+  });
 });
 
 describe("frame parsing", () => {
@@ -484,11 +538,41 @@ describe("the session-host adapter", () => {
     await expect(pending).rejects.toThrow("no authenticated model available");
   });
 
-  it("refuses a native fork rather than quietly seeding one", async () => {
+  it("forks natively once the sidecar reports the rewound session", async () => {
     const host = new FakeSessionHost();
-    await expect(
-      adapterOver(host).fork("/sessions/a.jsonl", { turn: 2 }, START),
-    ).rejects.toThrow(SessionHostForkUnavailable);
+    const pending = adapterOver(host).fork(
+      "/sessions/a.jsonl",
+      { turn: 2 },
+      START,
+    );
+    host.emit({ type: "ready", ref: "/sessions/rewound.jsonl" });
+
+    const handle = await pending;
+    expect(handle.ref).toBe("/sessions/rewound.jsonl");
+    // No prompt is sent: the forked session inherits its content, and a fresh
+    // one here would be a new turn nobody asked for (§5.4).
+    expect(host.commands).toEqual([]);
+  });
+
+  it("wraps a native-fork failure as SessionHostForkUnavailable, not a raw error", async () => {
+    const host = new FakeSessionHost();
+    const pending = adapterOver(host).fork(
+      "/sessions/a.jsonl",
+      { turn: 5 },
+      START,
+    );
+    host.emit({
+      type: "fatal",
+      message:
+        "the session host lists 2 forkable messages, so it cannot fork at turn 5",
+    });
+    host.end();
+
+    await expect(pending).rejects.toThrow(SessionHostForkUnavailable);
+    await expect(pending).rejects.toThrow(/cannot fork at turn 5/);
+    // Aborted rather than left running: leaving a half-forked native session
+    // driving nothing is the leak a seeded fallback exists to avoid.
+    expect(host.closed).toEqual(["abort"]);
   });
 
   it("reports a nacked command to the caller", async () => {

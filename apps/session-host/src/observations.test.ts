@@ -225,4 +225,73 @@ describe("the observation translator", () => {
       ),
     ).toEqual([]);
   });
+
+  it("reports a tracked injection delivered at the turn boundary that no longer holds it (issue #82)", () => {
+    const translator = createObservationTranslator();
+    translator.trackInjection({ id: "inj-1", text: "also this" });
+
+    // Still held in the runtime's own queue at this boundary: not delivered yet.
+    expect(
+      translator.translate(event({ type: "turn_start" }), 1, {
+        queuedSteering: ["also this"],
+      }),
+    ).toEqual([{ kind: "turn-started", turn: 1, at: 1 }]);
+
+    // Consumed by the next one.
+    expect(
+      translator.translate(event({ type: "turn_start" }), 2, {
+        queuedSteering: [],
+      }),
+    ).toEqual([
+      { kind: "turn-started", turn: 2, at: 2 },
+      { kind: "injection-delivered", injectionId: "inj-1", at: 2 },
+    ]);
+  });
+
+  it("stops tracking an injection once untracked, so it is never reported delivered (issue #107)", () => {
+    const translator = createObservationTranslator();
+    translator.trackInjection({ id: "inj-1", text: "also this" });
+    translator.untrackInjection("inj-1");
+
+    expect(translator.translate(event({ type: "turn_start" }), 1)).toEqual([
+      { kind: "turn-started", turn: 1, at: 1 },
+    ]);
+  });
+
+  it("reports an untracked-in-queue injection delivered at the very next boundary", () => {
+    // Idle when it arrived, so the runtime never held it queued at all — the
+    // first turn_start is the first observable moment of delivery.
+    const translator = createObservationTranslator();
+    translator.trackInjection({ id: "inj-1", text: "also this" });
+
+    expect(translator.translate(event({ type: "turn_start" }), 1)).toEqual([
+      { kind: "turn-started", turn: 1, at: 1 },
+      { kind: "injection-delivered", injectionId: "inj-1", at: 1 },
+    ]);
+  });
+
+  it("carries context-window occupancy onto turn-ended when the SDK reports it (issue #82)", () => {
+    const translator = createObservationTranslator();
+    translator.translate(event({ type: "turn_start" }), 1);
+
+    expect(
+      translator.translate(TURN_END, 2, {
+        contextUsage: { tokens: 4_200, contextWindow: 200_000 },
+      }),
+    ).toEqual([
+      {
+        kind: "turn-ended",
+        turn: 1,
+        usage: {
+          inputTokens: 120,
+          outputTokens: 34,
+          cacheReadTokens: 4,
+          cacheWriteTokens: 2,
+          costUsd: 0.0031,
+          contextWindow: { usedTokens: 4_200, maxTokens: 200_000 },
+        },
+        at: 2,
+      },
+    ]);
+  });
 });

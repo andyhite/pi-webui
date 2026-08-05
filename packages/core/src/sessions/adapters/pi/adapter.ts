@@ -15,6 +15,7 @@ import type {
   SessionRuntimeAdapter,
   TranscriptPoint,
 } from "../../runtime.js";
+import { NativeForkUnavailable } from "../../runtime.js";
 import { ObservationQueue } from "../observation-queue.js";
 import { composeSeededPrompt } from "../seeded-prompt.js";
 import { createPiObservationMapper } from "./observations.js";
@@ -285,7 +286,8 @@ export function resolvePiForkTarget(
 }
 
 /**
- * A native fork pi could not perform.
+ * A native fork pi could not perform — the pi-specific instance of
+ * `NativeForkUnavailable` (§6.3, principle 7).
  *
  * Thrown rather than papered over, and specifically **not** substituted for: the
  * caller seeds a fresh session from PlotRoom's own transcript instead
@@ -294,13 +296,10 @@ export function resolvePiForkTarget(
  * The adapter doing that silently is what would let `runtime.mode` say `native`
  * about a session that was seeded.
  */
-export class PiForkUnavailable extends Error {
-  readonly turn: number;
-
+export class PiForkUnavailable extends NativeForkUnavailable {
   constructor(point: TranscriptPoint, reason: string) {
-    super(`pi cannot fork at turn ${point.turn}: ${reason}`);
+    super(PI_ADAPTER_ID, point, reason);
     this.name = "PiForkUnavailable";
-    this.turn = point.turn;
   }
 }
 
