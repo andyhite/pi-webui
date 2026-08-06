@@ -85,7 +85,7 @@ describe("the compaction job (Epic 2.3, §15-3)", () => {
   });
 
   it("keeps sweeping after one sweep fails", () => {
-    const compact = vi
+    const compact = mock
       .fn<() => CompactionResult>()
       .mockImplementationOnce(() => {
         throw new Error("disk on fire");
