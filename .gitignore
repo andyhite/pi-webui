@@ -38,9 +38,4 @@ test-results/
 .DS_Store
 .idea/
 *.swp
-.vscode/*
-!.vscode/extensions.json
-!.vscode/settings.json
-
-# subagent runtime artifacts (orchestration harness, never repo content)
-.pi-subagents/
+.vscode/
