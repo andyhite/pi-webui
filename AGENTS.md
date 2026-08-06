@@ -88,9 +88,14 @@ has the full ladder from per-file feedback to the pre-PR gate.
   override is the operator's, never an agent's), checks the branch name, and
   runs `bun format:check` over the whole repo; commit-msg runs commitlint.
 - **`main` is linear and never rewritten.** Nothing reaches it except a pull
-  request, squashed or fast-forwarded after a rebase onto `origin/main` —
-  and **only the operator merges**: the merge is the approval, an operator
-  comment on an open PR is a change request. Agents never merge a PR.
+  request, squashed or fast-forwarded after a rebase onto `origin/main`.
+- **Merging is the operator's, unless the operator hands it over.** By
+  default an agent opens the PR and stops: the merge is the approval, and an
+  operator comment on an open PR is a change request, not a green light. When
+  the operator does say to merge, merge — that instruction _is_ the approval,
+  and bouncing it back is not caution, it's noise. The okay is per-request
+  and never assumed: it is not implied by green CI, by the change looking
+  trivial, by silence, or by having been given on an earlier PR.
 
 ## CI
 
