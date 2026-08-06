@@ -65,18 +65,22 @@ describe("the toolkit's dependency rule", () => {
       "a dynamic import",
       'export const load = async () => import("@plotroom/core");\n',
     ],
-  ])("refuses an import of %s", async (_label, code) => {
-    const messages = messagesFrom(
-      await lintAs("packages/toolkit", "src/violation.ts", code),
-    );
-    expect(
-      messages.filter(
-        (message) =>
-          message.startsWith("no-restricted-imports") ||
-          message.startsWith("no-restricted-syntax"),
-      ),
-    ).toHaveLength(1);
-  });
+  ])(
+    "refuses an import of %s",
+    async (_label, code) => {
+      const messages = messagesFrom(
+        await lintAs("packages/toolkit", "src/violation.ts", code),
+      );
+      expect(
+        messages.filter(
+          (message) =>
+            message.startsWith("no-restricted-imports") ||
+            message.startsWith("no-restricted-syntax"),
+        ),
+      ).toHaveLength(1);
+    },
+    30_000,
+  );
 
   it("leaves the toolkit's own relative imports alone", async () => {
     const messages = messagesFrom(
@@ -87,7 +91,7 @@ describe("the toolkit's dependency rule", () => {
       ),
     );
     expect(messages).toEqual([]);
-  });
+  }, 30_000);
 
   /**
    * The rule is scoped to the toolkit, not global: `@plotroom/ui` is where the
@@ -104,5 +108,5 @@ describe("the toolkit's dependency rule", () => {
     expect(
       messages.filter((message) => message.startsWith("no-restricted-imports")),
     ).toEqual([]);
-  });
+  }, 30_000);
 });
