@@ -288,7 +288,7 @@ export async function startMilestoneServer(
 
     const port = await ephemeralPort();
 
-    child = spawn(process.execPath, [SERVER_ENTRY], {
+    child = spawn("bun", [SERVER_ENTRY], {
       stdio: "ignore",
       env: {
         ...process.env,

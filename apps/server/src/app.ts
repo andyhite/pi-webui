@@ -149,9 +149,10 @@ export interface AppRuntime {
 /**
  * Wires routes and middleware onto an already-constructed `Hono` instance.
  * Takes the instance (rather than constructing and returning one) because
- * `@hono/node-ws`'s `createNodeWebSocket` must be called with the app before
- * this module can hand it the resulting `upgradeWebSocket` — see
- * `apps/server/src/index.ts` for the wiring order.
+ * `apps/server/src/index.ts` owns the process-level wiring — `Bun.serve`,
+ * the bind-retry loop, and the `upgradeWebSocket`/`websocket` pair from
+ * `hono/bun` — and this module only ever adds routes to whatever `Hono` it
+ * is handed.
  */
 export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
   const { config, db, bus, logger, upgradeWebSocket } = deps;

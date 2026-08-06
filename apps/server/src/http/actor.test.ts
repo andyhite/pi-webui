@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, describe, it } from "bun:test";
 import { parseActor } from "./actor.js";
 
 describe("attribution: who is making this call (§15 invariant 2)", () => {
@@ -12,11 +12,11 @@ describe("attribution: who is making this call (§15 invariant 2)", () => {
   });
 
   it("reads a session actor, which is what makes an edge's author real", () => {
-    expect(parseActor("session:sess_42")).toEqual({
+    expect(parseActor("session:sess_42") as unknown).toEqual({
       ok: true,
       actor: { kind: "session", sessionId: "sess_42" },
     });
-    expect(parseActor("  session:sess_42  ")).toEqual({
+    expect(parseActor("  session:sess_42  ") as unknown).toEqual({
       ok: true,
       actor: { kind: "session", sessionId: "sess_42" },
     });

@@ -2,8 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import WebSocket from "ws";
+import { expect, afterEach, describe, it } from "bun:test";
 import {
   endStateFacts,
   humanAuthor,
@@ -864,9 +863,9 @@ describe("a session streams over the one event vocabulary", () => {
     });
     const events: DomainEvent[] = [];
     await new Promise<void>((resolve, reject) => {
-      ws.on("error", reject);
-      ws.on("message", (data) => {
-        const message = JSON.parse(data.toString()) as {
+      ws.addEventListener("error", reject);
+      ws.addEventListener("message", (event) => {
+        const message = JSON.parse(String(event.data)) as {
           type: string;
           event?: DomainEvent;
         };

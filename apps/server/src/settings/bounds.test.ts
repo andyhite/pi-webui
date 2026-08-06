@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, describe, it } from "bun:test";
 import {
   checkBound,
   CONCURRENCY_LIMIT_BOUND,

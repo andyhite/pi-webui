@@ -118,24 +118,9 @@ export function spawnServer(
   port: number,
   onUnexpectedExit: (code: number | null) => void,
 ): SpawnedProcess {
-  const child = spawnChildProcess(process.execPath, [SERVER_ENTRY], {
-    // A fourth, `"ipc"` channel beside the three inherited ones: stdout/
-    // stderr keep going straight to this process's own (unchanged from
-    // before #88), and the extra channel is the only way to learn which
-    // address the child actually bound — a stored override can move it
-    // (#87), and `port` below is only ever a *request*, never a guarantee.
+  const child = spawnChildProcess("bun", [SERVER_ENTRY], {
     stdio: ["inherit", "inherit", "inherit", "ipc"],
-    env: {
-      ...process.env,
-      PLOTROOM_PORT: String(port),
-      // `process.execPath` is the Electron binary itself, not a separate
-      // bundled Node runtime (there is none in a packaged app) — this is
-      // the documented Electron trick for running a plain script with it:
-      // with the flag set, the binary behaves as `node`, never opening a
-      // GUI. Harmless when this process is itself already plain Node (dev
-      // via `vitest`/ts-node, where `process.execPath` already is `node`).
-      ELECTRON_RUN_AS_NODE: "1",
-    },
+    env: { ...process.env, PLOTROOM_PORT: String(port) },
   });
   const pid = child.pid;
   if (pid === undefined) {

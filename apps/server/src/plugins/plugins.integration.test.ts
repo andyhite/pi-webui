@@ -1,6 +1,5 @@
 import type { DomainEvent } from "@plotroom/core";
-import WebSocket from "ws";
-import { afterEach, describe, expect, it } from "vitest";
+import { expect, afterEach, describe, it } from "bun:test";
 import {
   at,
   boot,
@@ -509,9 +508,9 @@ describe("plugin lifecycle on the one event stream (§10.2)", () => {
       headers: { origin: `http://localhost:${harness.port}` },
     });
     await new Promise<void>((resolve, reject) => {
-      socket.on("error", reject);
-      socket.on("message", (data) => {
-        const message = JSON.parse(data.toString()) as {
+      socket.addEventListener("error", reject);
+      socket.addEventListener("message", (event) => {
+        const message = JSON.parse(String(event.data)) as {
           type: string;
           event?: DomainEvent;
         };

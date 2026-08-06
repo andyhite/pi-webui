@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { expect, afterEach, describe, it } from "bun:test";
 import type { RuntimeScript } from "../runtime/scripted.js";
 import {
   at,

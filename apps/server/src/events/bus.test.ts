@@ -1,5 +1,5 @@
 import { humanAuthor } from "@plotroom/core";
-import { describe, expect, it } from "vitest";
+import { expect, describe, it } from "bun:test";
 import { createEventBus } from "./bus.js";
 
 describe("EventBus (Epic 2.1: the publication seam)", () => {

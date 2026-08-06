@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, describe, it, mock } from "bun:test";
 import { Logger } from "../logging/logger.js";
 import type { IntervalScheduler, Timer } from "../maintenance/compaction.js";
 import { startAttentionTick } from "./tick.js";
@@ -23,7 +23,7 @@ function fakeScheduler() {
 
 /** A stand-in with only the one method the tick is allowed to call. */
 function fakeAttention() {
-  const refresh = vi.fn();
+  const refresh = mock();
   return { refresh } as unknown as AttentionService;
 }
 
@@ -64,8 +64,8 @@ describe("the attention tick (§7, principle 2)", () => {
   });
 
   it("keeps ticking after one re-derivation throws", () => {
-    const attention = { refresh: vi.fn() } as unknown as AttentionService;
-    (attention.refresh as ReturnType<typeof vi.fn>)
+    const attention = { refresh: mock() } as unknown as AttentionService;
+    (attention.refresh as ReturnType<typeof mock>)
       .mockImplementationOnce(() => {
         throw new Error("derivation exploded");
       })

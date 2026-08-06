@@ -1,8 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import WebSocket from "ws";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { GraphStore } from "@plotroom/db";
 import type { DomainEvent } from "@plotroom/core";
 import { loadServerConfig } from "../config.js";
@@ -178,9 +177,9 @@ async function eventsDuring(run: () => Promise<void>): Promise<DomainEvent[]> {
   const events: DomainEvent[] = [];
 
   await new Promise<void>((resolve, reject) => {
-    ws.on("error", reject);
-    ws.on("message", (data) => {
-      const message = JSON.parse(data.toString()) as {
+    ws.addEventListener("error", reject);
+    ws.addEventListener("message", (event) => {
+      const message = JSON.parse(String(event.data)) as {
         type: string;
         event?: DomainEvent;
       };
@@ -625,7 +624,7 @@ describe("every successful mutation announces itself (Epic 2.1 seam)", () => {
     expect(seen).toContain("edge.created");
 
     const edgeEvent = events.find((event) => event.entity === "edge");
-    expect(edgeEvent?.author).toEqual({
+    expect(edgeEvent?.author as unknown).toEqual({
       kind: "session",
       sessionId: "sess_peer",
     });
@@ -1115,9 +1114,9 @@ describe("the board snapshot (Epic 2.2's deferred item, landed)", () => {
     const buffered: DomainEvent[] = [];
 
     await new Promise<void>((resolve, reject) => {
-      ws.on("error", reject);
-      ws.on("message", (data) => {
-        const message = JSON.parse(data.toString()) as {
+      ws.addEventListener("error", reject);
+      ws.addEventListener("message", (event) => {
+        const message = JSON.parse(String(event.data)) as {
           type: string;
           event?: DomainEvent;
         };

@@ -212,6 +212,11 @@ const main = async (): Promise<void> => {
         } catch {
           // A plugin that throws on the way out has already been let go of.
         } finally {
+          // Acknowledge before exiting: Bun does not reliably deliver the
+          // parent-side `exit` event for a worker's own `process.exit()`
+          // (see `WorkerDisposedMessage`'s own doc), so the host waits on this
+          // message instead of that event.
+          post({ type: "disposed" });
           process.exit(0);
         }
         break;

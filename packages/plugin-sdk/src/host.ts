@@ -298,13 +298,26 @@ export class PluginHost {
     }
     if (previous.status === "ready") {
       worker.postMessage({ type: "dispose" } satisfies HostToWorkerMessage);
+      // The worker's own `disposed` acknowledgement, not its `exit` event: Bun
+      // does not reliably emit `exit` for a worker's own `process.exit()`
+      // (`WorkerDisposedMessage`'s own doc), which made every dispose here pay
+      // the full `callTimeoutMs` before falling through to `terminate()` below.
+      const acknowledged = new Promise<void>((resolve) => {
+        const onMessage = (message: WorkerToHostMessage): void => {
+          if (message.type === "disposed") {
+            worker.off("message", onMessage);
+            resolve();
+          }
+        };
+        worker.on("message", onMessage);
+      });
       const exited = new Promise<void>((resolve) => {
         worker.once("exit", () => resolve());
       });
       const timeout = new Promise<void>((resolve) => {
         setTimeout(resolve, this.#callTimeoutMs).unref();
       });
-      await Promise.race([exited, timeout]);
+      await Promise.race([acknowledged, exited, timeout]);
     }
     await worker.terminate().catch(() => undefined);
   }

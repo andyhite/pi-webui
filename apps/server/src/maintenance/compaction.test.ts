@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, describe, it, mock } from "bun:test";
 import type { CompactionResult, Maintenance } from "@plotroom/db";
 import { Logger } from "../logging/logger.js";
 import {
@@ -55,7 +55,7 @@ function job(
 
 describe("the compaction job (Epic 2.3, §15-3)", () => {
   it("sweeps on the configured interval, not at startup", () => {
-    const compact = vi.fn(() => EMPTY);
+    const compact = mock(() => EMPTY);
     const timers = fakeScheduler();
 
     const schedule = job(compact, 3_600, timers.scheduler);
@@ -71,7 +71,7 @@ describe("the compaction job (Epic 2.3, §15-3)", () => {
   });
 
   it("does not schedule anything when the interval is off", () => {
-    const compact = vi.fn(() => EMPTY);
+    const compact = mock(() => EMPTY);
     const timers = fakeScheduler();
 
     const schedule = job(compact, 0, timers.scheduler);
@@ -85,8 +85,7 @@ describe("the compaction job (Epic 2.3, §15-3)", () => {
   });
 
   it("keeps sweeping after one sweep fails", () => {
-    const compact = vi
-      .fn<() => CompactionResult>()
+    const compact = mock<() => CompactionResult>()
       .mockImplementationOnce(() => {
         throw new Error("disk on fire");
       })
@@ -114,7 +113,7 @@ describe("the compaction job (Epic 2.3, §15-3)", () => {
   });
 
   it("reschedules without a restart, clearing the old timer and arming a new one (Epic 8.3)", () => {
-    const compact = vi.fn(() => EMPTY);
+    const compact = mock(() => EMPTY);
     const timers = fakeScheduler();
 
     const schedule = job(compact, 3_600, timers.scheduler);
@@ -132,7 +131,7 @@ describe("the compaction job (Epic 2.3, §15-3)", () => {
   });
 
   it("rescheduling to zero disables the schedule without disabling runNow", () => {
-    const compact = vi.fn(() => EMPTY);
+    const compact = mock(() => EMPTY);
     const timers = fakeScheduler();
 
     const schedule = job(compact, 3_600, timers.scheduler);

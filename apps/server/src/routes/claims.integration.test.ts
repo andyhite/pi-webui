@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { expect, afterEach, describe, it } from "bun:test";
 import type { RuntimeScript } from "../runtime/scripted.js";
 import {
   at,

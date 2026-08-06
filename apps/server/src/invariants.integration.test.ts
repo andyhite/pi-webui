@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { expect, afterEach, describe, it } from "bun:test";
 import {
   ConnectionRefused,
   GraphStore,
@@ -145,7 +145,7 @@ function allColumns(harness: Harness): string[] {
   const { state, close } = store(harness);
   try {
     return state.sqlite
-      .prepare<[], { tbl: string; col: string }>(
+      .prepare<{ tbl: string; col: string }, []>(
         `SELECT m.name AS tbl, p.name AS col
            FROM sqlite_master m JOIN pragma_table_info(m.name) p
           WHERE m.type = 'table'`,
@@ -293,14 +293,14 @@ describe("§15-1: a run records the full assembled content and configuration", (
     try {
       const row = state.sqlite
         .prepare<
-          [string],
           {
             assembled_blob_id: string | null;
             assembled_hash: string | null;
             config_json: string | null;
             command_id: string;
             definition_id: string;
-          }
+          },
+          [string]
         >("SELECT * FROM runs WHERE id = ?")
         .get(runId);
 
@@ -356,7 +356,7 @@ describe("§15-1: a run records the full assembled content and configuration", (
 
       // And no run in the store — however it got there — is missing either half.
       const halves = state.sqlite
-        .prepare<[], { broken: number }>(
+        .prepare<{ broken: number }, []>(
           `SELECT COUNT(*) AS broken FROM runs
             WHERE assembled_blob_id IS NULL OR config_json IS NULL
                OR assembled_hash IS NULL OR assembled_bytes IS NULL`,
@@ -381,7 +381,7 @@ describe("§15-2: every context edge records its author", () => {
     const { state, close } = store(harness);
     try {
       const nodes = state.sqlite
-        .prepare<[], { id: string }>("SELECT id FROM nodes LIMIT 2")
+        .prepare<{ id: string }, []>("SELECT id FROM nodes LIMIT 2")
         .all();
       const from = nodes[0]?.id as string;
       const to = nodes[1]?.id as string;
@@ -534,8 +534,8 @@ describe("§15-2: every context edge records its author", () => {
     try {
       const rows = state.sqlite
         .prepare<
-          [],
-          { kind: string; author_kind: string; ordinal: number | null }
+          { kind: string; author_kind: string; ordinal: number | null },
+          []
         >("SELECT kind, author_kind, ordinal FROM edges")
         .all();
 
@@ -558,7 +558,7 @@ describe("§15-2: every context edge records its author", () => {
       // The other direction of "only for provenance": a provenance edge cannot
       // borrow a human author either, so the two vocabularies cannot blur.
       const nodes = state.sqlite
-        .prepare<[], { id: string }>("SELECT id FROM nodes LIMIT 2")
+        .prepare<{ id: string }, []>("SELECT id FROM nodes LIMIT 2")
         .all();
       expect(() =>
         state.sqlite
@@ -716,9 +716,9 @@ describe("§15-3: compaction never touches a run-referenced or pinned version", 
       expect(swept.versionsRemoved).toBe(1);
 
       const remaining = objects.versions(noteId).map((version) => version.id);
-      expect(remaining).toContain(v1); // run-referenced
-      expect(remaining).toContain(v3); // pinned by the pinned run
-      expect(remaining).toContain(v4); // the latest is never an intermediate
+      expect(remaining).toContain(v1 as never); // run-referenced
+      expect(remaining).toContain(v3 as never); // pinned by the pinned run
+      expect(remaining).toContain(v4 as never); // the latest is never an intermediate
       expect(remaining).not.toContain(v2); // unreferenced intermediate: gone
     } finally {
       close();
@@ -840,7 +840,7 @@ describe("§15-4: output@n is the general address and latest is derived", () => 
           runOrdinal: index + 1,
         });
         expect(resolved?.objectId, `output@${index + 1}`).toBe(
-          expected.objectId,
+          expected.objectId as never,
         );
       }
 
@@ -856,7 +856,7 @@ describe("§15-4: output@n is the general address and latest is derived", () => 
       );
       expect(newest).toBe(3);
       const latest = runs.resolve({ commandId, name: "result", at: "latest" });
-      expect(latest?.objectId).toBe(produced.at(-1)?.objectId);
+      expect(latest?.objectId as unknown).toBe(produced.at(-1)?.objectId);
       expect(
         history.find((row) => at(row, "id") === latest?.runId),
       ).toBeDefined();
@@ -920,7 +920,7 @@ describe("§15-4: output@n is the general address and latest is derived", () => 
     try {
       const commandId = fixture.commandId as CommandId;
       const before = runs.resolve({ commandId, name: "result", at: "latest" });
-      expect(before?.runId).toBe(first);
+      expect(before?.runId as unknown).toBe(first);
 
       // Keep nothing by recency, nothing by age: the only thing left that can
       // save this run is the rule that an address must keep answering.
@@ -933,7 +933,7 @@ describe("§15-4: output@n is the general address and latest is derived", () => 
       // survives by the rule and not because nothing was compactable.
       expect(removed).toBe(1);
       const surviving = runs.history(fixture.commandId).map((row) => row.id);
-      expect(surviving).toEqual([first]);
+      expect(surviving as unknown).toEqual([first]);
 
       expect(runs.resolve({ commandId, name: "result", at: "latest" })).toEqual(
         before,
@@ -1082,7 +1082,7 @@ describe("principle 1: no session authors intent into its own chain", () => {
     const { state, close } = store(harness);
     try {
       const authored = state.sqlite
-        .prepare<[string], { n: number }>(
+        .prepare<{ n: number }, [string]>(
           "SELECT COUNT(*) AS n FROM edges WHERE kind = 'context' AND author_session = ?",
         )
         .get(grandchild);
@@ -1365,7 +1365,7 @@ describe("principle 9: one gesture creates one thing", () => {
     const { state, close } = store(harness);
     try {
       const sessions = state.sqlite
-        .prepare<[], { n: number }>("SELECT COUNT(*) AS n FROM sessions")
+        .prepare<{ n: number }, []>("SELECT COUNT(*) AS n FROM sessions")
         .get();
       expect(sessions?.n).toBe(1);
     } finally {

@@ -60,11 +60,19 @@ export function openDatabase({ stateDir }: OpenOptions): PlotroomDatabase {
 
   applyMigrations(sqlite);
 
+  let closed = false;
+
   return {
     db: drizzle(sqlite, { schema }),
     sqlite,
     layout,
     close: () => {
+      // Idempotent: unlike better-sqlite3's `.close()`, bun:sqlite throws on a
+      // statement run against an already-closed connection, and a harness that
+      // closes explicitly then again through teardown (`cleanupHarnesses`) is a
+      // legitimate double call, not a bug to surface.
+      if (closed) return;
+      closed = true;
       if (!inMemory) checkpointWal(sqlite);
       // Plain `close()` (`throwOnError: false`, `sqlite3_close_v2`): it defers
       // releasing the connection - and the file handle - until every

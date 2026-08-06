@@ -47,8 +47,12 @@ const BUILDS_ITS_OWN_DIST: Record<string, string> = {
  */
 const NOT_VITEST: Record<string, { test: string; why: string }> = {
   "apps/session-host": {
-    test: "bun test src",
-    why: "Bun runtime, `bun:test` (decision 0005)",
+    test: "bun test src --exclude src/plugins/conditions.test.ts --exclude src/plugins/invoker.test.ts && vitest run src/plugins/conditions.test.ts src/plugins/invoker.test.ts",
+    why: "Bun runtime, bun:test (decision 0005)",
+  },
+  "apps/server": {
+    test: "bun test src --exclude src/plugins/conditions.test.ts --exclude src/plugins/invoker.test.ts && vitest run src/plugins/conditions.test.ts src/plugins/invoker.test.ts",
+    why: "Bun-native server runtime and WebSocket acceptance (issue #314)",
   },
   "packages/db": {
     test: "bun test src --timeout 20000",
