@@ -1,5 +1,4 @@
-import { expect } from "vitest";
-import { describe, it, mock } from "bun:test";
+import { expect, describe, it, mock } from "bun:test";
 import { Logger } from "../logging/logger.js";
 import type { IntervalScheduler, Timer } from "../maintenance/compaction.js";
 import { startAttentionTick } from "./tick.js";

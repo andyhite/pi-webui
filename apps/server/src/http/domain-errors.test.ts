@@ -1,5 +1,4 @@
-import { expect } from "vitest";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 import { SessionHostNotReady, SessionHostSilent } from "@plotroom/core";
 import { EntityNotFound } from "@plotroom/db";
 import { toApiError } from "./domain-errors.js";

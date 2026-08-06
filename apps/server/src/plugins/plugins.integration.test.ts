@@ -1,6 +1,5 @@
-import { expect } from "vitest";
 import type { DomainEvent } from "@plotroom/core";
-import { afterEach, describe, it } from "bun:test";
+import { expect, afterEach, describe, it } from "bun:test";
 import {
   at,
   boot,

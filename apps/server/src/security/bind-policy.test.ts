@@ -1,5 +1,4 @@
-import { expect } from "vitest";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 import { checkBindPolicy } from "./bind-policy.js";
 
 describe("checkBindPolicy (spec §12)", () => {

@@ -1,8 +1,7 @@
-import { expect } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { humanAuthor, type Approval, type ApprovalAsk } from "@plotroom/core";
 import { manualClock, type ManualClock } from "@plotroom/core/testing";
 import {

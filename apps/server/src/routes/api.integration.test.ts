@@ -1,8 +1,7 @@
-import { expect } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { GraphStore } from "@plotroom/db";
 import type { DomainEvent } from "@plotroom/core";
 import { loadServerConfig } from "../config.js";
@@ -625,7 +624,7 @@ describe("every successful mutation announces itself (Epic 2.1 seam)", () => {
     expect(seen).toContain("edge.created");
 
     const edgeEvent = events.find((event) => event.entity === "edge");
-    expect(edgeEvent?.author).toEqual({
+    expect(edgeEvent?.author as unknown).toEqual({
       kind: "session",
       sessionId: "sess_peer",
     });

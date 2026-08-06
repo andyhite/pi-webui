@@ -1,6 +1,5 @@
-import { expect } from "vitest";
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, it } from "bun:test";
+import { expect, afterEach, describe, it } from "bun:test";
 import type { RuntimeScript } from "../runtime/scripted.js";
 import {
   at,

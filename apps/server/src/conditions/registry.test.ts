@@ -1,8 +1,7 @@
-import { expect } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import {
   humanAuthor,
   newWorkspaceRecord,

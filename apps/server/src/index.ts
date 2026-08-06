@@ -361,7 +361,7 @@ export function startServer(config = loadServerConfig()) {
         // `stop()` defaults to graceful (waits out in-flight requests/WS); a
         // close that had to force the issue would defeat the point of
         // draining the runtime above first.
-        await boundServer.stop();
+        await boundServer.stop(true);
       }
       db.close();
     },

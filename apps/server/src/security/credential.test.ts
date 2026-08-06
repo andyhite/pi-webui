@@ -1,5 +1,4 @@
-import { expect } from "vitest";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 import { checkCredential } from "./credential.js";
 
 describe("checkCredential (spec §12)", () => {

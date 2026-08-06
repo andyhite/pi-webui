@@ -1,4 +1,3 @@
-import { expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
   cpSync,
@@ -10,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, it } from "bun:test";
+import { expect, afterEach, describe, it } from "bun:test";
 import {
   humanAuthor,
   readinessProvisioned,

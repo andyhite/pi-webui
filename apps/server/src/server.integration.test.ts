@@ -1,9 +1,8 @@
-import { expect } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { humanAuthor } from "@plotroom/core";
-import { afterEach, describe, it } from "bun:test";
+import { expect, afterEach, describe, it } from "bun:test";
 import { loadServerConfig, type ServerConfig } from "./config.js";
 import { startServer } from "./index.js";
 

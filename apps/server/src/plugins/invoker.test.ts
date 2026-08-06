@@ -1,5 +1,4 @@
-import { expect } from "vitest";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import {
   APPROVAL_KINDS,
   APPROVAL_TRIGGERS,
@@ -116,7 +115,7 @@ describe("a plugin's ungranted permission (§10.2, §6.6)", () => {
     const asked = error as PluginPermissionAskedError;
     // Blocked, not settled: there is an approval and there is no result.
     expect(asked.status).toBe(202);
-    expect(asked.approval?.id).toBe("approval_1");
+    expect(asked.approval?.id as unknown).toBe("approval_1");
     expect(asked.permissionId).toBe("fake-token");
 
     expect(raised).toHaveLength(1);

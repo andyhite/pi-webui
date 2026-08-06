@@ -1,5 +1,4 @@
-import { expect } from "vitest";
-import { describe, it, mock } from "bun:test";
+import { expect, describe, it, mock } from "bun:test";
 import type { CompactionResult, Maintenance } from "@plotroom/db";
 import { Logger } from "../logging/logger.js";
 import {

@@ -1,5 +1,4 @@
-import { expect } from "vitest";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 import { Logger } from "./logger.js";
 import { LogRingBuffer } from "./ring-buffer.js";
 import { createBufferedSink } from "./sink.js";

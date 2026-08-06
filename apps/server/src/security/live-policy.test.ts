@@ -1,5 +1,4 @@
-import { expect } from "vitest";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 import { checkCredential } from "./credential.js";
 import { checkOrigin } from "./origin.js";
 import { LiveSecurityPolicy } from "./live-policy.js";

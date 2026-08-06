@@ -1,7 +1,6 @@
-import { expect } from "vitest";
 import type { RuntimeScript } from "../runtime/scripted.js";
 import { DEFAULT_SEARCH_LIMIT } from "@plotroom/db";
-import { afterEach, describe, it } from "bun:test";
+import { expect, afterEach, describe, it } from "bun:test";
 import {
   at,
   boot,

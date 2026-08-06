@@ -1,8 +1,7 @@
-import { expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, it } from "bun:test";
+import { expect, afterEach, describe, it } from "bun:test";
 import { openDatabase, WorkspaceStore } from "@plotroom/db";
 import type { RuntimeScript } from "../runtime/scripted.js";
 import {
@@ -309,7 +308,7 @@ describe("fork (§6.3)", () => {
     // Cleanliness is three-valued: `unknown` is what an undeclared tool call
     // produces, and there are no declarations until Phase 7 (principle 7).
     expect(["clean", "dirty", "unknown"]).toContain(
-      at(preview, "cleanliness.state"),
+      at(preview, "cleanliness.state") as string,
     );
 
     const forked = await harness.ok(`/sessions/${sessionId}/fork`, {

@@ -1,9 +1,8 @@
-import { expect } from "vitest";
 import { createHash } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, it } from "bun:test";
+import { expect, afterEach, describe, it } from "bun:test";
 import {
   ConnectionRefused,
   GraphStore,
@@ -717,9 +716,9 @@ describe("§15-3: compaction never touches a run-referenced or pinned version", 
       expect(swept.versionsRemoved).toBe(1);
 
       const remaining = objects.versions(noteId).map((version) => version.id);
-      expect(remaining).toContain(v1); // run-referenced
-      expect(remaining).toContain(v3); // pinned by the pinned run
-      expect(remaining).toContain(v4); // the latest is never an intermediate
+      expect(remaining).toContain(v1 as never); // run-referenced
+      expect(remaining).toContain(v3 as never); // pinned by the pinned run
+      expect(remaining).toContain(v4 as never); // the latest is never an intermediate
       expect(remaining).not.toContain(v2); // unreferenced intermediate: gone
     } finally {
       close();
@@ -841,7 +840,7 @@ describe("§15-4: output@n is the general address and latest is derived", () => 
           runOrdinal: index + 1,
         });
         expect(resolved?.objectId, `output@${index + 1}`).toBe(
-          expected.objectId,
+          expected.objectId as never,
         );
       }
 
@@ -857,7 +856,7 @@ describe("§15-4: output@n is the general address and latest is derived", () => 
       );
       expect(newest).toBe(3);
       const latest = runs.resolve({ commandId, name: "result", at: "latest" });
-      expect(latest?.objectId).toBe(produced.at(-1)?.objectId);
+      expect(latest?.objectId as unknown).toBe(produced.at(-1)?.objectId);
       expect(
         history.find((row) => at(row, "id") === latest?.runId),
       ).toBeDefined();
@@ -921,7 +920,7 @@ describe("§15-4: output@n is the general address and latest is derived", () => 
     try {
       const commandId = fixture.commandId as CommandId;
       const before = runs.resolve({ commandId, name: "result", at: "latest" });
-      expect(before?.runId).toBe(first);
+      expect(before?.runId as unknown).toBe(first);
 
       // Keep nothing by recency, nothing by age: the only thing left that can
       // save this run is the rule that an address must keep answering.
@@ -934,7 +933,7 @@ describe("§15-4: output@n is the general address and latest is derived", () => 
       // survives by the rule and not because nothing was compactable.
       expect(removed).toBe(1);
       const surviving = runs.history(fixture.commandId).map((row) => row.id);
-      expect(surviving).toEqual([first]);
+      expect(surviving as unknown).toEqual([first]);
 
       expect(runs.resolve({ commandId, name: "result", at: "latest" })).toEqual(
         before,

@@ -1,8 +1,7 @@
-import { expect } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import {
   humanAuthor,
   sessionAuthor,
@@ -272,7 +271,9 @@ describe("destroying a session", () => {
 
     // §3.6: readable *always*. The observation log is the record (decision
     // 0001), so a restore that lost it would put back a session in name only.
-    expect(stores.sessions.get(sessionId).session.id).toBe(sessionId);
+    expect(stores.sessions.get(sessionId).session.id as unknown).toBe(
+      sessionId,
+    );
     expect(stores.sessions.observationRecords(sessionId)).toHaveLength(1);
   });
 

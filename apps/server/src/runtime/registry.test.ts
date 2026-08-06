@@ -1,4 +1,3 @@
-import { expect } from "vitest";
 import { INHERIT_APP_TOOLS } from "@plotroom/core";
 import type {
   RuntimeCapabilities,
@@ -6,7 +5,7 @@ import type {
   RuntimeStartConfig,
   SessionRuntimeAdapter,
 } from "@plotroom/core";
-import { describe, it } from "bun:test";
+import { expect, describe, it } from "bun:test";
 
 import { RuntimeRegistry } from "./registry.js";
 
