@@ -5,7 +5,7 @@
  * plugin for real (covered separately in `host.test.ts`, against the real
  * worker_threads host).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { checkConformance, readDescriptor } from "@plotroom/plugin-sdk";
 
 import manifest from "./index.js";

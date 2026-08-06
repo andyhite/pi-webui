@@ -10,7 +10,7 @@ import plugin from "./plugin.js";
  * `scripts/workspace-tooling.test.ts`. Uses ESLint's official `@eslint/json`
  * language plugin so these are ordinary ESLint rules, not a bespoke script.
  *
- * @param {{ buildsOwnDist?: boolean; testOverride?: string }} [packageJsonOptions]
+ * @param {{ testOverride?: string }} [packageJsonOptions]
  */
 export function workspaceConventions(packageJsonOptions = {}) {
   return [
@@ -24,7 +24,7 @@ export function workspaceConventions(packageJsonOptions = {}) {
       },
     },
     {
-      files: ["tsconfig.json", "tsconfig.tests.json"],
+      files: ["tsconfig.json"],
       plugins: { json, plotroom: plugin },
       language: "json/jsonc",
       rules: {

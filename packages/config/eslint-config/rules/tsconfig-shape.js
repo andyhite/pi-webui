@@ -1,22 +1,17 @@
 import { findNode, toJs } from "../lib/momoa-utils.js";
 
 /**
- * The other half of the build tooling contract (#215): a package's tests are
- * excluded from its `build` project but still typechecked, through a
- * `tsconfig.tests.json` shaped exactly the same way everywhere. Applies to
- * both `tsconfig.json` (the exclude-tests half) and `tsconfig.tests.json`
- * (the tests-project half) — which file is which is read from the filename,
- * not an option, because the shape is not per-package: a package that needs
- * a different shape here is the graph-shaped exception this rule cannot
- * express, and belongs back in `scripts/workspace-tooling.test.ts`.
+ * The tsconfig half of the build tooling contract (#215), restructured by
+ * #315: there is no more build/tests project split (nothing emits, so
+ * nothing needs a test file excluded from what it emits), and no more
+ * per-package `typecheck` — the one root TypeScript 7 native check covers
+ * every package's sources, tests included, directly. What is left for a
+ * per-package `tsconfig.json` to get right is much smaller: extend the
+ * shared base, and include its own `src/`.
  */
 
-const TESTS_EXCLUDE_PATTERN = "src/**/*.test.ts";
-const EXPECTED_TESTS_EXTENDS = [
-  "./tsconfig.json",
-  "@plotroom/typescript-config/tests.json",
-];
-const EXPECTED_TESTS_INCLUDE = ["src/**/*"];
+const EXPECTED_EXTENDS = "@plotroom/typescript-config/base.json";
+const EXPECTED_INCLUDE = ["src/**/*"];
 
 /** @type {import("eslint").Rule.RuleModule} */
 const rule = {
@@ -24,96 +19,68 @@ const rule = {
     type: "problem",
     docs: {
       description:
-        "enforce the shared tsconfig.json / tsconfig.tests.json shape across workspace packages",
+        "enforce the shared tsconfig.json shape across workspace packages (#315: single no-emit project, no per-package build/tests split)",
       recommended: true,
     },
     schema: [],
     messages: {
-      missingTestsExclude:
-        'tsconfig.json "exclude" must contain "{{pattern}}" so the build project never emits a test file.',
-      badTestsExtends:
-        'tsconfig.tests.json "extends" must be {{expected}}, got {{actual}}.',
-      badTestsInclude:
-        'tsconfig.tests.json "include" must be {{expected}}, got {{actual}}.',
-      badTestsExclude:
-        'tsconfig.tests.json "exclude" must be empty: it typechecks everything the build project left out.',
-      badTsBuildInfoFile:
-        'tsconfig.tests.json compilerOptions.tsBuildInfoFile must be "dist/.tsbuildinfo.tests", got {{actual}}.',
+      badExtends:
+        'tsconfig.json "extends" must be "{{expected}}", got {{actual}}.',
+      badInclude:
+        'tsconfig.json "include" must start with {{expected}}, got {{actual}}.',
+      staleEmitOption:
+        "tsconfig.json compilerOptions.{{option}} is a build-era leftover (#315: the workspace is noEmit everywhere except apps/desktop's own tsconfig.build.json). Remove it.",
     },
   },
   create(context) {
-    const isTestsProject = context.filename.endsWith("tsconfig.tests.json");
-
     return {
       Document(node) {
         const data = /** @type {Record<string, unknown>} */ (toJs(node));
 
-        if (!isTestsProject) {
-          const exclude = /** @type {Array<string>} */ (data.exclude ?? []);
-          if (!exclude.includes(TESTS_EXCLUDE_PATTERN)) {
-            context.report({
-              node: findNode(node, ["exclude"]),
-              messageId: "missingTestsExclude",
-              data: { pattern: TESTS_EXCLUDE_PATTERN },
-            });
-          }
-          return;
-        }
-
         const extendsValue = data.extends;
-        const extendsList = Array.isArray(extendsValue)
-          ? extendsValue
-          : typeof extendsValue === "string"
-            ? [extendsValue]
-            : [];
-        if (
-          extendsList.length !== EXPECTED_TESTS_EXTENDS.length ||
-          extendsList.some((e, i) => e !== EXPECTED_TESTS_EXTENDS[i])
-        ) {
+        if (extendsValue !== EXPECTED_EXTENDS) {
           context.report({
             node: findNode(node, ["extends"]),
-            messageId: "badTestsExtends",
+            messageId: "badExtends",
             data: {
-              expected: JSON.stringify(EXPECTED_TESTS_EXTENDS),
+              expected: EXPECTED_EXTENDS,
               actual: JSON.stringify(extendsValue ?? null),
             },
           });
         }
 
         const include = data.include;
-        if (
-          !Array.isArray(include) ||
-          include.length !== EXPECTED_TESTS_INCLUDE.length ||
-          include.some((v, i) => v !== EXPECTED_TESTS_INCLUDE[i])
-        ) {
+        const includeOk =
+          Array.isArray(include) &&
+          EXPECTED_INCLUDE.every((v, i) => include[i] === v);
+        if (!includeOk) {
           context.report({
             node: findNode(node, ["include"]),
-            messageId: "badTestsInclude",
+            messageId: "badInclude",
             data: {
-              expected: JSON.stringify(EXPECTED_TESTS_INCLUDE),
+              expected: JSON.stringify(EXPECTED_INCLUDE),
               actual: JSON.stringify(include ?? null),
             },
           });
         }
 
-        const exclude = data.exclude;
-        if (!Array.isArray(exclude) || exclude.length !== 0) {
-          context.report({
-            node: findNode(node, ["exclude"]),
-            messageId: "badTestsExclude",
-          });
-        }
-
         const compilerOptions =
           /** @type {Record<string, unknown>} */ (data.compilerOptions) ?? {};
-        if (compilerOptions.tsBuildInfoFile !== "dist/.tsbuildinfo.tests") {
-          context.report({
-            node: findNode(node, ["compilerOptions", "tsBuildInfoFile"]),
-            messageId: "badTsBuildInfoFile",
-            data: {
-              actual: JSON.stringify(compilerOptions.tsBuildInfoFile ?? null),
-            },
-          });
+        for (const option of [
+          "composite",
+          "declaration",
+          "declarationMap",
+          "rootDir",
+          "outDir",
+          "tsBuildInfoFile",
+        ]) {
+          if (option in compilerOptions) {
+            context.report({
+              node: findNode(node, ["compilerOptions", option]),
+              messageId: "staleEmitOption",
+              data: { option },
+            });
+          }
         }
       },
     };

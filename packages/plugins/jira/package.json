@@ -4,30 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": {
-      "source": "./src/index.ts",
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    },
-    "./renderer-manifest": {
-      "source": "./src/renderer-manifest.ts",
-      "types": "./dist/renderer-manifest.d.ts",
-      "default": "./dist/renderer-manifest.js"
-    },
-    "./testing": {
-      "source": "./src/testing/index.ts",
-      "types": "./dist/testing/index.d.ts",
-      "default": "./dist/testing/index.js"
-    }
+    ".": "./src/index.ts",
+    "./renderer-manifest": "./src/renderer-manifest.ts",
+    "./testing": "./src/testing/index.ts"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -b",
-    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
     "lint": "oxlint --type-aware",
     "lint:arch": "eslint .",
-    "test": "tsc -b && vitest run"
+    "test": "bun test src"
   },
   "devDependencies": {
     "@plotroom/plugin-sdk": "workspace:*",

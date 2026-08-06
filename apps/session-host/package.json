@@ -4,21 +4,11 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./main": {
-      "source": "./src/main.ts",
-      "types": "./dist/main.d.ts",
-      "default": "./dist/main.js"
-    },
-    "./compile": {
-      "source": "./src/compile.ts",
-      "types": "./dist/compile.d.ts",
-      "default": "./dist/compile.js"
-    }
+    "./main": "./src/main.ts",
+    "./compile": "./src/compile.ts"
   },
   "scripts": {
-    "build": "tsc -b",
     "compile": "bun src/compile.ts",
-    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
     "lint": "oxlint --type-aware",
     "lint:arch": "eslint .",
     "test": "bun test src"

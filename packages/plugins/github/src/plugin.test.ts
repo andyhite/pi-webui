@@ -1,5 +1,5 @@
 import type { PluginCallContext, WriteAction } from "@plotroom/plugin-sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 
 import { checksGreenCheck, pullRequestExistsCheck } from "./conditions.js";
 import { readIssue, readPullRequest } from "./model.js";

@@ -1,6 +1,0 @@
-{
-  "$schema": "https://json.schemastore.org/tsconfig",
-  // See tsconfig.base.json: the real contents live in
-  // packages/config/typescript-config/tests.json now.
-  "extends": "./packages/config/typescript-config/tests.json"
-}

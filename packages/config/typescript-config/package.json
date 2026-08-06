@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "files": [
-    "base.json",
-    "tests.json"
+    "base.json"
   ]
 }

@@ -4,9 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -b && vite build",
+    "build": "vite build",
     "dev": "vite",
-    "typecheck": "tsc -b && tsc -p tsconfig.tests.json && tsc -p e2e/tsconfig.json",
     "lint": "oxlint --type-aware",
     "lint:arch": "eslint .",
     "test": "vitest run",

@@ -1,5 +1,7 @@
 import type { DomainEvent } from "@plotroom/core";
 import { expect, afterEach, describe, it } from "bun:test";
+
+import { openWebSocket } from "../test-support/bun-websocket.js";
 import {
   at,
   boot,
@@ -504,7 +506,7 @@ describe("plugin lifecycle on the one event stream (§10.2)", () => {
   it("publishes a plugin event a health panel can subscribe to", async () => {
     const harness = await withPlugins(HEALTHY);
     const events: DomainEvent[] = [];
-    const socket = new WebSocket(`ws://127.0.0.1:${harness.port}/ws`, {
+    const socket = openWebSocket(`ws://127.0.0.1:${harness.port}/ws`, {
       headers: { origin: `http://localhost:${harness.port}` },
     });
     await new Promise<void>((resolve, reject) => {

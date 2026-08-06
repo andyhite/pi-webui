@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { expect, afterEach, beforeEach, describe, it } from "bun:test";
 import { GraphStore } from "@plotroom/db";
 import type { DomainEvent } from "@plotroom/core";
+
+import { openWebSocket } from "../test-support/bun-websocket.js";
 import { loadServerConfig } from "../config.js";
 import { startServer } from "../index.js";
 
@@ -171,7 +173,7 @@ async function producingCommand(workstream: string, name: string) {
 
 /** Collects events off the live stream while `run` mutates (Epic 2.1 seam). */
 async function eventsDuring(run: () => Promise<void>): Promise<DomainEvent[]> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+  const ws = openWebSocket(`ws://127.0.0.1:${port}/ws`, {
     headers: { origin },
   });
   const events: DomainEvent[] = [];
@@ -1108,7 +1110,7 @@ describe("the board snapshot (Epic 2.2's deferred item, landed)", () => {
     // Connect first and buffer, exactly the pattern documented next to the
     // route: a client that fetched the snapshot before connecting could
     // miss an event published in the gap.
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+    const ws = openWebSocket(`ws://127.0.0.1:${port}/ws`, {
       headers: { origin },
     });
     const buffered: DomainEvent[] = [];

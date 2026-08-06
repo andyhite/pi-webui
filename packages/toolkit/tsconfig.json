@@ -1,19 +1,6 @@
 {
+  "$schema": "https://json.schemastore.org/tsconfig",
   "extends": "@plotroom/typescript-config/base.json",
-  "compilerOptions": {
-    "rootDir": "src",
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "jsx": "react-jsx",
-    "outDir": "dist",
-    "tsBuildInfoFile": "dist/.tsbuildinfo",
-    // Vite emits the ESM bundle (`dist/index.js`) and the stylesheet; tsc emits
-    // the types beside them. Two emitters into one directory only works because
-    // exactly one of them writes JavaScript, and because Vite is told not to
-    // empty the directory first (`vite.config.ts`).
-    "emitDeclarationOnly": true,
-    "sourceMap": false
-  },
-  "include": ["src/**/*"],
-  "exclude": ["src/**/*.test.ts"],
-  "references": []
+  "compilerOptions": { "types": ["node", "react"] },
+  "include": ["src/**/*"]
 }

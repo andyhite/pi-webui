@@ -5,9 +5,8 @@
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -b && node scripts/copy-static-assets.mjs",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-static-assets.mjs",
     "start": "electron .",
-    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
     "lint": "oxlint --type-aware",
     "lint:arch": "eslint .",
     "test": "vitest run",

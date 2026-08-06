@@ -1,5 +1,5 @@
 import type { PluginCallContext } from "@plotroom/plugin-sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 
 import { epicChildrenResolvedCheck, issueInStatusCheck } from "./conditions.js";
 import {
@@ -246,9 +246,9 @@ describe("an epic and its children (§9.4, §3.1)", () => {
       ticketExternalId({ site: FIXTURE_SITE, key: FIXTURE_BUG }),
     ]);
     const members = read.objects.filter((one) => one.kind === "ticket");
-    expect(members.map((one) => one.externalId)).toEqual(
-      parseCollectionMembers(collection.renderings.agentContent),
-    );
+    expect(members.map((one) => one.externalId)).toEqual([
+      ...parseCollectionMembers(collection.renderings.agentContent),
+    ]);
   });
 
   it("refreshes one epic from its collection id alone, with no scope (§9.1)", async () => {

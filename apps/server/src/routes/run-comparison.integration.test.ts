@@ -1,5 +1,6 @@
 import { expect, afterEach, describe, it } from "bun:test";
 import type { DomainEvent } from "@plotroom/core";
+import { openWebSocket } from "../test-support/bun-websocket.js";
 import type { RuntimeScript } from "../runtime/scripted.js";
 import {
   at,
@@ -213,7 +214,7 @@ describe("pinning (§4.4)", () => {
     });
     const runId = await completedRun(harness, fixture.commandId);
 
-    const ws = new WebSocket(`ws://127.0.0.1:${harness.port}/ws`, {
+    const ws = openWebSocket(`ws://127.0.0.1:${harness.port}/ws`, {
       headers: { origin: `http://localhost:${harness.port}` },
     });
     const events: DomainEvent[] = [];

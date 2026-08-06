@@ -23,27 +23,15 @@ import { packageTests } from "../vitest.base.config.ts";
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 /**
- * Packages whose own `dist/` is under test — their host suites load the built
- * plugin entry in a worker, which is exactly what the product loads — so `test`
- * builds first. Turbo's `test` task depends on `^build`, upstream only, and a
- * cold cache is where the difference showed (#118). Mirrors the
- * `buildsOwnDist` option each such package's `eslint.config.js` passes to
- * `plotroom/package-json-conventions`.
- */
-const BUILDS_ITS_OWN_DIST: Record<string, string> = {
-  "packages/plugins/git": "host.integration.test.ts loads ../dist/index.js",
-  "packages/plugins/github":
-    "host.integration.test.ts loads ../dist/index.js and ../dist/testing/stub-entry.js",
-  "packages/plugins/jira":
-    "host.integration.test.ts loads ../dist/index.js and ../dist/testing/stub-entry.js",
-};
-
-/**
- * The one package that is not on vitest: it runs on Bun, its tests import
- * `bun:test`, and it embeds a Bun-only SDK (decision 0005). A vitest
- * configuration here would be a second runner claiming the same files.
- * Mirrors the `testOverride` option `apps/session-host/eslint.config.js`
- * passes to `plotroom/package-json-conventions`.
+ * Packages that are not on vitest: each embeds a Bun-only SDK or, since
+ * #315 removed the build every one of these host suites used to load first,
+ * needs a genuine Bun worker thread to resolve the raw-TS entry it loads at
+ * runtime — confirmed empirically: the same `new Worker()` call resolves a
+ * `./plugin.js`-style specifier against the sibling `.ts` file under `bun
+ * test`, and fails under vitest's own worker pool even when vitest itself
+ * runs via `bun run` (the pool's workers do not inherit Bun's module
+ * loader). Mirrors the `testOverride` option each such package's
+ * `eslint.config.js` passes to `plotroom/package-json-conventions`.
  */
 const NOT_VITEST: Record<string, { test: string; why: string }> = {
   "apps/session-host": {
@@ -57,6 +45,22 @@ const NOT_VITEST: Record<string, { test: string; why: string }> = {
   "packages/db": {
     test: "bun test src --timeout 20000",
     why: "`client.ts` imports `bun:sqlite` (#313); Vitest's worker pool spawns processes that cannot resolve it, confirmed empirically. The wider timeout accommodates windows-latest's measured real-file-I/O slowness on the heavier migration fixtures.",
+  },
+  "packages/plugins/git": {
+    test: "bun test src",
+    why: "#315: host.integration.test.ts loads ../src/index.ts (no build) in a real worker_threads Worker; only a Bun worker resolves the raw-TS entry.",
+  },
+  "packages/plugins/github": {
+    test: "bun test src",
+    why: "#315: host.integration.test.ts loads ../src/index.ts and ../src/testing/stub-entry.ts (no build) in a real worker_threads Worker.",
+  },
+  "packages/plugins/jira": {
+    test: "bun test src",
+    why: "#315: host.integration.test.ts loads ../src/index.ts and ../src/testing/stub-entry.ts (no build) in a real worker_threads Worker.",
+  },
+  "packages/plugins/filesystem": {
+    test: "bun test src",
+    why: "#315: host.test.ts loads ../src/index.ts (no build) in a real worker_threads Worker; only a Bun worker resolves the raw-TS entry.",
   },
 };
 
@@ -199,11 +203,29 @@ describe("the packages this contract covers", () => {
 
   it("is what every deviation names, so a stale exception cannot hide", () => {
     const claimed = Object.keys({
-      ...BUILDS_ITS_OWN_DIST,
       ...NOT_VITEST,
       ...NODE_TYPES_FROM,
     });
     expect(claimed.filter((dir) => !dirs.includes(dir))).toEqual([]);
+  });
+});
+
+describe("no stray tsconfigs (#315)", () => {
+  it("has no per-package tsconfig.tests.json or tsconfig.scripts.json left", () => {
+    // #315: one root TypeScript 7 native check replaced the per-package
+    // build/tests project split and the root scripts-only project. Their
+    // config files are graph-shaped debris a lint rule cannot see (it visits
+    // one file at a time, so it cannot notice a file that should not exist).
+    const stray = dirs
+      .flatMap((dir) => [
+        join(repoRoot, dir, "tsconfig.tests.json"),
+        join(repoRoot, dir, "tsconfig.scripts.json"),
+      ])
+      .filter((path) => existsSync(path))
+      .map((path) => relative(repoRoot, path));
+    expect(stray).toEqual([]);
+    expect(existsSync(join(repoRoot, "tsconfig.tests.base.json"))).toBe(false);
+    expect(existsSync(join(repoRoot, "tsconfig.scripts.json"))).toBe(false);
   });
 });
 
