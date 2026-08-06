@@ -17,16 +17,14 @@
     "typecheck": "tsc -b && tsc -p tsconfig.tests.json && tsc -p bun-probes/tsconfig.json",
     "lint": "oxlint --type-aware",
     "lint:arch": "eslint .",
-    "test": "vitest run",
+    "test": "bun test src",
     "probe:fts5": "bun test bun-probes/fts5-platform.test.ts"
   },
   "dependencies": {
     "@plotroom/core": "workspace:*",
-    "better-sqlite3": "^13.0.2",
     "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^26.1.2",
     "@plotroom/typescript-config": "workspace:*",
     "@plotroom/eslint-config": "workspace:*",

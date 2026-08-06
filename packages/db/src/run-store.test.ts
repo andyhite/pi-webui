@@ -1,13 +1,16 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
   humanAuthor,
   DEFAULT_COMPACTION_POLICY,
   DEFAULT_RUN_RETENTION_POLICY,
   INHERIT_APP_TOOLS,
   type CommandId,
+  type ObjectId,
+  type RunId,
+  type VersionId,
 } from "@plotroom/core";
 import {
   makeRenderings,
@@ -211,7 +214,7 @@ describe("§15 invariant 1: run history records full content and configuration",
 
     expect(runs.assembledContent(run.id)).toContain("the original input");
     expect(runs.assembledContent(run.id)).not.toContain("rewritten entirely");
-    expect(run.inputs[0]?.versionId).toBe(ticket.versionId);
+    expect(run.inputs[0]?.versionId).toBe(ticket.versionId as VersionId);
   });
 
   it("survives version compaction and blob compaction untouched", () => {
@@ -284,7 +287,7 @@ describe("§15 invariant 4: per-run output addressing", () => {
           at: "ordinal",
           runOrdinal: index + 1,
         })?.objectId,
-      ).toBe(objectId);
+      ).toBe(objectId as ObjectId);
     }
   });
 
@@ -293,16 +296,16 @@ describe("§15 invariant 4: per-run output addressing", () => {
 
     expect(
       runs.resolve({ commandId, name: "pull_request", at: "latest" })?.objectId,
-    ).toBe(addresses[2]);
+    ).toBe(addresses[2] as ObjectId);
 
     // No column anywhere records which run is latest; it is a query.
     const columns = state.sqlite
-      .prepare<[], { name: string }>("PRAGMA table_info(runs)")
+      .prepare<{ name: string }, []>("PRAGMA table_info(runs)")
       .all()
       .map((row) => row.name)
       .concat(
         state.sqlite
-          .prepare<[], { name: string }>("PRAGMA table_info(run_outputs)")
+          .prepare<{ name: string }, []>("PRAGMA table_info(run_outputs)")
           .all()
           .map((row) => row.name),
       );
@@ -339,10 +342,10 @@ describe("§15 invariant 4: per-run output addressing", () => {
         runOrdinal: 1,
       }),
     ).toEqual(before);
-    expect(before?.objectId).toBe(addresses[0]);
+    expect(before?.objectId).toBe(addresses[0] as ObjectId);
     expect(
       runs.resolve({ commandId, name: "pull_request", at: "latest" })?.objectId,
-    ).toBe(fourth.objectId);
+    ).toBe(fourth.objectId as ObjectId);
   });
 
   it("addresses a pinned run directly, however many runs follow it", () => {
@@ -530,7 +533,7 @@ describe("ending a run (§3.5, §3.6)", () => {
     });
 
     const placeholder = commands.outputs(command.command.id)[0]!;
-    expect(placeholder.boundObjectId).toBe(output.objectId);
+    expect(placeholder.boundObjectId).toBe(output.objectId as ObjectId);
     expect(placeholder.boundRunId).toBe(run.id);
     expect(commands.bindState(placeholder.id)).toBe("post_bind");
   });
@@ -560,8 +563,8 @@ describe("run-history retention (§4.4)", () => {
 
     const remaining = runs.history(command.command.id).map((each) => each.id);
     expect(removed).toBeGreaterThan(0);
-    expect(remaining).toContain(ids[0]); // pinned
-    expect(remaining).toContain(ids[4]); // latest
+    expect(remaining).toContain(ids[0] as RunId); // pinned
+    expect(remaining).toContain(ids[4] as RunId); // latest
     expect(remaining).toHaveLength(5 - removed);
   });
 
@@ -573,7 +576,7 @@ describe("run-history retention (§4.4)", () => {
     runs.compactRuns(policy);
 
     expect(runs.history(command.command.id).map((each) => each.id)).toContain(
-      ids[4],
+      ids[4] as RunId,
     );
   });
 

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { openDatabase, type PlotroomDatabase } from "./client.js";
 
 /**
@@ -50,7 +50,7 @@ interface ColumnFact {
 
 function columns(): readonly ColumnFact[] {
   return state.sqlite
-    .prepare<[], { tbl: string; col: string; nn: number }>(
+    .prepare<{ tbl: string; col: string; nn: number }, []>(
       `SELECT m.name AS tbl, p.name AS col, p."notnull" AS nn
          FROM sqlite_master m JOIN pragma_table_info(m.name) p
         WHERE m.type = 'table'`,
@@ -77,7 +77,7 @@ function foreignKeys(
   table: string,
 ): readonly { readonly from: string; readonly to: string }[] {
   return state.sqlite
-    .prepare<[string], { from: string; table: string }>(
+    .prepare<{ from: string; table: string }, [string]>(
       'SELECT p."from" AS "from", p."table" AS "table" FROM pragma_foreign_key_list(?) p',
     )
     .all(table)
@@ -219,13 +219,13 @@ describe("§15-4: nothing in the schema records which run is latest", () => {
     // future migration (the documented CHECK-widening shape) is judged on what it
     // enforces and not on how its `CREATE TABLE` happens to be written.
     const unique = state.sqlite
-      .prepare<[], { name: string }>(
+      .prepare<{ name: string }, []>(
         "SELECT p.name FROM pragma_index_list('runs') p WHERE p.\"unique\" = 1",
       )
       .all()
       .map((index) =>
         state.sqlite
-          .prepare<[string], { name: string }>(
+          .prepare<{ name: string }, [string]>(
             "SELECT i.name FROM pragma_index_info(?) i",
           )
           .all(index.name)

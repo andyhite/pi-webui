@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { manualClock, type ManualClock } from "@plotroom/core/testing";
 import { openDatabase, type PlotroomDatabase } from "./client.js";
 import { CredentialStore } from "./credential-store.js";

@@ -50,6 +50,10 @@ const NOT_VITEST: Record<string, { test: string; why: string }> = {
     test: "bun test src",
     why: "Bun runtime, `bun:test` (decision 0005)",
   },
+  "packages/db": {
+    test: "bun test src",
+    why: "`client.ts` imports `bun:sqlite` (#313); Vitest's worker pool spawns processes that cannot resolve it, confirmed empirically",
+  },
 };
 
 /** Packages that get Node's types from something other than `@types/node`. */

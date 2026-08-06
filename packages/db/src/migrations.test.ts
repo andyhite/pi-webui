@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { openDatabase, SCHEMA_VERSION } from "./client.js";
 import { migrations } from "./migrations.js";
 
@@ -32,9 +32,9 @@ afterEach(() => {
 function storeAtMigration(id: number): string {
   const file = join(dir, "plotroom.db");
   const sqlite = new Database(file);
-  sqlite.pragma("foreign_keys = ON");
+  sqlite.run("PRAGMA foreign_keys = ON");
 
-  sqlite.exec(`
+  sqlite.run(`
     CREATE TABLE schema_migrations (
       id         INTEGER PRIMARY KEY,
       name       TEXT NOT NULL,
@@ -42,13 +42,13 @@ function storeAtMigration(id: number): string {
     );
   `);
 
-  const record = sqlite.prepare<[number, string]>(
+  const record = sqlite.prepare<unknown, [number, string]>(
     "INSERT INTO schema_migrations (id, name) VALUES (?, ?)",
   );
 
   for (const migration of migrations) {
     if (migration.id > id) break;
-    sqlite.exec(migration.sql);
+    sqlite.run(migration.sql);
     record.run(migration.id, migration.name);
   }
 
@@ -59,8 +59,8 @@ function storeAtMigration(id: number): string {
 }
 
 /** One run with every kind of row that references it. */
-function seed(sqlite: Database.Database): void {
-  sqlite.exec(`
+function seed(sqlite: Database): void {
+  sqlite.run(`
     INSERT INTO blobs (id, hash, size, encoding, kind, inline_bytes)
       VALUES ('blob_1', 'hash-1', 4, 'utf8', 'assembled_content', X'74657374');
     INSERT INTO objects (id, kind, scope, title, latest_version_id)
@@ -111,7 +111,7 @@ describe("migration 9 rebuilds runs without eating its children", () => {
       const count = (table: string): number =>
         (
           state.sqlite
-            .prepare<[], { n: number }>(`SELECT COUNT(*) AS n FROM ${table}`)
+            .prepare<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`)
             .get() as { n: number }
         ).n;
 
@@ -126,7 +126,7 @@ describe("migration 9 rebuilds runs without eating its children", () => {
 
       // The links still point at the run, rather than having been nulled out.
       const session = state.sqlite
-        .prepare<[], { run_id: string | null }>(
+        .prepare<{ run_id: string | null }, []>(
           "SELECT run_id FROM sessions WHERE id = 'sess_1'",
         )
         .get() as { run_id: string | null };
@@ -134,7 +134,7 @@ describe("migration 9 rebuilds runs without eating its children", () => {
 
       // Every column came across, including the one migration 8 added.
       const run = state.sqlite
-        .prepare<[], Record<string, unknown>>(
+        .prepare<Record<string, unknown>, []>(
           "SELECT * FROM runs WHERE id = 'run_1'",
         )
         .get() as Record<string, unknown>;
@@ -143,7 +143,9 @@ describe("migration 9 rebuilds runs without eating its children", () => {
       expect(run["assembled_hash"]).toBe("hash-1");
       expect(run["config_json"]).toBe('{"definitionId":"def_1"}');
 
-      expect(state.sqlite.pragma("foreign_key_check")).toEqual([]);
+      expect(
+        state.sqlite.query<unknown, []>("PRAGMA foreign_key_check").all(),
+      ).toEqual([]);
     } finally {
       state.close();
     }
@@ -161,7 +163,7 @@ describe("migration 9 rebuilds runs without eating its children", () => {
       expect(
         (
           state.sqlite
-            .prepare<[], { status: string }>(
+            .prepare<{ status: string }, []>(
               "SELECT status FROM runs WHERE id = 'run_1'",
             )
             .get() as { status: string }
@@ -184,7 +186,11 @@ describe("migration 9 rebuilds runs without eating its children", () => {
 
     const state = openDatabase({ stateDir: dir });
     try {
-      expect(state.sqlite.pragma("foreign_keys", { simple: true })).toBe(1);
+      expect(
+        state.sqlite
+          .query<{ foreign_keys: number }, []>("PRAGMA foreign_keys")
+          .get()?.foreign_keys,
+      ).toBe(1);
       // A child pointing at a run that does not exist is refused again.
       expect(() =>
         state.sqlite
@@ -204,14 +210,14 @@ describe("migration 9 rebuilds runs without eating its children", () => {
     const state = openDatabase({ stateDir: dir });
     try {
       const version = state.sqlite
-        .prepare<[], { max: number }>(
+        .prepare<{ max: number }, []>(
           "SELECT MAX(id) AS max FROM schema_migrations",
         )
         .get() as { max: number };
       expect(version.max).toBe(SCHEMA_VERSION);
 
       const indexes = state.sqlite
-        .prepare<[], { name: string }>(
+        .prepare<{ name: string }, []>(
           "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'runs'",
         )
         .all()
@@ -231,7 +237,7 @@ describe("migration 22 re-keys the spend ledger by cause", () => {
   function storeWithSpend(): void {
     const file = storeAtMigration(21);
     const sqlite = new Database(file);
-    sqlite.exec(`
+    sqlite.run(`
       INSERT INTO spend_attributions
         (id, session_id, source_session_id, workstream_id, basis, amount_micros,
          cost_basis, at)
@@ -247,7 +253,7 @@ describe("migration 22 re-keys the spend ledger by cause", () => {
     const state = openDatabase({ stateDir: dir });
     try {
       const row = state.sqlite
-        .prepare<[], Record<string, unknown>>(
+        .prepare<Record<string, unknown>, []>(
           "SELECT * FROM spend_attributions WHERE id = 'spend_1'",
         )
         .get() as Record<string, unknown>;
@@ -256,7 +262,9 @@ describe("migration 22 re-keys the spend ledger by cause", () => {
       // existed is an accounting row, which is what almost all of them were.
       expect(row["amount_micros"]).toBe(1000000);
       expect(row["cause"]).toBe("accounting");
-      expect(state.sqlite.pragma("foreign_key_check")).toEqual([]);
+      expect(
+        state.sqlite.query<unknown, []>("PRAGMA foreign_key_check").all(),
+      ).toEqual([]);
     } finally {
       state.close();
     }
@@ -291,7 +299,7 @@ describe("migration 22 re-keys the spend ledger by cause", () => {
       );
 
       const total = state.sqlite
-        .prepare<[], { total: number }>(
+        .prepare<{ total: number }, []>(
           "SELECT SUM(amount_micros) AS total FROM spend_attributions",
         )
         .get() as { total: number };
@@ -307,7 +315,7 @@ describe("migration 27 widens the approval kinds by rebuild (§3.8)", () => {
   function storeWithApproval(): void {
     const file = storeAtMigration(26);
     const sqlite = new Database(file);
-    sqlite.exec(`
+    sqlite.run(`
       INSERT INTO approvals
         (id, session_id, workstream_id, kind, ask_json, call_id, raised_at)
         VALUES ('appr_1', 'sess_1', 'ws_1', 'tool-permission',
@@ -327,7 +335,7 @@ describe("migration 27 widens the approval kinds by rebuild (§3.8)", () => {
     const state = openDatabase({ stateDir: dir });
     try {
       const kept = state.sqlite
-        .prepare<[], Record<string, unknown>>(
+        .prepare<Record<string, unknown>, []>(
           "SELECT * FROM approvals WHERE id = 'appr_1'",
         )
         .get() as Record<string, unknown>;
@@ -337,17 +345,19 @@ describe("migration 27 widens the approval kinds by rebuild (§3.8)", () => {
       // the pre-grant beside it is what proves the pragma was off in time.
       expect(
         state.sqlite
-          .prepare<[], { count: number }>(
+          .prepare<{ count: number }, []>(
             "SELECT COUNT(*) AS count FROM pre_grants",
           )
           .get(),
       ).toEqual({ count: 1 });
-      expect(state.sqlite.pragma("foreign_key_check")).toEqual([]);
+      expect(
+        state.sqlite.query<unknown, []>("PRAGMA foreign_key_check").all(),
+      ).toEqual([]);
 
       // The indexes came back with the table, including the one that makes a
       // re-raised call find its own approval rather than stacking a second.
       const indexes = state.sqlite
-        .prepare<[], { name: string }>(
+        .prepare<{ name: string }, []>(
           "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'approvals'",
         )
         .all()
@@ -392,7 +402,7 @@ describe("migration 33 rewrites external_system from producer id to plugin id (#
   function storeWithProducerSystems(): void {
     const file = storeAtMigration(32);
     const sqlite = new Database(file);
-    sqlite.exec(`
+    sqlite.run(`
       INSERT INTO integrations
         (id, plugin_id, producer_id, name, system, connection_state,
          created_at, updated_at)
@@ -432,7 +442,7 @@ describe("migration 33 rewrites external_system from producer id to plugin id (#
     const state = openDatabase({ stateDir: dir });
     try {
       const integrationSystems = state.sqlite
-        .prepare<[], { id: string; system: string }>(
+        .prepare<{ id: string; system: string }, []>(
           "SELECT id, system FROM integrations ORDER BY id",
         )
         .all();
@@ -442,13 +452,15 @@ describe("migration 33 rewrites external_system from producer id to plugin id (#
       ]);
 
       const solo = state.sqlite
-        .prepare<[], { external_system: string }>(
+        .prepare<{ external_system: string }, []>(
           "SELECT external_system FROM objects WHERE id = 'obj_solo'",
         )
         .get() as { external_system: string };
       expect(solo.external_system).toBe("jira");
 
-      expect(state.sqlite.pragma("foreign_key_check")).toEqual([]);
+      expect(
+        state.sqlite.query<unknown, []>("PRAGMA foreign_key_check").all(),
+      ).toEqual([]);
     } finally {
       state.close();
     }
@@ -460,7 +472,7 @@ describe("migration 33 rewrites external_system from producer id to plugin id (#
     const state = openDatabase({ stateDir: dir });
     try {
       const rows = state.sqlite
-        .prepare<[], { id: string; external_system: string }>(
+        .prepare<{ id: string; external_system: string }, []>(
           "SELECT id, external_system FROM objects WHERE id IN ('obj_dup_issue', 'obj_dup_epic') ORDER BY id",
         )
         .all();

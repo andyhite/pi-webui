@@ -8,7 +8,7 @@ import {
   type BudgetPeriod,
   type Clock,
 } from "@plotroom/core";
-import type { PlotroomDatabase } from "./client.js";
+import type { DrizzleRunChanges, PlotroomDatabase } from "./client.js";
 import { budgetNotices, budgets } from "./schema.js";
 
 /**
@@ -163,7 +163,7 @@ export class BudgetStore {
       .insert(budgetNotices)
       .values({ id, ...input, at })
       .onConflictDoNothing()
-      .run();
+      .run() as unknown as DrizzleRunChanges;
 
     if (inserted.changes === 0) return null;
     return { id, ...input, at };

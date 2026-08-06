@@ -1,3 +1,4 @@
+import type { SQLQueryBindings } from "bun:sqlite";
 import type { PlotroomDatabase } from "./client.js";
 
 export interface IndexEntry {
@@ -114,10 +115,13 @@ export class SearchIndex {
    * question asked once.
    */
   has(refKind: string, refId: string): boolean {
+    // bun:sqlite's raw `.get()` returns `null` for no match (better-sqlite3
+    // returned `undefined`) - `!= null` catches both, where a strict
+    // `!== undefined` check bun:sqlite would always satisfy even with no row.
     const row = this.state.sqlite
       .prepare("SELECT 1 FROM search WHERE ref_kind = ? AND ref_id = ? LIMIT 1")
       .get(refKind, refId);
-    return row !== undefined;
+    return row != null;
   }
 
   /**
@@ -132,7 +136,7 @@ export class SearchIndex {
    */
   indexedRefIds(refKind: string): Set<string> {
     const rows = this.state.sqlite
-      .prepare<unknown[], { refId: string }>(
+      .prepare<{ refId: string }, SQLQueryBindings[]>(
         "SELECT ref_id AS refId FROM search WHERE ref_kind = ?",
       )
       .all(refKind);
@@ -159,7 +163,7 @@ export class SearchIndex {
         : "";
 
     const rows = this.state.sqlite
-      .prepare<unknown[], SearchRow>(
+      .prepare<SearchRow, SQLQueryBindings[]>(
         `SELECT kind,
                 ref_kind AS refKind,
                 ref_id   AS refId,

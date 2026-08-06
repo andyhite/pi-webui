@@ -10,7 +10,7 @@ import {
   type RunRetentionPolicy,
 } from "@plotroom/core";
 import { BlobStore } from "./blob-store.js";
-import type { PlotroomDatabase } from "./client.js";
+import type { DrizzleRunChanges, PlotroomDatabase } from "./client.js";
 import { GraphStore } from "./graph-store.js";
 import { ObjectStore } from "./object-store.js";
 import { RunStore } from "./run-store.js";
@@ -300,7 +300,7 @@ export class Maintenance {
           readinessJson: JSON.stringify(initialReadiness(this.now() * 1000)),
         })
         .where(isNotNull(workspaces.provisionedAt))
-        .run();
+        .run() as unknown as DrizzleRunChanges;
 
       return { scope, removed: { provisionedWorkspaces: reverted.changes } };
     }
@@ -309,7 +309,9 @@ export class Maintenance {
 
     this.state.db.transaction(() => {
       for (const [name, table] of CLEAR_ORDER) {
-        removed[name] = this.state.db.delete(table).run().changes;
+        removed[name] = (
+          this.state.db.delete(table).run() as unknown as DrizzleRunChanges
+        ).changes;
       }
       this.state.sqlite.prepare("DELETE FROM search").run();
     });

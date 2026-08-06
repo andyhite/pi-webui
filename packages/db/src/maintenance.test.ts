@@ -1,8 +1,8 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { humanAuthor } from "@plotroom/core";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { humanAuthor, type VersionId } from "@plotroom/core";
 import {
   makeRenderings,
   manualClock,
@@ -240,7 +240,7 @@ describe("the compaction sweep (§15-3, §4.4)", () => {
     clock.advance(365 * DAY);
     expect(maintenance.compact().versionsRemoved).toBe(0);
     expect(objects.versions(objectId).map((each) => each.id)).toContain(
-      older.versionId,
+      older.versionId as VersionId,
     );
   });
 
@@ -286,7 +286,7 @@ describe("the sweep leaves nothing half-removed (§12, principle 12)", () => {
     );
 
     for (const row of state.sqlite
-      .prepare<[], { id: string; hash: string; is_external: number }>(
+      .prepare<{ id: string; hash: string; is_external: number }, []>(
         "SELECT id, hash, is_external FROM blobs",
       )
       .all()) {
@@ -333,7 +333,7 @@ describe("the sweep leaves nothing half-removed (§12, principle 12)", () => {
     // Every surviving version still has a reference to its content, so the next
     // blob sweep cannot reclaim bytes something points at.
     const unclaimed = state.sqlite
-      .prepare<[], { count: number }>(
+      .prepare<{ count: number }, []>(
         `SELECT COUNT(*) AS count
            FROM object_versions v
           WHERE NOT EXISTS (

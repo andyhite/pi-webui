@@ -1,10 +1,11 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
   humanAuthor,
   sessionAuthor,
+  type ObjectId,
   type ObjectKind,
   type SessionId,
 } from "@plotroom/core";
@@ -73,7 +74,7 @@ describe("marking content standing (§3.8)", () => {
 
     expect(declared.ok).toBe(true);
     if (!declared.ok) return;
-    expect(declared.value.objectId).toBe(objectId);
+    expect(declared.value.objectId).toBe(objectId as ObjectId);
     expect(declared.value.declaredBy).toEqual(humanAuthor);
     expect(declared.value.declaredAt).toBe(1_000);
     expect(declared.value.retiredAt).toBeNull();
