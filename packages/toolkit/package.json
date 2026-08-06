@@ -26,7 +26,9 @@
     "eslint": "^9.16.0",
     "tailwindcss": "^4.3.3",
     "vite": "^8.2.0",
-    "@types/react": "^19.2.18"
+    "@types/react": "^19.2.18",
+    "@plotroom/typescript-config": "workspace:*",
+    "@plotroom/eslint-config": "workspace:*"
   },
   "dependencies": {
     "react": "^19.2.0"

@@ -24,6 +24,9 @@
   "devDependencies": {
     "@types/node": "^26.1.2",
     "electron": "^43.0.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "@plotroom/typescript-config": "workspace:*",
+    "@plotroom/eslint-config": "workspace:*",
+    "globals": "^17.9.0"
   }
 }

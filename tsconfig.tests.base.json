@@ -1,37 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-
-  // The tests half of the split every package in this repository makes:
-  // `tsconfig.json` is the *build* and excludes `src/**/*.test.ts`, because a
-  // build that emitted its own tests into `dist/` would ship them; each
-  // package's `tsconfig.tests.json` extends this and checks the same sources
-  // *plus* the tests, emitting nothing.
-  //
-  // Without that second project nothing would typecheck a test at all: `tsc -b`
-  // skips what the build excludes, vitest's esbuild transform strips types
-  // without checking them, Bun's runner does the same, and eslint is not
-  // type-aware here. Any assertion whose whole point is that something does
-  // *not* typecheck — a `@ts-expect-error` guard — would be inert.
-  //
-  // It is a second `tsc -p` pass in each package's `typecheck` script rather
-  // than a project reference because `composite` has to be off: a composite
-  // project may not disable emit.
-  //
-  // Each package still names its own `include`, `exclude` and
-  // `tsBuildInfoFile` — a relative path in an extended config resolves against
-  // the file that declares it, so a path written here would point at the
-  // repository root. The build info stays under `dist/` so deleting `dist/`
-  // forces a full recheck, like every other project (AGENTS.md).
-  // Every emit flag a package's build may set has to be neutralised here, not
-  // only the ones today's builds use: `packages/toolkit` emits declarations
-  // only (Vite writes its JavaScript), and `emitDeclarationOnly` without
-  // `declaration` or `composite` is TS5069 rather than a quiet no-op.
-  "compilerOptions": {
-    "noEmit": true,
-    "composite": false,
-    "declaration": false,
-    "declarationMap": false,
-    "emitDeclarationOnly": false,
-    "incremental": true
-  }
+  // See tsconfig.base.json: the real contents live in
+  // packages/config/typescript-config/tests.json now.
+  "extends": "./packages/config/typescript-config/tests.json"
 }

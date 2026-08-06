@@ -1,5 +1,5 @@
 {
-  "extends": "../../../tsconfig.base.json",
+  "extends": "@plotroom/typescript-config/base.json",
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",

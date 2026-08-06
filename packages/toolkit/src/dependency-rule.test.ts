@@ -13,23 +13,32 @@ import { describe, expect, it } from "vitest";
  * plugin SDK's entry reaches its worker host, which is how Node once ended up in
  * a renderer bundle.
  *
- * The rule lives in the root `eslint.config.js`, so `pnpm lint` is the gate. This
- * test is the proof the gate is wired: without it, deleting the override would
- * fail nothing.
+ * The rule lives in `packages/toolkit/eslint.config.js` (#306) — `packages/ui`
+ * carries no such restriction, which is how it holds the SDK-contract
+ * assertion. `pnpm lint` is the gate; this test is the proof it is wired:
+ * without it, deleting the override would fail nothing.
  */
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../..",
 );
 
-/** Lint a file that does not exist; the path only decides which config applies. */
+/**
+ * Lint a file that does not exist; the path only decides which config
+ * applies. Each package carries its own `eslint.config.js` (#306), and flat
+ * config resolves it from `cwd`, not from the linted file's directory — so
+ * `cwd` has to be the file's own package, exactly like `pnpm --filter <pkg>
+ * lint` runs it.
+ */
 async function lintAs(
+  packageDir: string,
   relativePath: string,
   code: string,
 ): Promise<ESLint.LintResult[]> {
-  const eslint = new ESLint({ cwd: REPO_ROOT });
+  const cwd = path.join(REPO_ROOT, packageDir);
+  const eslint = new ESLint({ cwd });
   return eslint.lintText(code, {
-    filePath: path.join(REPO_ROOT, relativePath),
+    filePath: path.join(cwd, relativePath),
     warnIgnored: false,
   });
 }
@@ -58,7 +67,7 @@ describe("the toolkit's dependency rule", () => {
     ],
   ])("refuses an import of %s", async (_label, code) => {
     const messages = messagesFrom(
-      await lintAs("packages/toolkit/src/violation.ts", code),
+      await lintAs("packages/toolkit", "src/violation.ts", code),
     );
     expect(
       messages.filter(
@@ -72,7 +81,8 @@ describe("the toolkit's dependency rule", () => {
   it("leaves the toolkit's own relative imports alone", async () => {
     const messages = messagesFrom(
       await lintAs(
-        "packages/toolkit/src/allowed.ts",
+        "packages/toolkit",
+        "src/allowed.ts",
         'import { DESIGN_TOKENS } from "./tokens.js";\nexport const count = DESIGN_TOKENS.length;\n',
       ),
     );
@@ -86,7 +96,8 @@ describe("the toolkit's dependency rule", () => {
   it("does not restrict the package that holds the SDK assertion", async () => {
     const messages = messagesFrom(
       await lintAs(
-        "packages/ui/src/theme/probe.ts",
+        "packages/ui",
+        "src/theme/probe.ts",
         'import type { Theme } from "@plotroom/plugin-sdk";\nexport type T = Theme;\n',
       ),
     );

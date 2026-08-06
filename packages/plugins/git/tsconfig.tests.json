@@ -3,8 +3,8 @@
 
   // Typecheck the tests, which the build excludes so it cannot emit them.
   // Why this project exists and why it is not a reference:
-  // ../../../tsconfig.tests.base.json.
-  "extends": ["./tsconfig.json", "../../../tsconfig.tests.base.json"],
+  // @plotroom/typescript-config/tests.json.
+  "extends": ["./tsconfig.json", "@plotroom/typescript-config/tests.json"],
   "compilerOptions": { "tsBuildInfoFile": "dist/.tsbuildinfo.tests" },
   "include": ["src/**/*"],
   "exclude": []

@@ -64,6 +64,19 @@ const NODE_TYPES_FROM: Record<string, string> = {
   "apps/session-host": "@types/bun",
 };
 
+/**
+ * The shared config packages themselves (#306): pure JSON/JS, no `src/`, no
+ * build/typecheck/test scripts — they are what every other package's
+ * contract below points *at*, not a package the per-package contract itself
+ * applies to.
+ */
+const CONFIG_PACKAGES: Record<string, string> = {
+  "packages/config/typescript-config":
+    "base.json/tests.json only, no tsconfig of its own",
+  "packages/config/eslint-config":
+    "index.js only, no tsconfig/vitest config of its own",
+};
+
 type Manifest = {
   name?: string;
   scripts?: Record<string, string>;
@@ -221,11 +234,13 @@ describe("what the shape reaches", () => {
     // emitted into `dist/` and never run, and `.spec.ts` is Playwright's suffix
     // here (`apps/web/e2e`), a suite vitest must not collect. Widening the
     // shape is a deliberate edit to both patterns, not a file somebody adds.
-    const stray = packages.flatMap(({ dir }) =>
-      sources(dir)
-        .filter((file) => /\.(test\.tsx|spec\.tsx?)$/.test(file))
-        .map((file) => relative(repoRoot, file)),
-    );
+    const stray = packages
+      .filter(({ dir }) => !(dir in CONFIG_PACKAGES))
+      .flatMap(({ dir }) =>
+        sources(dir)
+          .filter((file) => /\.(test\.tsx|spec\.tsx?)$/.test(file))
+          .map((file) => relative(repoRoot, file)),
+      );
     expect(stray).toEqual([]);
   });
 
@@ -235,6 +250,7 @@ describe("what the shape reaches", () => {
     // `fetch` under a DOM-less `lib`), so an unused declaration cannot be
     // detected by grepping for specifiers — only by removing it and typechecking.
     const undeclared = packages
+      .filter(({ dir }) => !(dir in CONFIG_PACKAGES))
       .filter(({ dir, manifest }) => {
         const importsNode = sources(dir).some((file) =>
           /["']node:/.test(readFileSync(file, "utf8")),
@@ -251,69 +267,108 @@ describe("what the shape reaches", () => {
   });
 });
 
-describe.each(packages)("$dir", ({ dir, manifest }) => {
-  const scripts = manifest.scripts ?? {};
-  const tsconfig = parseJsonc(read(`${dir}/tsconfig.json`)) as TsConfig;
+describe.each(packages.filter(({ dir }) => !(dir in CONFIG_PACKAGES)))(
+  "$dir",
+  ({ dir, manifest }) => {
+    const scripts = manifest.scripts ?? {};
+    const tsconfig = parseJsonc(read(`${dir}/tsconfig.json`)) as TsConfig;
 
-  it("builds, typechecks and lints the same way as every other package", () => {
-    // A package may append steps of its own — `vite build`, an asset copy, the
-    // e2e project's typecheck — but never replace the shared ones.
-    expect(scripts.build ?? "", "build").toMatch(
-      new RegExp(`^${CANONICAL.build}( &&|$)`),
-    );
-    expect(scripts.typecheck ?? "", "typecheck").toMatch(
-      new RegExp(`^${CANONICAL.typecheck.replaceAll(".", "\\.")}( &&|$)`),
-    );
-    expect(scripts.lint, "lint").toBe(CANONICAL.lint);
-  });
-
-  it("runs its tests with the shared runner and no --passWithNoTests", () => {
-    const exception = NOT_VITEST[dir];
-    const prefix = dir in BUILDS_ITS_OWN_DIST ? `${CANONICAL.build} && ` : "";
-    expect(scripts.test, exception?.why ?? "test").toBe(
-      exception ? exception.test : `${prefix}${CANONICAL.test}`,
-    );
-    // `--passWithNoTests` reports green when the include pattern matches
-    // nothing, which is the failure that hid `packages/ui`'s missing config.
-    expect(scripts.test ?? "").not.toContain("--passWithNoTests");
-    expect(
-      existsSync(join(repoRoot, dir, "vitest.config.ts")),
-      exception ? "must not also configure vitest" : "needs a vitest config",
-    ).toBe(exception === undefined);
-  });
-
-  it("keeps its tests out of the build and typechecks them anyway", () => {
-    expect(tsconfig.exclude ?? [], "tsconfig.json exclude").toContain(
-      CANONICAL.buildExcludesTests,
-    );
-
-    const tests = parseJsonc(read(`${dir}/tsconfig.tests.json`)) as TsConfig;
-    const up = "../".repeat(dir.split("/").length).slice(0, -1);
-    expect(tests.extends).toEqual([
-      "./tsconfig.json",
-      `${up}/tsconfig.tests.base.json`,
-    ]);
-    expect(tests.include).toEqual(CANONICAL.testsProjectInclude);
-    expect(tests.exclude, "the tests project excludes nothing").toEqual(
-      CANONICAL.testsProjectExclude,
-    );
-    expect(tests.compilerOptions?.tsBuildInfoFile).toBe(
-      "dist/.tsbuildinfo.tests",
-    );
-  });
-
-  if (!(dir in NOT_VITEST)) {
-    it("takes its test include from the shared base, not a copy of it", async () => {
-      // Runtime-selected specifier: one assertion over every package's config,
-      // and the point is the object vitest really loads rather than its text.
-      const config = (await import(
-        pathToFileURL(join(repoRoot, dir, "vitest.config.ts")).href
-      )) as { default: { test?: { include?: string[] } } };
-      // Identity, not equality: `mergeConfig` keeps the base's array by
-      // reference, so this passes for the three packages that add a timeout and
-      // fails for a config that restates the pattern — which is the whole point
-      // of the pattern living in one file.
-      expect(config.default.test?.include).toBe(packageTests.test?.include);
+    it("builds, typechecks and lints the same way as every other package", () => {
+      // A package may append steps of its own — `vite build`, an asset copy, the
+      // e2e project's typecheck — but never replace the shared ones.
+      expect(scripts.build ?? "", "build").toMatch(
+        new RegExp(`^${CANONICAL.build}( &&|$)`),
+      );
+      expect(scripts.typecheck ?? "", "typecheck").toMatch(
+        new RegExp(`^${CANONICAL.typecheck.replaceAll(".", "\\.")}( &&|$)`),
+      );
+      expect(scripts.lint, "lint").toBe(CANONICAL.lint);
     });
-  }
+
+    it("runs its tests with the shared runner and no --passWithNoTests", () => {
+      const exception = NOT_VITEST[dir];
+      const prefix = dir in BUILDS_ITS_OWN_DIST ? `${CANONICAL.build} && ` : "";
+      expect(scripts.test, exception?.why ?? "test").toBe(
+        exception ? exception.test : `${prefix}${CANONICAL.test}`,
+      );
+      // `--passWithNoTests` reports green when the include pattern matches
+      // nothing, which is the failure that hid `packages/ui`'s missing config.
+      expect(scripts.test ?? "").not.toContain("--passWithNoTests");
+      expect(
+        existsSync(join(repoRoot, dir, "vitest.config.ts")),
+        exception ? "must not also configure vitest" : "needs a vitest config",
+      ).toBe(exception === undefined);
+    });
+
+    it("keeps its tests out of the build and typechecks them anyway", () => {
+      expect(tsconfig.exclude ?? [], "tsconfig.json exclude").toContain(
+        CANONICAL.buildExcludesTests,
+      );
+
+      const tests = parseJsonc(read(`${dir}/tsconfig.tests.json`)) as TsConfig;
+      expect(tests.extends).toEqual([
+        "./tsconfig.json",
+        "@plotroom/typescript-config/tests.json",
+      ]);
+      expect(tests.include).toEqual(CANONICAL.testsProjectInclude);
+      expect(tests.exclude, "the tests project excludes nothing").toEqual(
+        CANONICAL.testsProjectExclude,
+      );
+      expect(tests.compilerOptions?.tsBuildInfoFile).toBe(
+        "dist/.tsbuildinfo.tests",
+      );
+    });
+
+    if (!(dir in NOT_VITEST)) {
+      it("takes its test include from the shared base, not a copy of it", async () => {
+        // Runtime-selected specifier: one assertion over every package's config,
+        // and the point is the object vitest really loads rather than its text.
+        const config = (await import(
+          pathToFileURL(join(repoRoot, dir, "vitest.config.ts")).href
+        )) as { default: { test?: { include?: string[] } } };
+        // Identity, not equality: `mergeConfig` keeps the base's array by
+        // reference, so this passes for the three packages that add a timeout and
+        // fails for a config that restates the pattern — which is the whole point
+        // of the pattern living in one file.
+        expect(config.default.test?.include).toBe(packageTests.test?.include);
+      });
+    }
+  },
+);
+
+describe("shared config packages (#306)", () => {
+  it("is declared as a devDependency by every package that extends it", () => {
+    const consumers = packages.filter(({ dir }) => !(dir in CONFIG_PACKAGES));
+
+    const missingTsconfigDep = consumers
+      .filter(({ dir }) => {
+        const tsconfig = parseJsonc(read(`${dir}/tsconfig.json`)) as TsConfig;
+        const extendsList = Array.isArray(tsconfig.extends)
+          ? tsconfig.extends
+          : tsconfig.extends === undefined
+            ? []
+            : [tsconfig.extends];
+        return extendsList.some((e) =>
+          e.startsWith("@plotroom/typescript-config/"),
+        );
+      })
+      .filter(
+        ({ manifest }) =>
+          !("@plotroom/typescript-config" in (manifest.devDependencies ?? {})),
+      )
+      .map(({ dir }) => dir);
+    expect(missingTsconfigDep).toEqual([]);
+
+    const missingEslintDep = consumers
+      .filter(({ dir }) => existsSync(join(repoRoot, dir, "eslint.config.js")))
+      .filter(({ dir }) =>
+        read(`${dir}/eslint.config.js`).includes("@plotroom/eslint-config"),
+      )
+      .filter(
+        ({ manifest }) =>
+          !("@plotroom/eslint-config" in (manifest.devDependencies ?? {})),
+      )
+      .map(({ dir }) => dir);
+    expect(missingEslintDep).toEqual([]);
+  });
 });

@@ -28,6 +28,8 @@
   "devDependencies": {
     "@types/node": "^26.1.2",
     "@types/ws": "^8.18.1",
-    "tsx": "^4.23.5"
+    "tsx": "^4.23.5",
+    "@plotroom/typescript-config": "workspace:*",
+    "@plotroom/eslint-config": "workspace:*"
   }
 }
