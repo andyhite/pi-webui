@@ -137,6 +137,7 @@
         "@plotroom/eslint-config": "workspace:*",
         "@plotroom/typescript-config": "workspace:*",
         "@types/better-sqlite3": "^7.6.13",
+        "@types/bun": "^1.3.4",
         "@types/node": "^26.1.2",
       },
     },

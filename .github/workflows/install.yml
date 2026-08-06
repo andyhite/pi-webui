@@ -33,6 +33,23 @@ name: Install
 # still has an open handle and `afterEach` removes the state directory straight
 # after `close()`. Filed as #202. Running it here would have made this job's red
 # mean two unrelated things, and the one it exists to catch is the install.
+#
+# `fts5-platform-gate` (#312) lives in this workflow rather than `ci.yml` for the
+# same reason the `windows` job does: it is not a function of the dependency graph
+# `ci.yml`'s `--affected` scoping reads, it is a function of *which OS*. Bun's own
+# docs make no promise about FTS5 or which SQLite compile flags its bundled build
+# carries, and Linux/Windows (Bun's static SQLite) vs. macOS (Apple's system
+# SQLite) makes platform variance plausible, not hypothetical. It is the gate in
+# front of #313 (bun:sqlite as the single driver): the probe
+# (`packages/db/bun-probes/fts5-platform.test.ts`) creates an `fts5` virtual table
+# shaped exactly like `packages/db/src/search.ts`'s, exercises `MATCH`,
+# `snippet()`, and weighted `bm25()`, and checks
+# `sqlite_compileoption_used('ENABLE_FTS5')` — under `bun test`, not vitest,
+# because it imports `bun:sqlite` directly (see the probe file's own header for
+# why it is not under `src/`). This job does not pre-decide a fallback: if a
+# platform fails, #312's own fallback (`Database.setCustomSQLite()` with a shipped
+# SQLite library) is implemented on the same branch and this job re-run, not
+# skipped.
 
 on:
   push:
@@ -46,6 +63,13 @@ on:
       - "bunfig.toml"
       - ".github/workflows/install.yml"
       - ".github/actions/setup/action.yml"
+      # The FTS5 gate's own surface: the probe itself, and the two
+      # `packages/db` source files whose shape it measures against (the
+      # `search` virtual table's schema in `migrations.ts`, and the query
+      # surface in `search.ts`).
+      - "packages/db/bun-probes/**"
+      - "packages/db/src/migrations.ts"
+      - "packages/db/src/search.ts"
   pull_request:
     paths: *manifests
 
@@ -110,3 +134,31 @@ jobs:
           const got=d.prepare('select x from t').get().x;
           if (got !== 42) { throw new Error('round trip returned ' + got); }
           console.log('sqlite ok via', require.resolve('better-sqlite3'));"
+
+  # #312's FTS5 platform gate. Bun's docs promise nothing about FTS5, so this
+  # measures it directly on all three OSes rather than assuming Linux's result
+  # generalizes — Bun links its own static SQLite on Linux and Windows, but the
+  # system-provided libsqlite3 on macOS, which is exactly the axis a compile-flag
+  # regression would hide on.
+  fts5-platform-gate:
+    name: FTS5 platform gate (${{ matrix.os }})
+    strategy:
+      # One OS's probe failing is the signal this job exists to produce — a
+      # fail-fast run would hide the other two platforms' results behind it, and
+      # the whole point is the per-OS matrix, not the first red.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # No turbo cache: the probe has no build step and no dependency on
+      # `packages/db`'s own compiled output, only on the Bun runtime's `bun:sqlite`
+      # and `bun:test` — the same pinned Bun version (1.3.14) every other job uses.
+      - uses: ./.github/actions/setup
+
+      - name: Run the FTS5 probe under the pinned Bun
+        working-directory: packages/db
+        run: bun run probe:fts5

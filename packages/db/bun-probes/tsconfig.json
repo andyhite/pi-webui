@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+
+  // Kept out of `tsconfig.json`/`tsconfig.tests.json` (both `rootDir: "src"`,
+  // both compiled for Node/Vitest) because this directory's one file imports
+  // `bun:sqlite` and `bun:test`, which only resolve under Bun's own types
+  // (`@types/bun`, `types: ["bun"]` below) - the same pattern
+  // `apps/session-host/tsconfig.json` uses for its own Bun-only sources.
+  "extends": "@plotroom/typescript-config/base.json",
+  "compilerOptions": {
+    "types": ["bun"],
+    "noEmit": true
+  },
+  "include": ["**/*"]
+}
