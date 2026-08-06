@@ -98,6 +98,23 @@ export type ToolRequestBuild =
  * endpoint the canvas calls, with the actor the bridge knows rather than the one
  * the agent claims.
  */
+/**
+ * A tool call's `input` is `Record<string, unknown>` — an agent can hand it
+ * an object or array for a field this bridge expects to interpolate into a
+ * URL path or query string. `String({})` does not throw, it produces the
+ * literal text "[object Object]", which is a worse failure than refusing the
+ * call outright: a silently wrong request instead of a loud one.
+ */
+function isPrimitiveInputValue(
+  value: unknown,
+): value is string | number | boolean {
+  return (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
 export function buildToolRequest(
   binding: SessionToolBinding,
   call: ToolCall,
@@ -142,7 +159,12 @@ export function buildToolRequest(
   let path = tool.endpoint;
   for (const parameter of pathParametersOf(tool.endpoint)) {
     const value = call.input[parameter];
-    if (value === undefined || value === null || String(value).length === 0) {
+    if (
+      value === undefined ||
+      value === null ||
+      !isPrimitiveInputValue(value) ||
+      String(value).length === 0
+    ) {
       return refuse(
         "missing_input",
         `${tool.name} needs ${parameter} to address ${tool.endpoint}`,
@@ -160,7 +182,13 @@ export function buildToolRequest(
   const body: Record<string, unknown> = {};
   for (const [key, value] of rest) {
     if (value === undefined) continue;
-    if (isRead) query[key] = String(value);
+    // A query string has no place for an object or array: stringifying one
+    // with `String()` would silently write the literal text "[object
+    // Object]" into the URL instead of failing loudly.
+    if (isRead)
+      query[key] = isPrimitiveInputValue(value)
+        ? String(value)
+        : JSON.stringify(value);
     else body[key] = value;
   }
 

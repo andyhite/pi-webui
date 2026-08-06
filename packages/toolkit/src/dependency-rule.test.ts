@@ -13,10 +13,11 @@ import { describe, expect, it } from "vitest";
  * plugin SDK's entry reaches its worker host, which is how Node once ended up in
  * a renderer bundle.
  *
- * The rule lives in `packages/toolkit/eslint.config.js` (#306) — `packages/ui`
- * carries no such restriction, which is how it holds the SDK-contract
- * assertion. `pnpm lint` is the gate; this test is the proof it is wired:
- * without it, deleting the override would fail nothing.
+ * The rule itself lives once in `packages/config/eslint-config/rules/
+ * toolkit-encapsulation.js` (#307); `packages/toolkit/eslint.config.js` wires
+ * it in. `packages/ui` carries no such restriction, which is how it holds the
+ * SDK-contract assertion. `pnpm lint:arch` is the gate; this test is the proof
+ * it is wired: without it, deleting the override would fail nothing.
  */
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -59,8 +60,8 @@ describe("the toolkit's dependency rule", () => {
     ["a plugin package", 'import { nothing } from "@plotroom/plugin-jira";\n'],
     ["a subpath", 'import { nothing } from "@plotroom/core/graph.js";\n'],
     ["a re-export", 'export { nothing } from "@plotroom/core";\n'],
-    // `no-restricted-imports` never visits this form, so it is refused by the
-    // `no-restricted-syntax` half of the rule. Both halves are the rule.
+    // A static import visits `ImportDeclaration`; a dynamic one visits
+    // `ImportExpression` instead — the rule has to catch both forms.
     [
       "a dynamic import",
       'export const load = async () => import("@plotroom/core");\n',
@@ -72,10 +73,8 @@ describe("the toolkit's dependency rule", () => {
         await lintAs("packages/toolkit", "src/violation.ts", code),
       );
       expect(
-        messages.filter(
-          (message) =>
-            message.startsWith("no-restricted-imports") ||
-            message.startsWith("no-restricted-syntax"),
+        messages.filter((message) =>
+          message.startsWith("plotroom/toolkit-encapsulation"),
         ),
       ).toHaveLength(1);
     },
@@ -106,7 +105,9 @@ describe("the toolkit's dependency rule", () => {
       ),
     );
     expect(
-      messages.filter((message) => message.startsWith("no-restricted-imports")),
+      messages.filter((message) =>
+        message.startsWith("plotroom/toolkit-encapsulation"),
+      ),
     ).toEqual([]);
   }, 30_000);
 });

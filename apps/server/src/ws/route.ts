@@ -59,7 +59,9 @@ export function mountWsRoute(options: MountWsOptions): void {
           unsubscribe?.();
         },
         onError: (err) => {
-          logger.warn("ws connection error", { err: String(err) });
+          logger.warn("ws connection error", {
+            err: err instanceof Error ? err.message : JSON.stringify(err),
+          });
           unsubscribe?.();
         },
       };

@@ -4,11 +4,15 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./index.js"
+    ".": "./index.js",
+    "./architectural": "./architectural.js",
+    "./workspace-conventions": "./workspace-conventions.js",
+    "./plugin": "./plugin.js"
   },
   "main": "./index.js",
   "dependencies": {
     "@eslint/js": "^9.16.0",
+    "@eslint/json": "^2.0.1",
     "eslint-config-prettier": "^9.1.0",
     "typescript-eslint": "^8.18.0"
   }

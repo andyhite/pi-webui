@@ -21,6 +21,10 @@
     "sourceMap": false,
     "noEmit": true,
     "allowImportingTsExtensions": true,
+    // The architectural-rules fixture test imports the plain-JS custom
+    // ESLint plugin directly (`packages/config/eslint-config/plugin.js`,
+    // #307) rather than duplicating its shape in a `.d.ts`.
+    "allowJs": true,
     "types": ["node"]
   },
   // `*.config.ts` too: `vitest.base.config.ts` is the include pattern every
