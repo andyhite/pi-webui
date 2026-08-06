@@ -32,8 +32,8 @@
  *       `deleteKeyCode` does not include — actually delete the focused node,
  *       and the gesture is one undo away from being back.
  *
- * Run locally: `pnpm build && pnpm --filter @plotroom/web e2e` (root
- * `pnpm build` — or at least `@plotroom/core`, `@plotroom/ui`,
+ * Run locally: `bun run build && bun run --filter=@plotroom/web e2e` (root
+ * `bun run build` — or at least `@plotroom/core`, `@plotroom/ui`,
  * `@plotroom/server`, and `@plotroom/web` — must have already produced
  * `apps/server/dist` and `apps/web/dist`).
  */

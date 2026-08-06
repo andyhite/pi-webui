@@ -5,33 +5,33 @@
  * `apps/desktop`'s `main.ts` spawns the server as a *separate Node
  * process* rather than bundling it into the Electron app itself, so a
  * packaged build needs the server's own production `node_modules`
- * alongside its compiled `dist/` — pnpm's own virtual store
- * (`node_modules/.pnpm/...`) resolves those through *relative* symlinks,
- * which survive being copied wholesale (electron-builder's file copier
- * preserves symlinks as symlinks — verified directly) as long as the
- * whole tree moves together, so `pnpm deploy --prod` is staged straight
- * into its final destination with no flattening step. **Do not
- * dereference this tree** (`cp -L`/`fs.cpSync({dereference:true})`):
- * pnpm's strict, non-hoisted resolution depends on a package's *real*
- * on-disk location having its own private `node_modules` sibling inside
- * `.pnpm/` — flattening every symlink to its target's content, tried and
- * reverted here, copies each direct dependency's files but severs exactly
- * that sibling relationship, so a transitive dependency two hops down
- * (`@plotroom/db`'s own `better-sqlite3`) silently stopped resolving.
- * `electron-builder.yml`'s `extraResources` split (`node_modules` gets its
- * own entry, not a subpath of `server`'s) is the actual fix for the
- * problem the dereferencing was chasing — see its comment for what
- * `app-builder-lib` unconditionally excludes and why.
+ * alongside its compiled `dist/`.
  *
- * The staged layout under `build/resources/` deliberately mirrors the dev
- * layout's *relative* structure (`apps/desktop`, `apps/server`, `apps/web`
- * as siblings): `main.ts`'s `SERVER_ENTRY` and `apps/server`'s
- * `defaultStaticDir()` each resolve their sibling path from their own
- * compiled file's `import.meta.url`, unchanged between dev and packaged —
- * see `electron-builder.yml`'s `extraResources` comment for the exact
- * math, and `docs/deployment.md` for the end-to-end picture.
+ * `turbo prune @plotroom/server --production` (#310, replacing
+ * `bunx turbo prune @plotroom/server --production`) writes a self-contained
+ * subset workspace — every package `@plotroom/server` depends on, their
+ * `package.json`s, a pruned `bun.lock`, and `turbo.json`/`bunfig.toml` — into
+ * a scratch directory, preserving the monorepo's `apps/`/`packages/` layout
+ * (unlike pnpm's flat `deploy`). A frozen `bun install` there resolves the
+ * subset with the isolated linker, so `apps/server/node_modules/<pkg>` is a
+ * symlink into that scratch tree's own `node_modules/.bun` store — real only
+ * as long as the scratch tree exists. `dereference: true` on both copies
+ * below resolves every such symlink to real file content *before* the
+ * scratch tree is deleted, so `build/resources/server` ends up flat
+ * (`server/dist`, `server/node_modules`, `server/package.json`) exactly like
+ * the pnpm `deploy` output it replaces — `electron-builder.yml`'s
+ * `extraResources` split expects that shape, unchanged.
+ *
+ * The staged layout deliberately mirrors the dev layout's *relative*
+ * structure (`apps/desktop`, `apps/server`, `apps/web` as siblings):
+ * `main.ts`'s `SERVER_ENTRY` and `apps/server`'s `defaultStaticDir()` each
+ * resolve their sibling path from their own compiled file's
+ * `import.meta.url`, unchanged between dev and packaged — see
+ * `electron-builder.yml`'s `extraResources` comment for the exact math, and
+ * `docs/deployment.md` for the end-to-end picture.
  */
-import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -49,20 +49,65 @@ function run(command, args, cwd) {
 }
 
 console.log("building @plotroom/server and @plotroom/web...");
-run("pnpm", ["--filter", "@plotroom/server", "build"], repoRoot);
-run("pnpm", ["--filter", "@plotroom/web", "build"], repoRoot);
+run("bunx", ["turbo", "run", "build", "--filter=@plotroom/server"], repoRoot);
+run("bunx", ["turbo", "run", "build", "--filter=@plotroom/web"], repoRoot);
 
 rmSync(buildDir, { recursive: true, force: true });
 mkdirSync(buildDir, { recursive: true });
 
+const pruneDir = mkdtempSync(join(tmpdir(), "plotroom-server-prune-"));
 console.log(
-  `deploying @plotroom/server (production deps only) to ${serverStageDir}...`,
+  `pruning @plotroom/server (production deps only) into ${pruneDir}...`,
 );
 run(
-  "pnpm",
-  ["--filter", "@plotroom/server", "deploy", "--prod", serverStageDir],
+  "bunx",
+  [
+    "turbo",
+    "prune",
+    "@plotroom/server",
+    "--production",
+    `--out-dir=${pruneDir}`,
+    "--use-gitignore=false",
+  ],
   repoRoot,
 );
+run(
+  "bun",
+  [
+    "install",
+    "--frozen-lockfile",
+    "--production",
+    "--ignore-scripts",
+    "--linker",
+    "hoisted",
+  ],
+  pruneDir,
+);
+// The root build above produced every required `dist/`. `--use-gitignore=false`
+// copies those artifacts into the pruned tree, so this production install does
+// not need the dev-only TypeScript/config packages to compile a second time.
+console.log(`staging pruned server into ${serverStageDir}...`);
+mkdirSync(serverStageDir, { recursive: true });
+const prunedServerDir = join(pruneDir, "apps", "server");
+cpSync(prunedServerDir, serverStageDir, {
+  recursive: true,
+  dereference: true,
+  filter: (src) => !src.includes(`${prunedServerDir}/node_modules`),
+});
+// Follow the top-level Bun links into real package content, but omit nested
+// workspace `node_modules` links: those are dev/config links stripped by the
+// production install and are intentionally not runtime dependencies.
+run(
+  "rsync",
+  [
+    "-aL",
+    "--exclude=node_modules/**",
+    `${join(pruneDir, "node_modules")}/`,
+    `${join(serverStageDir, "node_modules")}/`,
+  ],
+  repoRoot,
+);
+rmSync(pruneDir, { recursive: true, force: true });
 
 const webDistSource = join(repoRoot, "apps", "web", "dist");
 if (!existsSync(webDistSource)) {

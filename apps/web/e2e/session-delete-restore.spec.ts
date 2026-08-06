@@ -14,8 +14,8 @@
  *     button brings the record (and its node) back over the session's own
  *     `POST /api/sessions/:id/restore`, live, with no reload (principle 10).
  *
- * Run locally: `pnpm build && pnpm --filter @plotroom/web e2e` (root
- * `pnpm build` — or at least `@plotroom/core`, `@plotroom/ui`,
+ * Run locally: `bun run build && bun run --filter=@plotroom/web e2e` (root
+ * `bun run build` — or at least `@plotroom/core`, `@plotroom/ui`,
  * `@plotroom/server`, and `@plotroom/web` — must have already produced
  * `apps/server/dist` and `apps/web/dist`; this suite spawns the former and
  * serves the latter, neither of which exists until built).

@@ -16,4 +16,4 @@ if [ "$branch" != "HEAD" ] && [ "$branch" != "main" ]; then
   esac
 fi
 
-pnpm format:check
+bun run format:check

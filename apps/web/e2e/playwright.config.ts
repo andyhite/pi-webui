@@ -6,14 +6,14 @@ import { defineConfig } from "@playwright/test";
  * workstream's repo, and a real Chromium tab loaded from the server's own
  * served page (single origin, spec §12) — never the Vite dev server.
  *
- * Requires `pnpm build` first (root or `apps/web`/`apps/server` at minimum):
+ * Requires `bun run build` first (root or `apps/web`/`apps/server` at minimum):
  * this suite spawns `apps/server/dist/index.js` and serves `apps/web/dist`,
  * neither of which exists until built. See `apps/web/e2e/milestone.spec.ts`'s
  * doc comment for the exact command and what the gate proves.
  *
- * Deliberately not wired into `pnpm verify` or turbo's `test` task: spawning
+ * Deliberately not wired into `bun run verify` or turbo's `test` task: spawning
  * a real server/git repo/browser is slow and this is one hermetic gate, not
- * a broad suite — run it explicitly via `pnpm --filter @plotroom/web e2e`.
+ * a broad suite — run it explicitly via `bun run --filter=@plotroom/web e2e`.
  *
  * The #84 Electrobun shell spike is ignored here and lives on its own
  * config (`playwright.electrobun.config.ts`): it drives a shell the stack

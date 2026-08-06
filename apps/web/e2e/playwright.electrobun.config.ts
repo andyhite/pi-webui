@@ -12,10 +12,10 @@ import { defineConfig } from "@playwright/test";
  * app opens (`chromium.connectOverCDP`), so Playwright's own browser
  * fixtures are unused and `use` deliberately configures none of them.
  *
- * Requires `pnpm build` first, for the same reason the default gate does —
+ * Requires `bun run build` first, for the same reason the default gate does —
  * it spawns `apps/server/dist/index.js` serving `apps/web/dist`.
  *
- *   pnpm build && pnpm --filter @plotroom/web e2e:electrobun
+ *   bun run build && bun run --filter=@plotroom/web e2e:electrobun
  */
 export default defineConfig({
   testDir: ".",

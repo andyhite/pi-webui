@@ -15,7 +15,7 @@
  * the updater compares against a feed — which is the point: those must agree
  * with the git tag, and the tag comes from the same root manifest.
  *
- * A wrapper rather than a shell substitution in the pnpm script, because
+ * A wrapper rather than a shell substitution in the bun script, because
  * `$(node -p …)` is not portable to the Windows runner that builds the NSIS
  * installer.
  *
@@ -35,7 +35,7 @@ const rootManifest = JSON.parse(
 const version = rootManifest.version;
 if (typeof version !== "string" || version === "") {
   throw new Error(
-    `no version in ${join(repoRoot, "package.json")}; \`pnpm release\` is what sets it`,
+    `no version in ${join(repoRoot, "package.json")}; \`bun run release\` is what sets it`,
   );
 }
 
@@ -57,7 +57,7 @@ const args = [
 ];
 
 console.log(`package: electron-builder ${args.join(" ")}`);
-execFileSync("pnpm", ["exec", "electron-builder", ...args], {
+execFileSync("bunx", ["electron-builder", ...args], {
   cwd: join(here, ".."),
   stdio: "inherit",
 });

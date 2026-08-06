@@ -15,7 +15,7 @@
  * documents the same constraint for itself), so loading straight from
  * `src` here would fail for a reason that has nothing to do with the
  * plugin. `beforeAll` builds this package first, so the test is correct
- * whether or not a prior `pnpm build`/`typecheck` already ran.
+ * whether or not a prior `bun run build`/`typecheck` already ran.
  */
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -31,7 +31,7 @@ import { PluginCallRefusedError, PluginHost } from "@plotroom/plugin-sdk";
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 beforeAll(() => {
-  execFileSync("pnpm", ["exec", "tsc", "-b"], {
+  execFileSync("bunx", ["tsc", "-b"], {
     cwd: packageRoot,
     stdio: "inherit",
   });

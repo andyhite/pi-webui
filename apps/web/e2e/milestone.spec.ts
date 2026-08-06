@@ -38,8 +38,8 @@
  * reasoning/output and turn-2 assertions below time out, since nothing
  * after the initial empty paint is ever refetched), then restoring it.
  *
- * Run locally: `pnpm build && pnpm --filter @plotroom/web e2e` (root
- * `pnpm build` — or at least `@plotroom/core`, `@plotroom/ui`,
+ * Run locally: `bun run build && bun run --filter=@plotroom/web e2e` (root
+ * `bun run build` — or at least `@plotroom/core`, `@plotroom/ui`,
  * `@plotroom/server`, and `@plotroom/web` — must have already produced
  * `apps/server/dist` and `apps/web/dist`; this suite spawns the former and
  * serves the latter, neither of which exists until built).

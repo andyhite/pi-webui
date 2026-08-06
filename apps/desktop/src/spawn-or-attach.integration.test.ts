@@ -7,7 +7,7 @@
  *
  * Requires `apps/server` already built (`dist/index.js`); turbo's `test`
  * task depends on `^build`, and `@plotroom/server` is already a declared
- * dependency of this package, so `pnpm verify`/`turbo run test` always
+ * dependency of this package, so `bun run verify`/`turbo run test` always
  * builds it first.
  */
 

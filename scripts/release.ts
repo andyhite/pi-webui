@@ -1,8 +1,8 @@
 /**
- * The release script (decision 0003, #94). Run it through pnpm:
+ * The release script (decision 0003, #94). Run it through bun:
  *
- *   pnpm release --dry-run     # print the version and notes, write nothing
- *   pnpm release               # bump, generate, commit, tag
+ *   bun run release --dry-run     # print the version and notes, write nothing
+ *   bun run release               # bump, generate, commit, tag
  *
  * It derives the version rather than taking one, because a number somebody
  * typed is a number that can disagree with what landed (0003 §3). The whole
@@ -109,7 +109,7 @@ function commitRecords(range: string | undefined): readonly CommitRecord[] {
  * when it *rejects* a commit.
  *
  * Exit status 1 is commitlint saying it found problems. Anything else is
- * commitlint itself failing — a missing `pnpm`, a config that throws — which
+ * commitlint itself failing — a missing `bunx`, a config that throws — which
  * must not be reported as "your history is bad": that would send somebody to
  * rewrite commits over a broken toolchain.
  */
@@ -118,7 +118,7 @@ function commitlint(
   input?: string,
 ): string | undefined {
   try {
-    execFileSync("pnpm", ["commitlint", ...args], {
+    execFileSync("bunx", ["commitlint", ...args], {
       cwd: REPO_ROOT,
       stdio: "pipe",
       ...(input === undefined ? {} : { input }),
@@ -324,8 +324,8 @@ function main(): void {
   // already been rewritten. Generated content is exactly the content that
   // should not be asking a human to reformat it.
   execFileSync(
-    "pnpm",
-    ["exec", "prettier", "--write", "CHANGELOG.md", "package.json"],
+    "bunx",
+    ["prettier", "--write", "CHANGELOG.md", "package.json"],
     {
       cwd: REPO_ROOT,
       stdio: "pipe",

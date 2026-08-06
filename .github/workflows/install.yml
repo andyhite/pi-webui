@@ -1,11 +1,11 @@
 name: Install
 
-# A full `pnpm install --frozen-lockfile` **with scripts**, on Windows, followed by
+# A full `bun install --frozen-lockfile` **with scripts**, on Windows, followed by
 # a round trip through the SQLite binding it installs (#183).
 #
 # Its own workflow with its own trigger filter, because unlike every other job this
 # one's surface really is a list of files: it tests *installing*, so what can change
-# its answer is the lockfile, a manifest, `.npmrc`, the workspace definition, or the
+# its answer is the lockfile, a manifest, `bunfig.toml`, the workspace definition, or the
 # way this job runs — and nothing else in the repository can. A path filter here
 # costs zero runner minutes on the changes that cannot affect it, where a job gated
 # on the dependency graph (see `ci.yml`) would still have to start a runner to be
@@ -17,12 +17,12 @@ name: Install
 # trigger.
 #
 # Windows is the only platform where this can regress, and it regressed silently:
-# `better-sqlite3` carries a `binding.gyp` at its package root, so pnpm synthesises
+# `better-sqlite3` carries a `binding.gyp` at its package root, so Bun runs
 # the default `install: node-gyp rebuild` for it even though it ships an N-API
 # prebuild per platform and needs no compiler — and node-gyp 10.2.0 does not
 # recognise the Visual Studio the runner image now ships ("unknown version
 # \"undefined\" found at .../Visual Studio\\18"). The fix is
-# `pnpm.neverBuiltDependencies`, and the thing that keeps it fixed is this job:
+# `trustedDependencies`, and the thing that keeps it fixed is this job:
 # without it, the next dependency that wants a compiler is found by whoever tries to
 # build the Windows installer (#79), not by CI.
 #
@@ -41,9 +41,9 @@ on:
     # triggers. `**/package.json` covers the root manifest and every package's.
     paths: &manifests
       - "**/package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".npmrc"
+      - "bun.lock"
+      - "package.json"
+      - "bunfig.toml"
       - ".github/workflows/install.yml"
       - ".github/actions/setup/action.yml"
   pull_request:
@@ -62,14 +62,14 @@ jobs:
       - uses: actions/checkout@v4
 
       # The install step *is* the regression test. Without
-      # `neverBuiltDependencies`, pnpm synthesises `install: node-gyp rebuild` for
+      # `neverBuiltDependencies`, Bun runs `install: node-gyp rebuild` for
       # better-sqlite3 and it is what fails on a Windows runner, exactly as it did
       # in #183's original log. No Bun and no turbo cache: nothing here builds or
       # runs a turbo task.
       - uses: ./.github/actions/setup
 
-      # What can be asserted on top of that, and what cannot. "Did pnpm run a
-      # build?" is **not** reliably observable after the fact: pnpm's side-effects
+      # What can be asserted on top of that, and what cannot. "Did Bun run a
+      # build?" is **not** reliably observable after the fact: Bun's side-effects
       # cache replays a build performed by an earlier install, so a warm store
       # neither runs the script nor prints that it did (measured both ways
       # locally), and `binding.gyp` degrades its targets to `type: none` when a
@@ -83,7 +83,7 @@ jobs:
       - name: Refuse a compiled binding
         shell: bash
         run: |
-          pkg=$(echo node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3)
+          pkg=$(echo node_modules/.bun/better-sqlite3@*/node_modules/better-sqlite3)
           test -d "$pkg" || { echo "better-sqlite3 not found at $pkg"; exit 1; }
           test -f "$pkg/prebuilds/win32-x64.node" || {
             echo "no win32-x64 prebuild shipped; this platform would need a compiler"
@@ -98,7 +98,7 @@ jobs:
       # A round trip through the native module, which is the whole claim: the
       # server's SQLite is what a Windows installer has to ship, and an install
       # that "succeeded" without a loadable binding proves nothing. Run from
-      # `packages/db`, where `better-sqlite3` is actually a dependency — pnpm's
+      # `packages/db`, where `better-sqlite3` is actually a dependency — Bun's
       # store is not hoisted to the root.
       - name: Load the SQLite binding and round-trip a row
         working-directory: packages/db

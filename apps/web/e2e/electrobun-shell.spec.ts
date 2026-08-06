@@ -27,7 +27,7 @@
  * tarballs on a cold scratch directory, needs `bun` and an X display, and
  * exercises a shell the stack has not adopted. Run it explicitly:
  *
- *   pnpm build && pnpm --filter @plotroom/web e2e:electrobun
+ *   bun run build && bun run --filter=@plotroom/web e2e:electrobun
  *
  * The findings, including the two things that do NOT work, are recorded in
  * `docs/decisions/0006-electrobun-under-playwright.md`.

@@ -26,7 +26,7 @@
 # package's own manifest**: one product version lives in the root
 # `package.json` (decision 0003 §5) and `scripts/package.mjs` passes it in as
 # `-c.extraMetadata.version`, which is what `${version}` below resolves to.
-# Build through `pnpm --filter @plotroom/desktop package`, never
+# Build through `bun run --filter=@plotroom/desktop package`, never
 # `electron-builder` directly, or the installer is named `0.0.0` — the
 # permanent placeholder every workspace package carries (0003 §1).
 appId: com.plotroom.desktop
