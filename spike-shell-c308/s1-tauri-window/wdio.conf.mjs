@@ -1,13 +1,13 @@
 // S1/S3 spike harness (#308): drives the built Tauri binary via
 // WebKitWebDriver/tauri-driver on Linux, pointed at a real, seeded
 // @plotroom/server (spike-server.mjs) through tauri.conf.json's
-// build.frontendDist URL override. Own throwaway dir, never touches
+// build.devUrl (debug-build config). Own throwaway dir, never touches
 // apps/desktop production code.
 const APP_BINARY = "./src-tauri/target/debug/s1-tauri-window";
 
 export const config = {
   runner: "local",
-  specs: ["./test/specs/diag.spec.mjs"],
+  specs: ["./test/specs/spike.spec.mjs"],
   maxInstances: 1,
 
   services: [

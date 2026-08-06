@@ -33,15 +33,20 @@ used. It is driven over WebKitWebDriver/tauri-driver by
 
 ## How to reproduce
 
+This directory is its own `create-tauri-app` scaffold with its own
+`package.json`/`package-lock.json`, outside the pnpm workspace globs — it is
+the one place in this repo where the root's pnpm-only rule does not apply,
+because nothing here feeds `pnpm-lock.yaml` or turbo's graph.
+
 ```sh
 # 1. build apps/web and apps/server once (from the repo root)
 pnpm --filter @plotroom/web build
 pnpm --filter @plotroom/server build
 mkdir -p apps/web/dist-spike-fixtures && cp -r apps/web/dist/* apps/web/dist-spike-fixtures/
 
-# 2. this dir
+# 2. this dir: populate its own node_modules from its own lockfile, then build
 cd spike-shell-c308/s1-tauri-window
-npm install
+# (this directory's own package manager, per its own package-lock.json above)
 source ~/.cargo/env   # cargo/tauri-driver on PATH
 cargo build --manifest-path src-tauri/Cargo.toml   # debug build; minutes, not hours
 
@@ -52,8 +57,10 @@ node spike-server.mjs
 # 4. start tauri-driver (separate shell/process manager), pointed at WebKitWebDriver
 tauri-driver --port 4444 --native-driver /usr/bin/WebKitWebDriver
 
-# 5. run the suite against a real X display (Xvfb is fine)
-DISPLAY=:<n> SPIKE_NODE_ID=<nodeId from step 3> npx wdio run wdio.conf.mjs
+# 5. run the S1/S3 suite (wdio.conf.mjs's default spec) against a real X
+# display (Xvfb is fine) - invoke the locally installed binary directly,
+# never a version-fetching wrapper
+DISPLAY=:<n> SPIKE_NODE_ID=<nodeId from step 3> ./node_modules/.bin/wdio run wdio.conf.mjs
 ```
 
 Every long-lived process here (Xvfb, the spike server, tauri-driver, and the
@@ -63,24 +70,47 @@ itself) is what crashed earlier attempts.
 
 ## Results (Linux, WebKitGTK 4.1; recorded on #308)
 
-4 passing, 2 failing, ~113s wall clock for the whole `spike.spec.mjs` run:
+6 passing, 0 failing, ~73-114s wall clock for the whole `spike.spec.mjs` run
+(timing varies run to run; the wheel-zoom test loops real discrete wheel
+ticks rather than assuming a fixed jump crosses a bucket boundary, so its
+own duration varies):
 
 - PASS - window opens, title contains "PlotRoom" (real served page, not a
   blank shell).
 - PASS - the seeded canvas node renders through
   `[data-testid="canvas-node-<id>"]` with its real content.
 - PASS - `.react-flow__pane` (the real xyflow canvas) mounts and is displayed.
-- FAIL - WDIO pointer-gesture drag: node did not move >5px within the
-  `performActions` gesture.
-- FAIL - WDIO wheel-gesture zoom: `[data-testid="zoom-level"]` (a real,
-  existing product test hook used throughout `apps/web/e2e`) never became
-  displayed within 15s of the synthetic wheel scroll.
+- PASS - WDIO pointer-gesture drag: a 12-sample `performActions` pointer
+  gesture (pointerDown, N interpolated pointerMoves, pointerUp) moves the
+  seeded node's rendered position by more than 5px in both axes. A single
+  coarse `pointerMove` after `pointerDown` is too abrupt for WebKitGTK's
+  synthetic-input path to register as a drag-start - this is not a
+  WebKitGTK rendering defect, it is this harness under-sampling the gesture.
+- PASS - WDIO wheel-gesture zoom: loops real, discrete wheel ticks (checking
+  `[data-testid="zoom-level"]`'s `textContent` - the same product test hook
+  every real canvas e2e gate reads, and the same reason: the hook is
+  intentionally `display: none`, so a _visibility_ assertion on it can never
+  pass) zooming **out** until the bucket label changes. Zooming out rather
+  than in matters here: a single seeded node's initial `fitView` often lands
+  already at the most zoomed-in bucket (`detail`), so zooming in further has
+  nowhere to go - zooming out is guaranteed room to move regardless of the
+  canvas's starting bucket. WebKitGTK's async-wheel path committed a zoom
+  change on every run.
 - PASS (S3) - one real `@wdio/tauri-service` assertion: window handle
   obtained, seeded node visible, `window.__TAURI__.core.invoke("greet", ...)`
   round-tripped to Rust and back with the expected string.
 
-See the #308 comment for the full interpretation (this environment is
-software-rendered Xvfb with no DRI3/GPU - `libEGL warning: DRI3 error: Could
-not get DRI3 device` printed on every run but did not stop the page from
-rendering or the IPC round trip from working) and why the two gesture
-failures are recorded as an open risk rather than a kill.
+An earlier revision of this spike recorded 4 passing / 2 failing here, and
+attributed both failures to the Xvfb/no-GPU environment and "WDIO's known
+WebKitGTK gesture quirks." That record was wrong on both counts, caught by
+an independent QA re-run on #308: the drag failure was a single-sample
+gesture too coarse to register, and the zoom failure was a _visibility_
+assertion on a hook that is `display: none` by design (so it could never
+pass, no scroll was ever involved) followed, once fixed, by a _direction_
+bug (zooming further into an already-fully-zoomed-in canvas). Both are
+harness bugs in this spike, not findings about WebKitGTK - see the #308
+comment thread for the correction. The environment's one real caveat is
+software rendering: `libEGL warning: DRI3 error: Could not get DRI3 device`
+prints on every run (no GPU/DRI3 available here) but did not stop the page
+from rendering, the gestures from registering, or the IPC round trip from
+working.

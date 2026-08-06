@@ -57,6 +57,6 @@ child.on("exit", (code, signal) =>
 child.on("error", (err) => console.log(`SIDECAR_SPAWN_ERROR=${err.message}`));
 
 // Idle: this process plays the role of "the Tauri host process" for the
-// orphan/teardown half of the spike (run-spike.sh kills -9 this PID from
-// outside and checks whether SIDECAR_CHILD_PID survives).
+// orphan/teardown half of the spike (see README.md - `kill -9` this PID
+// from a separate shell and check whether SIDECAR_CHILD_PID survives).
 setInterval(() => {}, 1000);
