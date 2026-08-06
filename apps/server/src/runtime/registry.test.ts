@@ -5,7 +5,7 @@ import type {
   RuntimeStartConfig,
   SessionRuntimeAdapter,
 } from "@plotroom/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 
 import { RuntimeRegistry } from "./registry.js";
 

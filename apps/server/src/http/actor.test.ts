@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { parseActor } from "./actor.js";
 
 describe("attribution: who is making this call (§15 invariant 2)", () => {

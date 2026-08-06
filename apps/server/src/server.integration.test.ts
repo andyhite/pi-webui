@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { humanAuthor } from "@plotroom/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "bun:test";
 import { loadServerConfig, type ServerConfig } from "./config.js";
 import { startServer } from "./index.js";
 

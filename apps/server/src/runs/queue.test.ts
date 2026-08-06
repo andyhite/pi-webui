@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "bun:test";
 import { humanAuthor } from "@plotroom/core";
 import { openDatabase, type PlotroomDatabase } from "@plotroom/db";
 import { createEventBus } from "../events/bus.js";

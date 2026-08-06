@@ -4,4 +4,4 @@ import { workspaceConventions } from "@plotroom/eslint-config/workspace-conventi
 // workspace-convention checks over package.json/tsconfig.json that oxlint
 // cannot run (it does not lint JSON). No architectural override applies to
 // this package.
-export default workspaceConventions();
+export default workspaceConventions({ testOverride: "bun test src" });

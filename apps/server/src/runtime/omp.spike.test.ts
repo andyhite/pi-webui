@@ -18,7 +18,7 @@ import type {
   RuntimeSessionHandle,
   SessionRuntimeAdapter,
 } from "@plotroom/core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 
 import { createOmpRuntime } from "./omp.js";
 

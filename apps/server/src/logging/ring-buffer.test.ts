@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { DEFAULT_LOG_BUFFER_CAPACITY, LogRingBuffer } from "./ring-buffer.js";
 
 function entry(overrides: Partial<Parameters<LogRingBuffer["push"]>[0]> = {}) {

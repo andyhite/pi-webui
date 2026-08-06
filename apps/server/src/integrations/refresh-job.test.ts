@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, mock } from "bun:test";
 import type { Integration } from "@plotroom/core";
 import { Logger } from "../logging/logger.js";
 import type { IntervalScheduler, Timer } from "../maintenance/compaction.js";
@@ -50,8 +50,8 @@ function fixture(id: string): Integration {
 function fakeIntegrations(due: readonly Integration[]) {
   const refreshed: string[] = [];
   const stub: Pick<IntegrationService, "dueForScheduledRefresh" | "refresh"> = {
-    dueForScheduledRefresh: vi.fn(() => due),
-    refresh: vi.fn(async (id: string) => {
+    dueForScheduledRefresh: mock(() => due),
+    refresh: mock(async (id: string) => {
       refreshed.push(id);
       return {
         ok: true as const,
@@ -113,7 +113,7 @@ describe("the integration refresh job (§9.1, principle 2)", () => {
     const stub: Pick<IntegrationService, "dueForScheduledRefresh" | "refresh"> =
       {
         dueForScheduledRefresh: () => [failing, ok],
-        refresh: vi.fn(async (id: string) => {
+        refresh: mock(async (id: string) => {
           if (id === failing.id) throw new Error("network unreachable");
           refreshed.push(id);
           return {
