@@ -113,6 +113,17 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: ./.github/actions/setup
+        with:
+          turbo-cache: db-suite
+
+      # `@plotroom/db` resolves `@plotroom/core` through its `default` export
+      # condition (`./dist/index.js`), which only `bun run test` inside
+      # `packages/db` does not produce on its own: that condition is for a
+      # consumer, not for turbo's own `dependsOn: ["^build"]` graph, and
+      # `bun run test` here runs outside turbo entirely. Build the one
+      # workspace dependency `@plotroom/db` actually has before testing it.
+      - name: Build @plotroom/core
+        run: bunx turbo run build --filter=@plotroom/core
 
       - name: Run the db suite under the pinned Bun
         working-directory: packages/db
