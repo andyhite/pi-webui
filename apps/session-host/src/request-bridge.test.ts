@@ -69,7 +69,9 @@ describe("the request bridge (issue #81)", () => {
 
   it("refuses to settle an id nothing raised, or already settled", () => {
     const { frames, bridge } = harness();
-    bridge.raise({ kind: "question", text: "?", options: [] });
+    // Deliberately unsettled: this test only exercises `settle`'s guards, not
+    // what the raised call eventually resolves to.
+    void bridge.raise({ kind: "question", text: "?", options: [] });
     const requestId = requestIdOf(frames[0]);
 
     expect(bridge.settle("never-raised", { kind: "deny", reason: "x" })).toBe(
@@ -84,8 +86,9 @@ describe("the request bridge (issue #81)", () => {
 
   it("gives every raised request its own id", () => {
     const { frames, bridge } = harness();
-    bridge.raise({ kind: "question", text: "a", options: [] });
-    bridge.raise({ kind: "question", text: "b", options: [] });
+    // Neither call is settled: this test only checks id allocation.
+    void bridge.raise({ kind: "question", text: "a", options: [] });
+    void bridge.raise({ kind: "question", text: "b", options: [] });
 
     const ids = frames.map((frame) => requestIdOf(frame));
     expect(ids).toHaveLength(2);

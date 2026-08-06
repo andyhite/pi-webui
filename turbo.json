@@ -57,6 +57,14 @@
     "lint": {
       "outputs": []
     },
+    // The micro-ESLint pass (#307): the two custom architectural rules plus
+    // the workspace-convention rules over package.json/tsconfig.json that
+    // `lint` (now `oxlint --type-aware`) cannot run -- oxlint does not lint
+    // JSON, and its JS-plugin host is alpha. Split from `lint` so a package
+    // with neither concern can simply omit the script.
+    "lint:arch": {
+      "outputs": []
+    },
     "test": {
       "dependsOn": ["^build"],
       // `$TURBO_DEFAULT$` restores the normal per-package file set; the

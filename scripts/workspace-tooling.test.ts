@@ -6,38 +6,29 @@ import { describe, expect, it } from "vitest";
 import { packageTests } from "../vitest.base.config.ts";
 
 /**
- * The build tooling contract every workspace package answers to (#215).
+ * What is left of the build tooling contract (#215) after #307 moved most of
+ * it into lint rules (`packages/config/eslint-config/rules/`,
+ * wired per-package from `eslint.config.js` and run by `pnpm lint:arch`):
+ * every convention a lint rule can check by reading one file — a
+ * `package.json`'s scripts, a `tsconfig*.json`'s shape — now lives there
+ * instead of here.
  *
- * `AGENTS.md` → "Layout" states it in prose — *"each has `build`, `typecheck`,
- * `lint`, and `test` scripts; Turborepo drives them from the root"* — and prose
- * is what let it drift: two packages ended up with no vitest configuration at
- * all (`packages/ui`, the largest suite here, ran on vitest's default include),
- * three typechecked no test at all, and three emitted their own tests into
- * `dist/`. Every one of those was invisible in a green `bun run verify`, which is
- * the definition of a rule that is documented rather than enforced.
- *
- * So the contract is a test, and a deviation is a row in one of the tables below
- * with the reason it is not overlap. A new package fails here until it either
- * matches every other package or says in writing why it cannot.
+ * What is left here is genuinely graph-shaped: it needs to see the whole
+ * workspace (glob membership), correlate two different files per package
+ * (a source importing `node:` against its manifest's declared types), or
+ * import a config module at runtime to compare object identity. A lint rule
+ * visits one file at a time and cannot express any of that.
  */
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
-
-const CANONICAL = {
-  build: "tsc -b",
-  typecheck: "tsc -b && tsc -p tsconfig.tests.json",
-  lint: "eslint .",
-  test: "vitest run",
-  testsProjectInclude: ["src/**/*"],
-  testsProjectExclude: [] as string[],
-  buildExcludesTests: "src/**/*.test.ts",
-};
 
 /**
  * Packages whose own `dist/` is under test — their host suites load the built
  * plugin entry in a worker, which is exactly what the product loads — so `test`
  * builds first. Turbo's `test` task depends on `^build`, upstream only, and a
- * cold cache is where the difference showed (#118).
+ * cold cache is where the difference showed (#118). Mirrors the
+ * `buildsOwnDist` option each such package's `eslint.config.js` passes to
+ * `plotroom/package-json-conventions`.
  */
 const BUILDS_ITS_OWN_DIST: Record<string, string> = {
   "packages/plugins/git": "host.integration.test.ts loads ../dist/index.js",
@@ -51,6 +42,8 @@ const BUILDS_ITS_OWN_DIST: Record<string, string> = {
  * The one package that is not on vitest: it runs on Bun, its tests import
  * `bun:test`, and it embeds a Bun-only SDK (decision 0005). A vitest
  * configuration here would be a second runner claiming the same files.
+ * Mirrors the `testOverride` option `apps/session-host/eslint.config.js`
+ * passes to `plotroom/package-json-conventions`.
  */
 const NOT_VITEST: Record<string, { test: string; why: string }> = {
   "apps/session-host": {
@@ -67,8 +60,7 @@ const NODE_TYPES_FROM: Record<string, string> = {
 /**
  * The shared config packages themselves (#306): pure JSON/JS, no `src/`, no
  * build/typecheck/test scripts — they are what every other package's
- * contract below points *at*, not a package the per-package contract itself
- * applies to.
+ * contract points *at*, not a package the per-package contract applies to.
  */
 const CONFIG_PACKAGES: Record<string, string> = {
   "packages/config/typescript-config":
@@ -82,13 +74,6 @@ type Manifest = {
   scripts?: Record<string, string>;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
-};
-
-type TsConfig = {
-  extends?: string | string[];
-  include?: string[];
-  exclude?: string[];
-  compilerOptions?: Record<string, unknown>;
 };
 
 function read(path: string): string {
@@ -196,13 +181,12 @@ const packages = dirs.map((dir) => ({
 describe("the packages this contract covers", () => {
   it("is every one the workspaces globs expand to", () => {
     // A glob this test failed to parse would make every assertion below vacuous
-    // for that whole family of packages.
+    // for that whole family of packages. The `name` scope itself
+    // (`^@plotroom/`) is `plotroom/package-json-conventions` now; workspace
+    // membership is not a single-file check a lint rule can make.
     expect(globs).toHaveLength(entries);
     expect(packages.map((p) => p.dir)).toContain("packages/core");
     expect(packages.map((p) => p.dir)).toContain("apps/session-host");
-    for (const { dir, manifest } of packages) {
-      expect(manifest.name, dir).toMatch(/^@plotroom\//);
-    }
   });
 
   it("is what every deviation names, so a stale exception cannot hide", () => {
@@ -221,7 +205,8 @@ describe("what the shape reaches", () => {
     // the shared vitest include collects it. A `*.test.tsx` would therefore be
     // emitted into `dist/` and never run, and `.spec.ts` is Playwright's suffix
     // here (`apps/web/e2e`), a suite vitest must not collect. Widening the
-    // shape is a deliberate edit to both patterns, not a file somebody adds.
+    // shape is a deliberate edit to both patterns, not a file somebody adds —
+    // and it needs to walk every package's sources, which a lint rule cannot.
     const stray = packages
       .filter(({ dir }) => !(dir in CONFIG_PACKAGES))
       .flatMap(({ dir }) =>
@@ -237,6 +222,8 @@ describe("what the shape reaches", () => {
     // import names (`Buffer` in `packages/plugins/jira/src/transport.ts`,
     // `fetch` under a DOM-less `lib`), so an unused declaration cannot be
     // detected by grepping for specifiers — only by removing it and typechecking.
+    // Correlating a package's sources with its manifest is two files, not one:
+    // outside what `plotroom/package-json-conventions` can check per-file.
     const undeclared = packages
       .filter(({ dir }) => !(dir in CONFIG_PACKAGES))
       .filter(({ dir, manifest }) => {
@@ -255,108 +242,22 @@ describe("what the shape reaches", () => {
   });
 });
 
-describe.each(packages.filter(({ dir }) => !(dir in CONFIG_PACKAGES)))(
-  "$dir",
-  ({ dir, manifest }) => {
-    const scripts = manifest.scripts ?? {};
-    const tsconfig = parseJsonc(read(`${dir}/tsconfig.json`)) as TsConfig;
-
-    it("builds, typechecks and lints the same way as every other package", () => {
-      // A package may append steps of its own — `vite build`, an asset copy, the
-      // e2e project's typecheck — but never replace the shared ones.
-      expect(scripts.build ?? "", "build").toMatch(
-        new RegExp(`^${CANONICAL.build}( &&|$)`),
-      );
-      expect(scripts.typecheck ?? "", "typecheck").toMatch(
-        new RegExp(`^${CANONICAL.typecheck.replaceAll(".", "\\.")}( &&|$)`),
-      );
-      expect(scripts.lint, "lint").toBe(CANONICAL.lint);
-    });
-
-    it("runs its tests with the shared runner and no --passWithNoTests", () => {
-      const exception = NOT_VITEST[dir];
-      const prefix = dir in BUILDS_ITS_OWN_DIST ? `${CANONICAL.build} && ` : "";
-      expect(scripts.test, exception?.why ?? "test").toBe(
-        exception ? exception.test : `${prefix}${CANONICAL.test}`,
-      );
-      // `--passWithNoTests` reports green when the include pattern matches
-      // nothing, which is the failure that hid `packages/ui`'s missing config.
-      expect(scripts.test ?? "").not.toContain("--passWithNoTests");
-      expect(
-        existsSync(join(repoRoot, dir, "vitest.config.ts")),
-        exception ? "must not also configure vitest" : "needs a vitest config",
-      ).toBe(exception === undefined);
-    });
-
-    it("keeps its tests out of the build and typechecks them anyway", () => {
-      expect(tsconfig.exclude ?? [], "tsconfig.json exclude").toContain(
-        CANONICAL.buildExcludesTests,
-      );
-
-      const tests = parseJsonc(read(`${dir}/tsconfig.tests.json`)) as TsConfig;
-      expect(tests.extends).toEqual([
-        "./tsconfig.json",
-        "@plotroom/typescript-config/tests.json",
-      ]);
-      expect(tests.include).toEqual(CANONICAL.testsProjectInclude);
-      expect(tests.exclude, "the tests project excludes nothing").toEqual(
-        CANONICAL.testsProjectExclude,
-      );
-      expect(tests.compilerOptions?.tsBuildInfoFile).toBe(
-        "dist/.tsbuildinfo.tests",
-      );
-    });
-
-    if (!(dir in NOT_VITEST)) {
-      it("takes its test include from the shared base, not a copy of it", async () => {
-        // Runtime-selected specifier: one assertion over every package's config,
-        // and the point is the object vitest really loads rather than its text.
-        const config = (await import(
-          pathToFileURL(join(repoRoot, dir, "vitest.config.ts")).href
-        )) as { default: { test?: { include?: string[] } } };
-        // Identity, not equality: `mergeConfig` keeps the base's array by
-        // reference, so this passes for the three packages that add a timeout and
-        // fails for a config that restates the pattern — which is the whole point
-        // of the pattern living in one file.
-        expect(config.default.test?.include).toBe(packageTests.test?.include);
-      });
-    }
-  },
-);
-
-describe("shared config packages (#306)", () => {
-  it("is declared as a devDependency by every package that extends it", () => {
-    const consumers = packages.filter(({ dir }) => !(dir in CONFIG_PACKAGES));
-
-    const missingTsconfigDep = consumers
-      .filter(({ dir }) => {
-        const tsconfig = parseJsonc(read(`${dir}/tsconfig.json`)) as TsConfig;
-        const extendsList = Array.isArray(tsconfig.extends)
-          ? tsconfig.extends
-          : tsconfig.extends === undefined
-            ? []
-            : [tsconfig.extends];
-        return extendsList.some((e) =>
-          e.startsWith("@plotroom/typescript-config/"),
-        );
-      })
-      .filter(
-        ({ manifest }) =>
-          !("@plotroom/typescript-config" in (manifest.devDependencies ?? {})),
-      )
-      .map(({ dir }) => dir);
-    expect(missingTsconfigDep).toEqual([]);
-
-    const missingEslintDep = consumers
-      .filter(({ dir }) => existsSync(join(repoRoot, dir, "eslint.config.js")))
-      .filter(({ dir }) =>
-        read(`${dir}/eslint.config.js`).includes("@plotroom/eslint-config"),
-      )
-      .filter(
-        ({ manifest }) =>
-          !("@plotroom/eslint-config" in (manifest.devDependencies ?? {})),
-      )
-      .map(({ dir }) => dir);
-    expect(missingEslintDep).toEqual([]);
+describe.each(
+  packages.filter(
+    ({ dir }) => !(dir in CONFIG_PACKAGES) && !(dir in NOT_VITEST),
+  ),
+)("$dir", ({ dir }) => {
+  it("takes its test include from the shared base, not a copy of it", async () => {
+    // Runtime-selected specifier: one assertion over every package's config,
+    // and the point is the object vitest really loads rather than its text.
+    // Identity, not equality: `mergeConfig` keeps the base's array by
+    // reference, so this passes for the three packages that add a timeout and
+    // fails for a config that restates the pattern — which is the whole point
+    // of the pattern living in one file. A lint rule reads a file's own text;
+    // it cannot import a sibling config and compare the objects it produces.
+    const config = (await import(
+      pathToFileURL(join(repoRoot, dir, "vitest.config.ts")).href
+    )) as { default: { test?: { include?: string[] } } };
+    expect(config.default.test?.include).toBe(packageTests.test?.include);
   });
 });

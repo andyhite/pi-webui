@@ -17,7 +17,8 @@
     "build": "tsc -b && vite build",
     "tokens:emit": "vite build --mode emit",
     "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
-    "lint": "eslint .",
+    "lint": "oxlint --type-aware",
+    "lint:arch": "eslint .",
     "test": "vitest run"
   },
   "devDependencies": {

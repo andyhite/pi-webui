@@ -19,7 +19,8 @@
     "build": "tsc -b",
     "compile": "bun src/compile.ts",
     "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
-    "lint": "eslint .",
+    "lint": "oxlint --type-aware",
+    "lint:arch": "eslint .",
     "test": "bun test src"
   },
   "dependencies": {
