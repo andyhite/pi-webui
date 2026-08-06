@@ -12,6 +12,10 @@ out/
 # `bun run --filter=@plotroom/desktop package`, never committed
 apps/desktop/dist-installers/
 
+# scratch build artifact for the #308 shell spike (spike-shell-c308/);
+# regenerate with `pnpm --filter @plotroom/web build` copied to this path
+apps/web/dist-spike-fixtures/
+
 # agent orchestration runtime artifacts
 .pi-subagents/
 
