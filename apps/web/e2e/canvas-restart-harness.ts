@@ -127,7 +127,7 @@ export async function startRestartableServer(): Promise<RestartableServer> {
     const port = await ephemeralPort();
 
     const spawnOn = async (p: number): Promise<ChildProcess> => {
-      const spawned = spawn(process.execPath, [SERVER_ENTRY], {
+      const spawned = spawn("bun", [SERVER_ENTRY], {
         stdio: "ignore",
         env: {
           ...process.env,

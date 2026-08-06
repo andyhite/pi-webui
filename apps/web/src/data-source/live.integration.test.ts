@@ -93,7 +93,7 @@ async function startServer(): Promise<RunningServer> {
   const port = await ephemeralPort();
   const stateDir = mkdtempSync(join(tmpdir(), "plotroom-web-gate-"));
 
-  const child = spawn(process.execPath, [SERVER_ENTRY], {
+  const child = spawn("bun", [SERVER_ENTRY], {
     stdio: "ignore",
     env: {
       ...process.env,
