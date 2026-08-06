@@ -1,7 +1,8 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { removeStateDir } from "./remove-state-dir.js";
 import { humanAuthor, type VersionId } from "@plotroom/core";
 import {
   makeRenderings,
@@ -48,7 +49,7 @@ beforeEach(() => {
 
 afterEach(() => {
   state.close();
-  rmSync(dir, { recursive: true, force: true });
+  removeStateDir(dir);
 });
 
 /** An object with two versions: the older one is the compaction candidate. */

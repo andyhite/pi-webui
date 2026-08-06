@@ -66,6 +66,29 @@ export function openDatabase({ stateDir }: OpenOptions): PlotroomDatabase {
     layout,
     close: () => {
       if (!inMemory) checkpointWal(sqlite);
+      // Plain `close()` (`throwOnError: false`, `sqlite3_close_v2`): it defers
+      // releasing the connection - and the file handle - until every
+      // `Statement` this process ever `.prepare()`d (directly, through
+      // Drizzle, or through search.ts) is finalized, which happens at GC, not
+      // synchronously with this call.
+      //
+      // `close(true)` (`sqlite3_close`, forcing every outstanding statement
+      // finalized up front) looks like the fix and is Bun's own documented
+      // one for the resulting Windows file-lock symptom (oven-sh/bun#25964) -
+      // measured here to throw "database is locked" instead, on every close,
+      // including in-memory test databases with nothing else touching the
+      // file: Drizzle's own prepared-statement cache keeps statements alive
+      // across calls by design, so "outstanding" at any given `close(true)`
+      // is the normal state, not a leak, and forcing them closed collides
+      // with SQLite's own bookkeeping. Not a viable fix without auditing
+      // every call site's statement lifetime — which this driver swap's
+      // scope does not extend to.
+      //
+      // The actual fix for the Windows symptom lives at the test-teardown
+      // boundary instead: `removeStateDir` (`test-support/remove-state-dir.ts`)
+      // forces a GC pass before removing the directory, and retries through
+      // the remaining EBUSY/EPERM window — see that file's own header for why
+      // GC is what the file handle here is actually waiting on.
       sqlite.close();
     },
   };
