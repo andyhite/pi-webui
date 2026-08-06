@@ -1,4 +1,5 @@
-import { mkdirSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
@@ -31,7 +32,10 @@ const MEGABYTE = 1_000_000;
  */
 export async function smokeTest(binary: string): Promise<void> {
   const port = await freePort();
-  const stateDir = (await Bun.$`mktemp -d`.text()).trim();
+  // `mktemp` (a Unix shell command `Bun.$` previously ran here) does not
+  // exist on a Windows runner's default shell -- `mkdtempSync`, a Node API,
+  // works identically on every platform Bun targets.
+  const stateDir = mkdtempSync(join(tmpdir(), "plotroom-server-smoke-"));
   const child = Bun.spawn([binary], {
     env: {
       ...environment(),

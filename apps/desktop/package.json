@@ -8,9 +8,9 @@
     "build": "node scripts/stage-sidecars.mjs && cargo tauri build",
     "stage:sidecars": "node scripts/stage-sidecars.mjs",
     "lint": "oxlint --type-aware",
-    "lint:rust": "cd src-tauri && cargo clippy --all-targets -- -D warnings",
+    "lint:rust": "node scripts/ensure-test-stub.mjs && cd src-tauri && cargo clippy --all-targets -- -D warnings",
     "lint:arch": "eslint .",
-    "test": "cd src-tauri && cargo test"
+    "test": "node scripts/ensure-test-stub.mjs && cd src-tauri && cargo test"
   },
   "description": "PlotRoom desktop shell (Tauri v2 — thin Rust main: window, spawn-or-attach, sidecar lifecycle, single-instance; see #316)",
   "author": "PlotRoom",
