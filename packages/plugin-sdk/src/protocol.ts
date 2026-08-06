@@ -176,6 +176,21 @@ export type HostToWorkerMessage =
     }
   | { readonly type: "dispose" };
 
+/**
+ * Acknowledges `dispose` before the worker calls `process.exit()`.
+ *
+ * Bun's `worker_threads` does not reliably emit the parent-side `exit` event when
+ * a worker calls `process.exit()` (oven-sh/bun#14144, reproduced empirically here
+ * after the runtime swap to Bun for #314) — Node's own docs promise that event,
+ * and better-sqlite3-era Node is where `PluginHost#dispose` waiting on it was
+ * written and correct. Waiting on this explicit acknowledgement instead needs no
+ * `exit` event to arrive at all; `dispose()`'s own `callTimeoutMs` race is the
+ * fallback for a worker that never answers.
+ */
+export interface WorkerDisposedMessage {
+  readonly type: "disposed";
+}
+
 export type WorkerToHostMessage =
   | {
       readonly type: "loaded";
@@ -197,4 +212,5 @@ export type WorkerToHostMessage =
       readonly type: "log";
       readonly invocationId: string;
       readonly message: string;
-    };
+    }
+  | WorkerDisposedMessage;
