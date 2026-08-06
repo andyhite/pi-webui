@@ -1,4 +1,4 @@
-import { expect, afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, vi, afterEach, beforeEach, describe, it } from "vitest";
 import {
   APPROVAL_KINDS,
   APPROVAL_TRIGGERS,

@@ -1,4 +1,4 @@
-import { expect, afterEach, beforeEach, describe, it } from "bun:test";
+import { expect, vi, afterEach, beforeEach, describe, it } from "vitest";
 import type { Workspace, WorldCondition } from "@plotroom/core";
 import { PluginHost } from "@plotroom/plugin-sdk";
 import { ConditionCheckRegistry } from "../conditions/registry.js";

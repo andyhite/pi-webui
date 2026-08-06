@@ -9,7 +9,7 @@
     "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
     "lint": "oxlint --type-aware",
     "lint:arch": "eslint .",
-    "test": "bun test src"
+    "test": "bun test src --exclude src/plugins/conditions.test.ts --exclude src/plugins/invoker.test.ts && vitest run src/plugins/conditions.test.ts src/plugins/invoker.test.ts"
   },
   "dependencies": {
     "@plotroom/core": "workspace:*",
