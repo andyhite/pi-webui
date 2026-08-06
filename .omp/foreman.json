@@ -44,5 +44,16 @@
   },
   "epicLoop": {
     "maxConcurrentTracks": 3
+  },
+  "plugins": {
+    "marketplace": "omp-foreman",
+    "packs": [
+      "git-hygiene",
+      "shell-safety",
+      "secrets-hygiene",
+      "verification-integrity",
+      "generated-files",
+      "bun"
+    ]
   }
 }
