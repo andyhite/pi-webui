@@ -9,7 +9,7 @@ interruptMode: tool-only
 is set. That override exists for the operator, not for you:
 
 - Every agent change lands through a branch in its own worktree and a pull
-  request the operator merges. There is no size of change — a typo, a
+  request the operator approves. There is no size of change — a typo, a
   one-line doc fix — that earns a direct commit.
 - The hook refusing you is not the obstacle; being on `main` is. Create the
   worktree (`skill://worktree`) and commit there.
