@@ -85,7 +85,7 @@ export function openDatabase({ stateDir }: OpenOptions): PlotroomDatabase {
       // scope does not extend to.
       //
       // The actual fix for the Windows symptom lives at the test-teardown
-      // boundary instead: `removeStateDir` (`test-support/remove-state-dir.ts`)
+      // boundary instead: `removeStateDir` (`src/remove-state-dir.ts`)
       // forces a GC pass before removing the directory, and retries through
       // the remaining EBUSY/EPERM window — see that file's own header for why
       // GC is what the file handle here is actually waiting on.
