@@ -5,10 +5,10 @@
   "description": "A context-authoring canvas for operating a fleet of AI agents",
   "license": "UNLICENSED",
   "type": "module",
-  "packageManager": "bun@1.4.0",
+  "packageManager": "bun@1.3.14",
   "engines": {
     "node": ">=22.18",
-    "bun": ">=1.4.0"
+    "bun": ">=1.3.14"
   },
   "scripts": {
     "build": "turbo run build",
@@ -54,7 +54,7 @@
   "devEngines": {
     "packageManager": {
       "name": "bun",
-      "version": ">=1.4.0",
+      "version": ">=1.3.14",
       "onFail": "error"
     }
   },
