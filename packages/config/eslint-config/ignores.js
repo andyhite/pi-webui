@@ -15,11 +15,13 @@ export const IGNORES = [
   "**/playwright-report/**",
   "**/test-results/**",
   // Generated trees a package's own `eslint .` would otherwise walk:
-  // `apps/desktop/scripts/stage-resources.mjs` stages a whole `pnpm deploy`
-  // tree into `build/`, and electron-builder writes `dist-installers/`.
-  // Gitignored is not eslint-ignored — these two lists have to be kept
-  // agreeing by hand.
+  // `apps/server`/`apps/session-host`'s `compile` writes `out/`, and
+  // `apps/desktop/scripts/stage-sidecars.mjs` (#316) copies those artifacts
+  // into `src-tauri/binaries/`/`src-tauri/resources/` (gitignored) before
+  // `cargo tauri build`. Gitignored is not eslint-ignored — these lists have
+  // to be kept agreeing by hand.
   "**/build/**",
   "**/out/**",
-  "**/dist-installers/**",
+  "apps/desktop/src-tauri/target/**",
+  "apps/desktop/src-tauri/gen/**",
 ];

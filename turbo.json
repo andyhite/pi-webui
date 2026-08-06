@@ -27,10 +27,13 @@
   "globalDependencies": [".npmrc"],
   "tasks": {
     // Only real artifact builds remain (#315): `apps/web` (vite),
-    // `packages/toolkit` (CSS, vite), `apps/desktop` (its own
-    // `tsconfig.build.json`, until #316 replaces the shell). Every other
-    // package has no `build` script at all — raw-TS `exports`, resolved
-    // directly by Bun's bundler-style module resolution, nothing to emit.
+    // `packages/toolkit` (CSS, vite), `apps/desktop` (`cargo tauri build`,
+    // since #316 — the Rust/Tauri shell, not TypeScript; its real inputs are
+    // the staged sidecar binaries `scripts/stage-sidecars.mjs` copies in, not
+    // `^build`, so this task simply produces nothing cacheable for it beyond
+    // what `cargo` already caches itself). Every other package has no
+    // `build` script at all — raw-TS `exports`, resolved directly by Bun's
+    // bundler-style module resolution, nothing to emit.
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["dist/**"]

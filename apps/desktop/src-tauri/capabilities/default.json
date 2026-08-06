@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities granted to the main window. Deliberately minimal: the renderer uses no Tauri JS API (#316) and this window loads only PlotRoom's own served origin, so it needs no IPC surface beyond what the updater plugin registers for itself.",
+  "windows": ["main"],
+  "permissions": ["updater:default"]
+}

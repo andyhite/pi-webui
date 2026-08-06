@@ -34,6 +34,10 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
  * `eslint.config.js` passes to `plotroom/package-json-conventions`.
  */
 const NOT_VITEST: Record<string, { test: string; why: string }> = {
+  "apps/desktop": {
+    test: "cd src-tauri && cargo test",
+    why: "#316: the desktop shell is a thin Rust/Tauri main now, no TS source or vitest config left to run.",
+  },
   "apps/session-host": {
     test: "bun test src --exclude src/plugins/conditions.test.ts --exclude src/plugins/invoker.test.ts && vitest run src/plugins/conditions.test.ts src/plugins/invoker.test.ts",
     why: "Bun runtime, bun:test (decision 0005)",
@@ -180,7 +184,12 @@ function sources(dir: string): string[] {
       else if (/\.tsx?$/.test(entry.name)) found.push(path);
     }
   };
-  walk(join(repoRoot, dir, "src"));
+  const srcDir = join(repoRoot, dir, "src");
+  // #316: apps/desktop is a thin Rust/Tauri crate now (src-tauri/, not
+  // src/) — no TS source to walk, so this vacuously returns none rather
+  // than throwing ENOENT on a directory that is correctly absent.
+  if (!existsSync(srcDir)) return found;
+  walk(srcDir);
   return found;
 }
 
