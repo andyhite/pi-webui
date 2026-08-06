@@ -15,6 +15,10 @@ apps/desktop/dist-installers/
 # agent orchestration runtime artifacts
 .pi-subagents/
 
+# omp project-scope plugin install state — machine-local; the sibling
+# .omp/foreman.json and .omp/rules/ are committed
+.omp/plugins/
+
 # caches
 .turbo/
 .vite/
