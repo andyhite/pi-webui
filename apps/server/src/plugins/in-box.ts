@@ -12,9 +12,10 @@ import { pathToFileURL } from "node:url";
  * nothing else changed.
  *
  * Each entry names a **package**, not a path. The entry point resolved is the one
- * the package's own `exports` declares (`dist/index.js`), which is exactly what a
- * packaged build ships and exactly what each plugin's own host test already loads —
- * so the module the product runs is the module those tests proved.
+ * the package's own `exports` declares (`src/index.ts`, #315: no build, raw-TS
+ * exports, resolved directly by Bun), which is exactly what each plugin's own
+ * host test already loads — so the module the product runs is the module those
+ * tests proved.
  *
  * A package that cannot be resolved is an **install failure with a reason**
  * ({@link InBoxResolution.reason}), never a silent absence: a build that forgot to

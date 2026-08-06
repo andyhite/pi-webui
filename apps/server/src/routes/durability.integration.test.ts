@@ -16,6 +16,7 @@ import {
   type DomainEvent,
 } from "@plotroom/core";
 import { openDatabase, WorkspaceStore, WorkstreamStore } from "@plotroom/db";
+import { openWebSocket } from "../test-support/bun-websocket.js";
 import { loadServerConfig, type ServerConfigOverrides } from "../config.js";
 import { startServer } from "../index.js";
 
@@ -271,7 +272,7 @@ describe("durable placement (§5, Epic 3.1)", () => {
     const harness = await boot();
     const made = await board(harness);
 
-    const ws = new WebSocket(`ws://127.0.0.1:${harness.port}/ws`, {
+    const ws = openWebSocket(`ws://127.0.0.1:${harness.port}/ws`, {
       headers: { origin: `http://localhost:${harness.port}` },
     });
     const events: DomainEvent[] = [];

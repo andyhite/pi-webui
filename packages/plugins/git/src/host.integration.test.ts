@@ -10,7 +10,7 @@ import {
   type PermissionGrant,
   type PluginActor,
 } from "@plotroom/plugin-sdk";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 
 /**
  * The git plugin **in the real worker_threads host**, against **real git** in temp
@@ -19,10 +19,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * accepts, that the shipped entry point conforms, and that every contribution it
  * declares answers an invocation across the worker boundary.
  *
- * It loads `dist/index.js`, which is exactly what the product would load in the box.
+ * It loads `src/index.ts`, which is exactly what the product would load in the
+ * box (#315: no build, raw-TS `exports`).
  */
 
-const entry = new URL("../dist/index.js", import.meta.url);
+const entry = new URL("../src/index.ts", import.meta.url);
 
 const coreId = (value: string): CoreId => value as unknown as CoreId;
 

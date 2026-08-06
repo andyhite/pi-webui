@@ -1,11 +1,20 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
+  // #315: no package builds anymore (raw-TS `exports`, resolved by Bun's
+  // bundler-style module resolution), so this is a typecheck-only config —
+  // there is nothing left in the workspace that emits `.js`/`.d.ts`, and the
+  // one root TypeScript 7 native `--noEmit` check (`tsconfig.json`) is the
+  // only consumer. `composite`/`declaration`/`declarationMap` all describe a
+  // project-reference build graph that no longer exists; `apps/desktop`'s
+  // real emit step (until #316 replaces it) uses its own
+  // `tsconfig.build.json`, deliberately *not* this file.
   "compilerOptions": {
     "target": "ES2023",
     "lib": ["ES2023"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "preserve",
+    "moduleResolution": "bundler",
     "moduleDetection": "force",
+    "noEmit": true,
 
     "strict": true,
     "noUncheckedIndexedAccess": true,
@@ -15,11 +24,7 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
 
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "composite": true,
-    "incremental": true,
+    "sourceMap": false,
 
     "skipLibCheck": true,
     "esModuleInterop": true,

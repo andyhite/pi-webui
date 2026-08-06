@@ -1,18 +1,36 @@
 {
-  "files": [],
-  "references": [
-    { "path": "packages/core" },
-    { "path": "packages/db" },
-    { "path": "packages/plugin-sdk" },
-    { "path": "packages/plugins/filesystem" },
-    { "path": "packages/plugins/git" },
-    { "path": "packages/plugins/github" },
-    { "path": "packages/plugins/jira" },
-    { "path": "packages/toolkit" },
-    { "path": "packages/ui" },
-    { "path": "apps/server" },
-    { "path": "apps/session-host" },
-    { "path": "apps/web" },
-    { "path": "apps/desktop" }
-  ]
+  "$schema": "https://json.schemastore.org/tsconfig",
+  // #315: the one root TypeScript 7 native (`tsgo`) `--noEmit` check. No
+  // more project references — nothing in the workspace is `composite`
+  // anymore, and the native preview compiler does not implement `--build`
+  // mode. One project, one pass, everything the workspace ships (including
+  // `scripts/**` and `apps/web/e2e/**`, previously their own tiny projects)
+  // included directly so a type error anywhere fails the one check that
+  // used to be several.
+  //
+  // `lib`/`types` are the union of what any package individually needed:
+  // DOM for `apps/web`'s renderer and its Playwright suite,
+  // `@playwright/test` for `apps/web/e2e`, `bun` for the two Bun-native
+  // apps (`apps/server`, `apps/session-host`). `@types/bun` and
+  // `@types/node` both declare overlapping ambient globals (`fetch`,
+  // `Response`, `WebSocket`, …); `skipLibCheck` (inherited from
+  // `@plotroom/typescript-config/base.json`) keeps that from becoming a
+  // duplicate-identifier error across the single program.
+  "extends": "./packages/config/typescript-config/base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["bun"],
+    "allowImportingTsExtensions": true,
+    "allowJs": true
+  },
+  "include": [
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "scripts/**/*.ts",
+    "*.config.ts"
+  ],
+  "exclude": ["**/node_modules", "**/dist", "**/.turbo"]
 }

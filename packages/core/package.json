@@ -4,22 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": {
-      "source": "./src/index.ts",
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    },
-    "./testing": {
-      "source": "./src/testing.ts",
-      "types": "./dist/testing.d.ts",
-      "default": "./dist/testing.js"
-    }
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -b",
-    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
     "lint": "oxlint --type-aware",
     "lint:arch": "eslint .",
     "test": "vitest run"

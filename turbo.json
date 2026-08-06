@@ -26,32 +26,35 @@
   // instead, and says why.
   "globalDependencies": [".npmrc"],
   "tasks": {
+    // Only real artifact builds remain (#315): `apps/web` (vite),
+    // `packages/toolkit` (CSS, vite), `apps/desktop` (its own
+    // `tsconfig.build.json`, until #316 replaces the shell). Every other
+    // package has no `build` script at all — raw-TS `exports`, resolved
+    // directly by Bun's bundler-style module resolution, nothing to emit.
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["dist/**"]
     },
     // `compile` ends by running what it built, and the artifact is ~400MB: a
     // cache hit would replay a stale smoke test and store the binary twice.
+    // No `^build` anymore: nothing upstream of `apps/session-host` builds —
+    // `bun src/compile.ts` reads workspace dependencies straight from
+    // source, the same way `bun run dev`/`bun test` always have.
     "compile": {
-      "dependsOn": ["^build"],
       "cache": false
     },
-    // `dependsOn: ["build"]` is the package's **own** build, and it is what
-    // keeps `pnpm typecheck` from corrupting `dist/`. Every package's
-    // `typecheck` script is `tsc -b` — the same command, the same emit, the
-    // same `dist/.tsbuildinfo` as `build`. With only `^build` here the two are
-    // siblings with identical dependencies, so turbo starts them together:
-    // measured overlaps of 124–676ms in ten of eleven packages, two `tsc -b`
-    // processes emitting over each other. What comes out is a `dist` with torn
-    // files in it (`packages/ui/dist/sessions/ConversationPanel.js` read back as
-    // invalid JS; `packages/plugins/github`'s entry loading as `undefined`,
-    // #118) — and worse, turbo stores that half-written tree as `build`'s cache
-    // entry, so the corruption is replayed into later runs instead of being a
-    // one-off. Own-build-first makes the second `tsc -b` a no-op check over an
-    // up-to-date project, which is what a typecheck was always meant to be.
-    // `^build` is implied: `build` already depends on it.
-    "typecheck": {
-      "dependsOn": ["build"],
+    // #315: this used to be `tsc -b` per package, gated `dependsOn: ["build"]`
+    // (the package's *own* build) specifically to keep two `tsc -b`
+    // invocations from racing over the same `dist/.tsbuildinfo` and tearing
+    // it (#118: measured 124-676ms overlaps, a `packages/plugins/github`
+    // entry that loaded as `undefined` on a cold cache). Nothing emits a
+    // `dist/` anymore, so there is no shared build artifact left to tear —
+    // `typecheck` is now a single root-scoped task (`//#typecheck`, below),
+    // the TypeScript 7 native compiler run once over the whole workspace,
+    // and the two-project (`tsconfig.json` + `tsconfig.tests.json`) split
+    // and the `dist/`-nested `.tsbuildinfo` it produced are retired with it:
+    // one project checks tests directly now.
+    "//#typecheck": {
       "outputs": []
     },
     "lint": {
@@ -65,8 +68,12 @@
     "lint:arch": {
       "outputs": []
     },
+    // #315: no longer `dependsOn: ["^build"]` — a host suite that loads a
+    // dependency's own dist (`packages/plugins/{git,github,jira}`'s
+    // `host.integration.test.ts`) now loads that package's raw `src/`
+    // directly, the same specifier the product resolves at runtime, so there
+    // is nothing left to build first.
     "test": {
-      "dependsOn": ["^build"],
       // `$TURBO_DEFAULT$` restores the normal per-package file set; the
       // `$TURBO_ROOT$`-prefixed glob adds the one file outside every package
       // this task actually reads (#306) — verified against installed turbo

@@ -6,41 +6,29 @@
  * `card.render` / `content.render` invocations gated by the host's own
  * permission and redaction machinery.
  *
- * Loaded from the **built** `dist/index.js`, not raw `src/index.ts`: unlike
- * the SDK's own single-file test fixture (`test-fixtures/test-plugin`,
- * which imports only types so it has nothing local to resolve), this
- * plugin is organized across several files with runtime `./foo.js`
- * specifiers — the shape a real, maintainable plugin has. Node's type
- * stripping does not remap those to sibling `.ts` files (`worker-entry.ts`
- * documents the same constraint for itself), so loading straight from
- * `src` here would fail for a reason that has nothing to do with the
- * plugin. `beforeAll` builds this package first, so the test is correct
- * whether or not a prior `bun run build`/`typecheck` already ran.
+ * Loads `src/index.ts` directly (#315: no build, raw-TS `exports`) — the
+ * same module the product loads in the box. This plugin is organized
+ * across several files with runtime `./foo.js` specifiers resolving to
+ * sibling `.ts` files, which Bun's module resolution (both running this
+ * suite and inside the `worker_threads` host it spawns) handles natively;
+ * that is why this file runs under `bun test`, not vitest — a vitest
+ * worker pool does not inherit Bun's loader, so it cannot resolve those
+ * specifiers (see the git/github/jira plugins' own
+ * `host.integration.test.ts` for the same fix).
  */
-import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "bun:test";
 
 import type { PermissionGrant } from "@plotroom/plugin-sdk";
 import { PluginCallRefusedError, PluginHost } from "@plotroom/plugin-sdk";
 
-const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-beforeAll(() => {
-  execFileSync("bunx", ["tsc", "-b"], {
-    cwd: packageRoot,
-    stdio: "inherit",
-  });
-}, 60_000);
-
 const hosts: PluginHost[] = [];
 const dirs: string[] = [];
 
-const moduleUrl = (): URL => new URL("../dist/index.js", import.meta.url);
+const moduleUrl = (): URL => new URL("../src/index.ts", import.meta.url);
 
 const load = async (
   grants: readonly PermissionGrant[] = [],

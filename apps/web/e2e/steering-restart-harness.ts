@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SERVER_ENTRY = fileURLToPath(
-  new URL("../../server/dist/index.js", import.meta.url),
+  new URL("../../server/src/index.ts", import.meta.url),
 );
 const WEB_DIST = fileURLToPath(new URL("../dist", import.meta.url));
 

@@ -4,9 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -b",
-    "dev": "bun --watch --conditions=source src/index.ts",
-    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
+    "dev": "bun --watch src/index.ts",
     "lint": "oxlint --type-aware",
     "lint:arch": "eslint .",
     "test": "bun test src --exclude src/plugins/conditions.test.ts --exclude src/plugins/invoker.test.ts && vitest run src/plugins/conditions.test.ts src/plugins/invoker.test.ts"

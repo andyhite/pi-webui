@@ -73,15 +73,14 @@ const PRELOAD_ENTRY = fileURLToPath(new URL("./preload.js", import.meta.url));
 
 /**
  * Same layout assumption as the rest of the monorepo (AGENTS.md): sibling
- * apps under `apps/`. `apps/server` is Track A's; this only assumes its
- * compiled entry point exists at the conventional `dist/index.js` path.
- * The packaged layout (`electron-builder.yml`'s `extraResources`)
- * preserves the same sibling relationship one level up from inside
- * `resources/app.asar`, so this resolution needs no packaged-vs-dev branch
- * (documented in `docs/deployment.md`).
+ * apps under `apps/`. #315: `apps/server` no longer builds — raw-TS
+ * `exports`, resolved directly by Bun — so this spawns `src/index.ts`
+ * itself (`spawnServer`, below, already spawns via `bun`, unaffected).
+ * Packaging (`electron-builder.yml`'s `extraResources`) is Electron-era and
+ * paused for this exact reason until #316 replaces this shell.
  */
 const SERVER_ENTRY = fileURLToPath(
-  new URL("../../server/dist/index.js", import.meta.url),
+  new URL("../../server/src/index.ts", import.meta.url),
 );
 
 export function healthProbe(port: number): HealthProbe {

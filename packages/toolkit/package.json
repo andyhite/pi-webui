@@ -4,19 +4,12 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": {
-      "source": "./src/index.ts",
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    },
+    ".": "./src/index.ts",
     "./toolkit.css": "./dist/toolkit.css"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -b && vite build",
+    "build": "vite build",
     "tokens:emit": "vite build --mode emit",
-    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
     "lint": "oxlint --type-aware",
     "lint:arch": "eslint .",
     "test": "vitest run"

@@ -6,7 +6,7 @@ import {
   type PermissionGrant,
   type PluginActor,
 } from "@plotroom/plugin-sdk";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "bun:test";
 
 import { FIXTURE_HEAD_SHA, FIXTURE_TOKEN } from "./testing/github-fixture.js";
 
@@ -16,13 +16,13 @@ import { FIXTURE_HEAD_SHA, FIXTURE_TOKEN } from "./testing/github-fixture.js";
  * injection and every dispatch are the product's, and the only thing that is not real
  * is GitHub. No test here can reach the network.
  *
- * The shipped entry (`dist/index.js`, `fetch`-backed) is loaded too, so what the
+ * The shipped entry (`src/index.ts`, `fetch`-backed, #315: no build) is loaded too, so what the
  * product would install is proved to conform and load — it is simply never invoked,
  * because invoking it would be the live call this file exists to avoid.
  */
 
-const stubEntry = new URL("../dist/testing/stub-entry.js", import.meta.url);
-const shippedEntry = new URL("../dist/index.js", import.meta.url);
+const stubEntry = new URL("../src/testing/stub-entry.ts", import.meta.url);
+const shippedEntry = new URL("../src/index.ts", import.meta.url);
 
 const coreId = (value: string): CoreId => value as unknown as CoreId;
 

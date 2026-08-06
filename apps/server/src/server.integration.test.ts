@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { humanAuthor } from "@plotroom/core";
 import { expect, afterEach, describe, it } from "bun:test";
+import { openWebSocket } from "./test-support/bun-websocket.js";
 import { loadServerConfig, type ServerConfig } from "./config.js";
 import { startServer } from "./index.js";
 
@@ -226,7 +227,7 @@ describe("server integration (Epic 2.1)", () => {
   it("streams a published domain event to a connected WS client", async () => {
     const { handle, config } = await boot();
 
-    const ws = new WebSocket(`ws://127.0.0.1:${config.port}/ws`, {
+    const ws = openWebSocket(`ws://127.0.0.1:${config.port}/ws`, {
       headers: { origin: loopbackOrigin(config.port) },
     });
 
@@ -286,7 +287,7 @@ describe("server integration (Epic 2.1)", () => {
     const { config } = await boot({ credential: "s3cret" });
 
     const opened = await new Promise<boolean>((resolve) => {
-      const ws = new WebSocket(
+      const ws = openWebSocket(
         `ws://127.0.0.1:${config.port}/ws?credential=s3cret`,
         { headers: { origin: loopbackOrigin(config.port) } },
       );

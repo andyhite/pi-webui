@@ -1,7 +1,7 @@
 /**
  * SYNC 2 GATE: canvas state = live server state.
  *
- * Spawns the real, built @plotroom/server (child process, ephemeral loopback
+ * Spawns the real @plotroom/server (child process, ephemeral loopback
  * port, temp state dir), drives mutations through /api with the real
  * createApiActions, and asserts createApiGraphDataSource — over real fetch
  * and a real WebSocket — reflects them live: the initial snapshot is
@@ -9,9 +9,10 @@
  * without a manual refetch, and an illegal wire surfaces as a refusal
  * (never a crash, never treated as success) rather than reaching the graph.
  *
- * `@plotroom/server` is a devDependency purely so turbo's `test` task
- * (`dependsOn: ["^build"]`) builds it before this runs, and so this file has
- * a compiled entry point to spawn — nothing here imports its source.
+ * `@plotroom/server` is a devDependency so this package's own dependency
+ * graph resolves it (#315: no build — the entry spawned below is
+ * `apps/server/src/index.ts` directly, via `bun`, nothing here imports its
+ * source as a module).
  *
  * `createHttpClient`/`createApiGraphDataSource` still enforce the
  * same-origin rule on every path they're given; the origin resolution a
@@ -37,7 +38,7 @@ import {
 import type { GraphSnapshot } from "@plotroom/ui";
 
 const SERVER_ENTRY = fileURLToPath(
-  new URL("../../../server/dist/index.js", import.meta.url),
+  new URL("../../../server/src/index.ts", import.meta.url),
 );
 
 /**

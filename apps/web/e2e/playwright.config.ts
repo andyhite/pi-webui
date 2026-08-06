@@ -6,10 +6,11 @@ import { defineConfig } from "@playwright/test";
  * workstream's repo, and a real Chromium tab loaded from the server's own
  * served page (single origin, spec §12) — never the Vite dev server.
  *
- * Requires `bun run build` first (root or `apps/web`/`apps/server` at minimum):
- * this suite spawns `apps/server/dist/index.js` and serves `apps/web/dist`,
- * neither of which exists until built. See `apps/web/e2e/milestone.spec.ts`'s
- * doc comment for the exact command and what the gate proves.
+ * Requires `turbo run build --filter=@plotroom/web` first: this suite serves
+ * `apps/web/dist`, which does not exist until built (#315: `apps/server` no
+ * longer builds — the spawned server entry is `apps/server/src/index.ts`
+ * directly, via `bun`). See `apps/web/e2e/milestone.spec.ts`'s doc comment
+ * for the exact command and what the gate proves.
  *
  * Deliberately not wired into `bun run verify` or turbo's `test` task: spawning
  * a real server/git repo/browser is slow and this is one hermetic gate, not

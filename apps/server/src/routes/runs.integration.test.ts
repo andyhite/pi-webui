@@ -11,6 +11,7 @@ import {
   type SessionEnd,
 } from "@plotroom/core";
 import { openDatabase, RunStore, SessionStore } from "@plotroom/db";
+import { openWebSocket } from "../test-support/bun-websocket.js";
 import { loadServerConfig, type ServerConfigOverrides } from "../config.js";
 import { startServer } from "../index.js";
 import type { RuntimeScript } from "../runtime/scripted.js";
@@ -858,7 +859,7 @@ describe("a session streams over the one event vocabulary", () => {
       notes: [{ title: "ticket", body: "do the thing" }],
     });
 
-    const ws = new WebSocket(`ws://127.0.0.1:${harness.port}/ws`, {
+    const ws = openWebSocket(`ws://127.0.0.1:${harness.port}/ws`, {
       headers: { origin: `http://localhost:${harness.port}` },
     });
     const events: DomainEvent[] = [];
