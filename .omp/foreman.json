@@ -1,0 +1,48 @@
+{
+  "repo": "andyhite/plotroom",
+  "mainBranch": "main",
+  "commitTypes": [
+    "feat",
+    "fix",
+    "docs",
+    "refactor",
+    "perf",
+    "test",
+    "build",
+    "ci",
+    "chore",
+    "style",
+    "revert"
+  ],
+  "labels": {
+    "idea": "idea",
+    "epic": "epic",
+    "task": "task",
+    "bug": "bug",
+    "bugSeverities": ["sev0", "sev1", "sev2", "sev3"]
+  },
+  "board": {
+    "owner": "andyhite",
+    "projectNumber": 1,
+    "projectNodeId": "PVT_kwHOAAESt84BfXoh",
+    "statusFieldId": "PVTSSF_lAHOAAESt84BfXohzhZrAUM",
+    "statuses": {
+      "backlog": { "name": "Backlog", "id": "dad26564" },
+      "todo": { "name": "To Do", "id": "7fdf3eaa" },
+      "inProgress": { "name": "In Progress", "id": "ae0035a4" },
+      "review": { "name": "Review", "id": "8c670574" },
+      "done": { "name": "Done", "id": "0253d807" },
+      "rejected": { "name": "Rejected", "id": "011dcc12" }
+    }
+  },
+  "commands": {
+    "packageManager": "bun",
+    "install": "bun install",
+    "check": "bun run check --filter={package}",
+    "verify": "bun verify",
+    "e2e": "bunx turbo run build --filter=@plotroom/web && bun run --filter=@plotroom/web e2e"
+  },
+  "epicLoop": {
+    "maxConcurrentTracks": 3
+  }
+}
