@@ -20,6 +20,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  state.close();
   removeStateDir(dir);
 });
 
