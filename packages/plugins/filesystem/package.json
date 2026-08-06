@@ -27,6 +27,8 @@
     "@plotroom/plugin-sdk": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^26.1.2"
+    "@types/node": "^26.1.2",
+    "@plotroom/typescript-config": "workspace:*",
+    "@plotroom/eslint-config": "workspace:*"
   }
 }

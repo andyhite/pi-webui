@@ -21,6 +21,9 @@ importers:
       '@eslint/js':
         specifier: ^9.16.0
         version: 9.39.5
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:packages/config/eslint-config
       '@types/node':
         specifier: ^26.1.2
         version: 26.1.2
@@ -64,6 +67,12 @@ importers:
         specifier: ^6.8.9
         version: 6.8.9
     devDependencies:
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:../../packages/config/eslint-config
+      '@plotroom/typescript-config':
+        specifier: workspace:*
+        version: link:../../packages/config/typescript-config
       '@types/node':
         specifier: ^26.1.2
         version: 26.1.2
@@ -73,6 +82,9 @@ importers:
       electron-builder:
         specifier: ^26.15.3
         version: 26.15.3(electron-builder-squirrel-windows@26.15.3)
+      globals:
+        specifier: ^17.9.0
+        version: 17.9.0
 
   apps/server:
     dependencies:
@@ -116,6 +128,12 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:../../packages/config/eslint-config
+      '@plotroom/typescript-config':
+        specifier: workspace:*
+        version: link:../../packages/config/typescript-config
       '@types/node':
         specifier: ^26.1.2
         version: 26.1.2
@@ -135,6 +153,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
     devDependencies:
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:../../packages/config/eslint-config
+      '@plotroom/typescript-config':
+        specifier: workspace:*
+        version: link:../../packages/config/typescript-config
       '@types/bun':
         specifier: ^1.3.4
         version: 1.3.14
@@ -160,9 +184,15 @@ importers:
       '@playwright/test':
         specifier: ^1.62.1
         version: 1.62.1
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:../../packages/config/eslint-config
       '@plotroom/server':
         specifier: workspace:*
         version: link:../server
+      '@plotroom/typescript-config':
+        specifier: workspace:*
+        version: link:../../packages/config/typescript-config
       '@types/node':
         specifier: ^26.1.2
         version: 26.1.2
@@ -179,8 +209,28 @@ importers:
         specifier: ^8.2.0
         version: 8.2.0(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)
 
+  packages/config/eslint-config:
+    dependencies:
+      '@eslint/js':
+        specifier: ^9.16.0
+        version: 9.39.5
+      eslint-config-prettier:
+        specifier: ^9.1.0
+        version: 9.1.2(eslint@9.39.5(jiti@2.7.0))
+      typescript-eslint:
+        specifier: ^8.18.0
+        version: 8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
+
+  packages/config/typescript-config: {}
+
   packages/core:
     devDependencies:
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:../config/eslint-config
+      '@plotroom/typescript-config':
+        specifier: workspace:*
+        version: link:../config/typescript-config
       '@types/node':
         specifier: ^26.1.2
         version: 26.1.2
@@ -197,6 +247,12 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@opentelemetry/api@1.9.1)(@types/better-sqlite3@7.6.13)(better-sqlite3@13.0.2)(bun-types@1.3.14)
     devDependencies:
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:../config/eslint-config
+      '@plotroom/typescript-config':
+        specifier: workspace:*
+        version: link:../config/typescript-config
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
@@ -206,6 +262,12 @@ importers:
 
   packages/plugin-sdk:
     devDependencies:
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:../config/eslint-config
+      '@plotroom/typescript-config':
+        specifier: workspace:*
+        version: link:../config/typescript-config
       '@types/node':
         specifier: ^26.1.2
         version: 26.1.2
@@ -216,33 +278,57 @@ importers:
         specifier: workspace:*
         version: link:../../plugin-sdk
     devDependencies:
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:../../config/eslint-config
+      '@plotroom/typescript-config':
+        specifier: workspace:*
+        version: link:../../config/typescript-config
       '@types/node':
         specifier: ^26.1.2
         version: 26.1.2
 
   packages/plugins/git:
     devDependencies:
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:../../config/eslint-config
       '@plotroom/plugin-sdk':
         specifier: workspace:*
         version: link:../../plugin-sdk
+      '@plotroom/typescript-config':
+        specifier: workspace:*
+        version: link:../../config/typescript-config
       '@types/node':
         specifier: ^26.1.2
         version: 26.1.2
 
   packages/plugins/github:
     devDependencies:
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:../../config/eslint-config
       '@plotroom/plugin-sdk':
         specifier: workspace:*
         version: link:../../plugin-sdk
+      '@plotroom/typescript-config':
+        specifier: workspace:*
+        version: link:../../config/typescript-config
       '@types/node':
         specifier: ^26.1.2
         version: 26.1.2
 
   packages/plugins/jira:
     devDependencies:
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:../../config/eslint-config
       '@plotroom/plugin-sdk':
         specifier: workspace:*
         version: link:../../plugin-sdk
+      '@plotroom/typescript-config':
+        specifier: workspace:*
+        version: link:../../config/typescript-config
       '@types/node':
         specifier: ^26.1.2
         version: 26.1.2
@@ -253,6 +339,12 @@ importers:
         specifier: 19.2.8
         version: 19.2.8
     devDependencies:
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:../config/eslint-config
+      '@plotroom/typescript-config':
+        specifier: workspace:*
+        version: link:../config/typescript-config
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@8.2.0(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5))
@@ -305,6 +397,12 @@ importers:
         specifier: 19.2.8
         version: 19.2.8(react@19.2.8)
     devDependencies:
+      '@plotroom/eslint-config':
+        specifier: workspace:*
+        version: link:../config/eslint-config
+      '@plotroom/typescript-config':
+        specifier: workspace:*
+        version: link:../config/typescript-config
       '@types/react':
         specifier: ^19.2.18
         version: 19.2.18

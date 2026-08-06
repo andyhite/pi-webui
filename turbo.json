@@ -1,22 +1,22 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "ui": "stream",
-  // The configuration every package's tasks read but no package contains. A
-  // task's inputs default to its own package's files, so without this a change
-  // to a shared base replays cached results for every package: relaxing an
-  // eslint rule kept reporting the old warnings, and it would be the same for
-  // a compiler option or the shared test include. The cost is that it is
-  // *global*: a lint-rule tweak busts every package's `build` and `test` cache
-  // too, which per-task `inputs` cannot fix — they may not reach above a
-  // package.
+  // What is genuinely global now (#306): shared `tsconfig`/`eslint` config
+  // moved into internal packages (`packages/config/typescript-config`,
+  // `packages/config/eslint-config`), which every consumer's `tsconfig.json`
+  // `extends` or `eslint.config.js` re-exports and declares as a
+  // `devDependency` on. That puts the shared config in the *package graph*:
+  // turbo's own dependency-based invalidation and `--affected` selection
+  // reach it precisely, through the normal "a package's task is affected by
+  // its dependencies changing" rule — no global list required, and no
+  // over-invalidation of packages that do not consume a given config.
   //
-  // The same list decides *selection*, which is the other reason to keep it
-  // complete. CI runs `turbo … --affected`, which maps changed files to
-  // packages, and a file outside every package maps to none of them — so a
-  // shared base missing from here would not merely replay a stale cache, it
-  // would select nothing at all and report green having checked nothing
-  // (measured on turbo 2.10.8: a file listed here marks every package
-  // affected, and one that is not marks none).
+  // `vitest.base.config.ts` is not (yet) one of those packages — every
+  // package's `test` script still imports it directly by relative path, so it
+  // stays a real cross-package input, but scoped to the one task that reads
+  // it (see the `test` task's `inputs` below) rather than every task. `.npmrc`
+  // stays here because it is install-time and genuinely repo-wide: no package
+  // "depends on" it the way one depends on a workspace package.
   //
   // `turbo.json` needs no entry: turbo always hashes it, and a change to it
   // already marks everything affected. `pnpm-lock.yaml` is deliberately absent
@@ -24,14 +24,7 @@
   // could be, and listing it would imply it drives selection, which it does
   // not. `.github/workflows/ci.yml` runs unfiltered on a lockfile change
   // instead, and says why.
-  "globalDependencies": [
-    "tsconfig.json",
-    "tsconfig.base.json",
-    "tsconfig.tests.base.json",
-    "eslint.config.js",
-    "vitest.base.config.ts",
-    ".npmrc"
-  ],
+  "globalDependencies": [".npmrc"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -66,6 +59,11 @@
     },
     "test": {
       "dependsOn": ["^build"],
+      // `$TURBO_DEFAULT$` restores the normal per-package file set; the
+      // `$TURBO_ROOT$`-prefixed glob adds the one file outside every package
+      // this task actually reads (#306) — verified against installed turbo
+      // 2.10.8.
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/vitest.base.config.ts"],
       "outputs": []
     },
     "dev": {

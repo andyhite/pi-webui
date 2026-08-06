@@ -27,6 +27,8 @@
     "@plotroom/core": "workspace:*"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.4"
+    "@types/bun": "^1.3.4",
+    "@plotroom/typescript-config": "workspace:*",
+    "@plotroom/eslint-config": "workspace:*"
   }
 }
