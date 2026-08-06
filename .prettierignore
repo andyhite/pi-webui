@@ -18,11 +18,3 @@ docs/design/exports/**/export-notes.md
 # `rgba(18, 20, 23, 0.4)` — the same colour and no longer the export's number —
 # and it would fight the generator's own formatting on every build.
 packages/toolkit/src/theme.generated.css
-
-# Rust/Cargo and Tauri build output (spike-shell-c308/s1-tauri-window and
-# any future apps/desktop Tauri shell)
-**/src-tauri/target/
-**/src-tauri/gen/
-
-# bun build --compile output (apps/session-host's compile script)
-apps/session-host/out/
