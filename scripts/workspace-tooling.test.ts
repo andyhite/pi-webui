@@ -13,7 +13,7 @@ import { packageTests } from "../vitest.base.config.ts";
  * is what let it drift: two packages ended up with no vitest configuration at
  * all (`packages/ui`, the largest suite here, ran on vitest's default include),
  * three typechecked no test at all, and three emitted their own tests into
- * `dist/`. Every one of those was invisible in a green `pnpm verify`, which is
+ * `dist/`. Every one of those was invisible in a green `bun run verify`, which is
  * the definition of a rule that is documented rather than enforced.
  *
  * So the contract is a test, and a deviation is a row in one of the tables below
@@ -150,26 +150,14 @@ function parseJsonc(text: string): unknown {
   return JSON.parse(out) as unknown;
 }
 
-/** What `pnpm-workspace.yaml`'s `packages:` globs expand to on disk. */
+/** What the root `package.json`'s `workspaces` globs expand to on disk. */
 function workspace(): { globs: string[]; entries: number; dirs: string[] } {
-  // Only that block: the file carries other list-valued keys
-  // (`onlyBuiltDependencies` and friends), and treating one of their entries as
-  // a package glob would fail confusingly rather than wrongly.
-  const all = read("pnpm-workspace.yaml").split("\n");
-  const start = all.findIndex((line) => /^packages:/.test(line));
-  if (start < 0) throw new Error("pnpm-workspace.yaml declares no packages");
-  const lines: string[] = [];
-  for (const line of all.slice(start + 1)) {
-    if (/^\S/.test(line)) break;
-    if (/\S/.test(line)) lines.push(line);
-  }
-  const globs = lines.flatMap((line) => {
-    // Quotes are optional in YAML, so the pattern cannot require them: a
-    // silently unparsed line would drop a whole family of packages from every
-    // assertion below, which `entries` is compared against for that reason.
-    const match = /^\s*-\s*"?([^"\s]+)"?\s*$/.exec(line);
-    return match?.[1] === undefined ? [] : [match[1]];
-  });
+  const manifest = parseJsonc(read("package.json")) as { workspaces?: unknown };
+  const globs = Array.isArray(manifest.workspaces)
+    ? manifest.workspaces.filter((g): g is string => typeof g === "string")
+    : [];
+  if (globs.length === 0)
+    throw new Error("package.json declares no workspaces");
   const dirs: string[] = [];
   for (const glob of globs) {
     const parent = glob.replace(/\/\*$/, "");
@@ -182,7 +170,7 @@ function workspace(): { globs: string[]; entries: number; dirs: string[] } {
       if (existsSync(join(repoRoot, dir, "package.json"))) dirs.push(dir);
     }
   }
-  return { globs, entries: lines.length, dirs: dirs.sort() };
+  return { globs, entries: globs.length, dirs: dirs.sort() };
 }
 
 /** Every `.ts`/`.tsx` file under a package's `src/`, tests included. */
@@ -206,7 +194,7 @@ const packages = dirs.map((dir) => ({
 }));
 
 describe("the packages this contract covers", () => {
-  it("is every one pnpm's globs expand to", () => {
+  it("is every one the workspaces globs expand to", () => {
     // A glob this test failed to parse would make every assertion below vacuous
     // for that whole family of packages.
     expect(globs).toHaveLength(entries);

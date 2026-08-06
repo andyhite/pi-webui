@@ -12,7 +12,7 @@ name: Checks
 # Nothing here needs a build, a browser or Bun, so it stays cheap enough to run
 # unconditionally — but it is two jobs and two installs rather than the four it was.
 # The three history checks share one checkout because they read the same commit
-# range, and a runner spent on a `pnpm install` to run one `git rev-list` is a
+# range, and a runner spent on a `bun install` to run one `git rev-list` is a
 # runner wasted.
 
 on:
@@ -41,7 +41,7 @@ jobs:
       - uses: ./.github/actions/setup
 
       - name: Format
-        run: pnpm format:check
+        run: bun format:check
 
   # The branch's commits, the history's shape, and the subject the squash will
   # write. One job because all three read the same commit range from the same
@@ -59,7 +59,7 @@ jobs:
       - name: Commitlint
         if: github.event.action != 'edited'
         run: >-
-          pnpm commitlint
+          bun commitlint
           --from ${{ github.event.pull_request.base.sha }}
           --to ${{ github.event.pull_request.head.sha }}
           --verbose
@@ -89,7 +89,7 @@ jobs:
       # and long lines in it: #220's own body fails `body-max-line-length` on
       # thirteen lines.
       #
-      # It matters beyond tidiness: `pnpm release` refuses any commit range
+      # It matters beyond tidiness: `bun release` refuses any commit range
       # containing a commit commitlint rejects, so one bad squash message would break
       # every later release, and whoever is cutting it would be the one to find out.
       # A `--subject` override is not linted by anything — that is the deviation, and
@@ -101,4 +101,4 @@ jobs:
       - name: Commitlint the squash subject
         env:
           SUBJECT: ${{ github.event.pull_request.title }} (#${{ github.event.pull_request.number }})
-        run: printf '%s' "$SUBJECT" | pnpm commitlint --verbose
+        run: printf '%s' "$SUBJECT" | bun commitlint --verbose

@@ -1,6 +1,6 @@
 name: Set up the workspace
 description: >-
-  pnpm, Node, optionally Bun, a frozen install, and — when the job runs turbo —
+  Bun, Node, a frozen install, and — when the job runs turbo —
   the Turborepo cache restored from this branch or from main.
 
 # One place for the toolchain versions. They were copied into six jobs across
@@ -23,23 +23,24 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: pnpm/action-setup@v4
-
-    # `cache: pnpm` caches the pnpm *store*, keyed off the lockfile, so the
-    # install below is mostly hard-linking rather than downloading.
+    # Bun caches downloads in ~/.bun/install/cache; the lockfile keys the install.
     - uses: actions/setup-node@v4
       with:
         node-version: 22
-        cache: pnpm
 
-    - if: inputs.bun == 'true'
-      uses: oven-sh/setup-bun@v2
+    - uses: oven-sh/setup-bun@v2
       with:
         bun-version: 1.3.14
 
+    - uses: actions/cache@v4
+      with:
+        path: ~/.bun/install/cache
+        key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+        restore-keys: bun-${{ runner.os }}-
+
     - name: Install
       shell: bash
-      run: pnpm install --frozen-lockfile
+      run: bun install --frozen-lockfile
 
     # Turborepo's local cache. `<root>/.turbo/cache` is where turbo 2.x writes
     # it — measured on 2.10.8, not inferred from the version that documented

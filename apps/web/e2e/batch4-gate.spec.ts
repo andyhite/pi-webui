@@ -42,8 +42,8 @@
  * row never appeared and the test failed on it, exactly as claimed; the
  * code was restored byte-identical afterward (see the batch report).
  *
- * Run locally: `pnpm build && pnpm --filter @plotroom/web e2e` (root
- * `pnpm build` — or at least `@plotroom/core`, `@plotroom/ui`,
+ * Run locally: `bun run build && bun run --filter=@plotroom/web e2e` (root
+ * `bun run build` — or at least `@plotroom/core`, `@plotroom/ui`,
  * `@plotroom/server`, and `@plotroom/web` — must have already produced
  * `apps/server/dist` and `apps/web/dist`).
  */

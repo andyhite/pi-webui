@@ -1,0 +1,11 @@
+# Bun's install policy for this workspace (#310, replacing .npmrc and
+# pnpm-workspace.yaml's non-glob settings).
+[install]
+# pnpm-strict: every package resolves only what it actually declares instead
+# of a flat, hoisted node_modules — a phantom dependency (using a transitive
+# package without declaring it) fails to resolve instead of silently working
+# until the day it does not. This is also Bun's own default for a new
+# workspace as of 1.2.19+; explicit here so it survives whatever the default
+# becomes. Fix a phantom dependency it surfaces rather than falling back to
+# the hoisted linker.
+linker = "isolated"

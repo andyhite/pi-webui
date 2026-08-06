@@ -110,7 +110,7 @@ jobs:
           # request can restore (see this file's header).
           #
           # So does a change to what is installed, or to which packages exist.
-          # Turbo reads `pnpm-lock.yaml` semantically, and on a *coherent* bump it
+          # Turbo reads `bun-lock.yaml` semantically, and on a *coherent* bump it
           # is precise — rewriting better-sqlite3's version throughout selected
           # `db` and its three dependents, and changed `@plotroom/db#lint`'s task
           # hash and no other. But an edit it cannot resolve selects **nothing**
@@ -124,14 +124,14 @@ jobs:
           # precise even where its selection is not, so the packages a bump did not
           # reach replay from cache.
           if [ "$EVENT" != "pull_request" ] ||
-            matches '^(pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|\.npmrc)$'; then
+            matches '^(bun-lock\.yaml|bun-workspace\.yaml|package\.json|\.npmrc)$'; then
             scope=
           else
             export TURBO_SCM_BASE="$BASE" TURBO_SCM_HEAD="$HEAD"
             scope=--affected
           fi
 
-          packages=$(pnpm exec turbo ls $scope --output=json | node -e '
+          packages=$(bunx turbo ls $scope --output=json | node -e '
             let json = "";
             process.stdin
               .on("data", (chunk) => (json += chunk))
@@ -204,11 +204,11 @@ jobs:
           TURBO_SCM_BASE: ${{ github.event.pull_request.base.sha }}
           TURBO_SCM_HEAD: ${{ github.sha }}
           SCOPE: ${{ needs.scope.outputs.turbo-scope }}
-        run: pnpm check $SCOPE
+        run: bun check $SCOPE
 
       # `scripts/**` is repository tooling rather than a workspace package, so
       # turbo cannot answer for it — and it is deliberately not gated either.
-      # `pnpm check:scripts` takes four seconds inside a job that is running
+      # `bun check:scripts` takes four seconds inside a job that is running
       # anyway, and the path list that would skip it was already wrong: its
       # `workspace-tooling.test.ts` reads every package's manifest, tsconfig and
       # vitest configuration (#215), so the surface is most of the repository.
@@ -220,7 +220,7 @@ jobs:
       # package's build tooling honest. "Outside the build graph" is a bad reason
       # for either to be what CI never checks.
       - name: Check the tooling
-        run: pnpm check:scripts
+        run: bun check:scripts
 
   # The W10 milestone gate: a spawned `@plotroom/server`, a real git repository
   # and a Chromium tab against the server's own served page. It runs when
@@ -244,27 +244,27 @@ jobs:
           # `compile` need Bun, and this job runs neither.
           turbo-cache: e2e
 
-      # `--filter=@plotroom/web` and not `pnpm build`: the gate serves
+      # `--filter=@plotroom/web` and not `bun build`: the gate serves
       # `apps/web/dist` and spawns `apps/server/dist/index.js`, and web's build
       # `dependsOn: ["^build"]` pulls the server and everything under it along.
       # `apps/desktop` is the only package that drops out, and nothing here
       # loads it.
       - name: Build what the gate serves
-        run: pnpm exec turbo run build --filter=@plotroom/web
+        run: bunx turbo run build --filter=@plotroom/web
 
       # ~150MB of Chromium per run otherwise. Keyed on the lockfile because that
       # is what pins the Playwright version the browser has to match.
       - uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun-lock.yaml') }}
           restore-keys: playwright-${{ runner.os }}-
 
       - name: Install Playwright's Chromium
-        run: pnpm --filter @plotroom/web exec playwright install --with-deps chromium
+        run: bunx playwright install --with-deps chromium
 
       - name: E2E
-        run: pnpm --filter @plotroom/web e2e
+        run: bun run --filter=@plotroom/web e2e
 
       # What a failed test already wrote, kept: `playwright.config.ts` sets
       # `trace: "retain-on-failure"`, so each failure leaves a trace (network
@@ -294,7 +294,7 @@ jobs:
 
   # The packaged session host is one compiled binary per platform (issue #92):
   # `bun build --compile` plus the SDK's native addon staged beside it, which
-  # `pnpm compile` produces and then runs. Bun can cross-compile, but the addon
+  # `bun compile` produces and then runs. Bun can cross-compile, but the addon
   # cannot be had for a platform this runner did not install, so this is a matrix
   # of native runners rather than one job with three targets — the same
   # constraint the installer build carries (#79).
@@ -340,4 +340,4 @@ jobs:
           turbo-cache: session-host
 
       - name: Compile the session host, and run what it built
-        run: pnpm compile
+        run: bun compile

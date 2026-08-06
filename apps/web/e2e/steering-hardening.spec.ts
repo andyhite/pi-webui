@@ -70,7 +70,7 @@
  *      drop, never a silent accept past the bound — and the operator's own
  *      broadcast is asserted unconstrained by that same bound.
  *
- * Run locally: `pnpm build && pnpm --filter @plotroom/web e2e` (root `pnpm
+ * Run locally: `bun run build && bun run --filter=@plotroom/web e2e` (root `pnpm
  * build` — or at least `@plotroom/core`, `@plotroom/ui`, `@plotroom/server`,
  * and `@plotroom/web` — must have already produced `apps/server/dist` and
  * `apps/web/dist`).
