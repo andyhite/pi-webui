@@ -1,4 +1,3 @@
-import { WebSocket } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DomainEvent } from "@plotroom/core";
 import type { RuntimeScript } from "../runtime/scripted.js";
@@ -219,9 +218,9 @@ describe("pinning (§4.4)", () => {
     });
     const events: DomainEvent[] = [];
     await new Promise<void>((resolve, reject) => {
-      ws.on("error", reject);
-      ws.on("message", (data) => {
-        const message = JSON.parse(data.toString()) as {
+      ws.addEventListener("error", reject);
+      ws.addEventListener("message", (event) => {
+        const message = JSON.parse(String(event.data)) as {
           type: string;
           event?: DomainEvent;
         };

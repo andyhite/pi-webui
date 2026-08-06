@@ -5,15 +5,13 @@
   "type": "module",
   "scripts": {
     "build": "tsc -b",
-    "dev": "tsx watch --conditions=source src/index.ts",
+    "dev": "bun --watch --conditions=source src/index.ts",
     "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
     "lint": "oxlint --type-aware",
     "lint:arch": "eslint .",
-    "test": "vitest run"
+    "test": "bunx --bun vitest run"
   },
   "dependencies": {
-    "@hono/node-server": "^1.19.17",
-    "@hono/node-ws": "^1.3.1",
     "@plotroom/core": "workspace:*",
     "@plotroom/db": "workspace:*",
     "@plotroom/plugin-filesystem": "workspace:*",
@@ -23,13 +21,11 @@
     "@plotroom/plugin-sdk": "workspace:*",
     "@plotroom/session-host": "workspace:*",
     "hono": "^4.12.33",
-    "ws": "^8.21.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/bun": "^1.3.4",
     "@types/node": "^26.1.2",
-    "@types/ws": "^8.18.1",
-    "tsx": "^4.23.5",
     "@plotroom/typescript-config": "workspace:*",
     "@plotroom/eslint-config": "workspace:*"
   }

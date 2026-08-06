@@ -7,10 +7,9 @@
  * machine, not the operator's.
  */
 import { existsSync } from "node:fs";
-import { serve, type ServerType } from "@hono/node-server";
-import { createNodeWebSocket } from "@hono/node-ws";
 import { openDatabase, SettingsStore, stateLayout } from "@plotroom/db";
 import { Hono } from "hono";
+import { type BunWebSocketData, upgradeWebSocket, websocket } from "hono/bun";
 import { configureApp } from "./app.js";
 import { checkBindPolicy } from "./security/bind-policy.js";
 import { loadServerConfig } from "./config.js";
@@ -127,7 +126,6 @@ export function startServer(config = loadServerConfig()) {
   }
 
   const app = new Hono();
-  const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
   const runtime = configureApp(app, {
     config: effectiveConfig,
     // `config` (unmodified by any stored override) is what a removed override
@@ -177,62 +175,41 @@ export function startServer(config = loadServerConfig()) {
   });
 
   /**
-   * Binds `app.fetch` at `host`:`port` and resolves once `listen()` actually
-   * succeeds — resolving from the socket's own address, never the arguments,
-   * because port 0 means "whichever the OS has free" and only the socket knows
-   * what it got. Rejects on a bind failure, which is otherwise an `error` event
-   * nobody is listening to: the process dies with a raw stack far from the call
-   * that caused it. That listener is detached the moment this settles — a
-   * socket error *after* the bind (accept-time `EMFILE`, say) has nothing to do
-   * with starting up, and delivering it to a settled promise would discard it
-   * silently.
+   * Binds `app.fetch` (and the WS upgrade, via the `websocket` handler passed
+   * to `Bun.serve`) at `host`:`port`. Bun binds synchronously — `Bun.serve`
+   * either returns an already-listening server or throws, with none of
+   * Node's `http.Server` async "listening"/"error" race to arbitrate. The
+   * bound address is still read back from the socket (`srv.hostname`/
+   * `srv.port`), never from the arguments, because port `0` means "whichever
+   * the OS has free" and only the socket knows what it got.
    */
   interface BoundListener {
-    readonly server: ServerType;
+    readonly server: Bun.Server<BunWebSocketData>;
     readonly host: string;
     readonly port: number;
   }
 
-  // The executor form because this project's `lib` predates
-  // `Promise.withResolvers` (`apps/server/src/runtime/omp.ts` states the same
-  // reason).
-  function attemptBind(host: string, port: number): Promise<BoundListener> {
-    return new Promise((resolve, reject) => {
-      const srv = serve({ fetch: app.fetch, port, hostname: host });
-      const failed = (err: unknown) => {
-        srv.off("listening", ready);
-        reject(err);
-      };
-      const ready = () => {
-        srv.off("error", failed);
-        const address = srv.address();
-        if (address === null || typeof address === "string") {
-          reject(
-            new Error(
-              `${SERVER_NAME}: listening on ${String(address)}, which carries no port`,
-            ),
-          );
-          return;
-        }
-        resolve({ server: srv, host: address.address, port: address.port });
-      };
-      srv.once("error", failed);
-      if (srv.listening) ready();
-      else srv.once("listening", ready);
+  function attemptBind(host: string, port: number): BoundListener {
+    const srv = Bun.serve({
+      fetch: app.fetch,
+      websocket,
+      port,
+      hostname: host,
     });
+    return { server: srv, host: srv.hostname ?? host, port: srv.port ?? port };
   }
 
-  let boundServer: ServerType | undefined;
+  let boundServer: Bun.Server<BunWebSocketData> | undefined;
 
   /**
    * A stored `host` or `port` that is *legal* — it passed `checkBindPolicy`
    * and the catalog's bound — can still be unbindable on this machine: a port
    * already in use, an address this machine does not have (#87). No bound can
-   * catch that ahead of time, only the failed `listen()` itself, which is why
-   * this retries with the env-derived default rather than letting the process
-   * exit on every subsequent boot. A failure on a value that was *not* a
-   * stored override (nothing to fall back to beyond what the caller already
-   * asked for) still propagates, exactly as before.
+   * catch that ahead of time, only the failed bind itself, which is why this
+   * retries with the env-derived default rather than letting the process exit
+   * on every subsequent boot. A failure on a value that was *not* a stored
+   * override (nothing to fall back to beyond what the caller already asked
+   * for) still propagates, exactly as before.
    */
   type OverriddenKey = "host" | "port";
 
@@ -245,7 +222,7 @@ export function startServer(config = loadServerConfig()) {
   const listening: Promise<{ host: string; port: number }> = (async () => {
     let bound;
     try {
-      bound = await attemptBind(effectiveConfig.host, effectiveConfig.port);
+      bound = attemptBind(effectiveConfig.host, effectiveConfig.port);
     } catch (err) {
       const overridden = (["host", "port"] as const).filter(
         (key) => effectiveConfig[key] !== config[key],
@@ -280,7 +257,7 @@ export function startServer(config = loadServerConfig()) {
           ? config.port
           : effectiveConfig.port;
         try {
-          bound = await attemptBind(host, port);
+          bound = attemptBind(host, port);
         } catch (retryErr) {
           lastErr = retryErr;
           continue;
@@ -305,7 +282,6 @@ export function startServer(config = loadServerConfig()) {
     }
 
     boundServer = bound.server;
-    injectWebSocket(boundServer);
     // Both from the socket, never from the config: under `port: 0` the
     // configured port is literally `0`, and a startup line that says so is
     // worse than no line. `address.address` is the same for `host` — a
@@ -381,20 +357,13 @@ export function startServer(config = loadServerConfig()) {
       // the stored value and the env-derived fallback were refused) — nothing
       // is listening, so there is nothing to close beyond the database.
       await listening.catch(() => {});
-      // The executor form because this project's `lib` predates
-      // `Promise.withResolvers` (`apps/server/src/runtime/omp.ts` states the
-      // same reason).
-      await new Promise<void>((resolve) => {
-        if (boundServer) {
-          boundServer.close(() => {
-            db.close();
-            resolve();
-          });
-        } else {
-          db.close();
-          resolve();
-        }
-      });
+      if (boundServer) {
+        // `stop()` defaults to graceful (waits out in-flight requests/WS); a
+        // close that had to force the issue would defeat the point of
+        // draining the runtime above first.
+        await boundServer.stop();
+      }
+      db.close();
     },
   };
 }

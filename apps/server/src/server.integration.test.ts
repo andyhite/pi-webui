@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { humanAuthor } from "@plotroom/core";
 import { afterEach, describe, expect, it } from "vitest";
-import WebSocket from "ws";
 import { loadServerConfig, type ServerConfig } from "./config.js";
 import { startServer } from "./index.js";
 
@@ -233,9 +232,9 @@ describe("server integration (Epic 2.1)", () => {
 
     const messages: unknown[] = [];
     await new Promise<void>((resolve, reject) => {
-      ws.on("error", reject);
-      ws.on("message", (data) => {
-        messages.push(JSON.parse(data.toString()));
+      ws.addEventListener("error", reject);
+      ws.addEventListener("message", (event) => {
+        messages.push(JSON.parse(String(event.data)));
         if (messages.length === 1) {
           handle.bus.publish({
             entity: "workstream",
@@ -266,16 +265,9 @@ describe("server integration (Epic 2.1)", () => {
   it("refuses a WS upgrade from an untrusted origin", async () => {
     const { config } = await boot();
 
-    const rejection = await new Promise<number | undefined>((resolve) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${config.port}/ws`, {
-        headers: { origin: "https://evil.example.com" },
-      });
-      ws.on("unexpected-response", (_req, res) => {
-        resolve(res.statusCode);
-        ws.terminate();
-      });
-      ws.on("error", () => resolve(undefined));
-    });
+    const rejection = await fetch(`http://127.0.0.1:${config.port}/ws`, {
+      headers: { origin: "https://evil.example.com" },
+    }).then((response) => response.status);
 
     expect(rejection).toBe(403);
   });
@@ -283,16 +275,9 @@ describe("server integration (Epic 2.1)", () => {
   it("refuses a WS upgrade missing the required credential", async () => {
     const { config } = await boot({ credential: "s3cret" });
 
-    const rejection = await new Promise<number | undefined>((resolve) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${config.port}/ws`, {
-        headers: { origin: loopbackOrigin(config.port) },
-      });
-      ws.on("unexpected-response", (_req, res) => {
-        resolve(res.statusCode);
-        ws.terminate();
-      });
-      ws.on("error", () => resolve(undefined));
-    });
+    const rejection = await fetch(`http://127.0.0.1:${config.port}/ws`, {
+      headers: { origin: loopbackOrigin(config.port) },
+    }).then((response) => response.status);
 
     expect(rejection).toBe(401);
   });
@@ -305,12 +290,11 @@ describe("server integration (Epic 2.1)", () => {
         `ws://127.0.0.1:${config.port}/ws?credential=s3cret`,
         { headers: { origin: loopbackOrigin(config.port) } },
       );
-      ws.on("open", () => {
+      ws.addEventListener("open", () => {
         resolve(true);
         ws.close();
       });
-      ws.on("unexpected-response", () => resolve(false));
-      ws.on("error", () => resolve(false));
+      ws.addEventListener("error", () => resolve(false));
     });
 
     expect(opened).toBe(true);
