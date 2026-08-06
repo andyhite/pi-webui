@@ -51,8 +51,8 @@ const NOT_VITEST: Record<string, { test: string; why: string }> = {
     why: "Bun runtime, `bun:test` (decision 0005)",
   },
   "packages/db": {
-    test: "bun test src",
-    why: "`client.ts` imports `bun:sqlite` (#313); Vitest's worker pool spawns processes that cannot resolve it, confirmed empirically",
+    test: "bun test src --timeout 20000",
+    why: "`client.ts` imports `bun:sqlite` (#313); Vitest's worker pool spawns processes that cannot resolve it, confirmed empirically. The wider timeout accommodates windows-latest's measured real-file-I/O slowness on the heavier migration fixtures.",
   },
 };
 

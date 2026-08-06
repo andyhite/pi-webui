@@ -22,25 +22,31 @@ import { rmSync } from "node:fs";
  * moved on from `better-sqlite3`).
  *
  * `Bun.gc(true)` forces the collection pass that finalizes those statements
- * and releases the handle; retrying the removal a bounded number of times
- * with a short synchronous sleep between attempts covers the (rare, but
- * observed) case where a GC pass alone is not enough — the same shape Node's
- * own `fs.rm`/`fs.rmSync` ship as `maxRetries`/`retryDelay` options for
- * exactly this platform behavior, which this driver cannot use directly
- * because they retry the syscall on a timer without ever forcing the GC pass
- * the handle here is actually waiting on.
+ * and releases the handle. A single pass is not reliably enough on a CI
+ * Windows runner (measured: some directories still failed after a fixed 10
+ * attempts / ~1s ceiling — a longer, but still bounded, retry window is what
+ * actually clears it, not a different mechanism), so this retries with
+ * backoff up to several seconds, forcing GC again only every few attempts
+ * (each pass is a real stop-the-world collection; calling it on every
+ * attempt when the wait itself is what the handle needs would just add
+ * latency for no benefit). This is the same shape Node's own
+ * `fs.rm`/`fs.rmSync` ship as `maxRetries`/`retryDelay` options for exactly
+ * this platform behavior — adapted rather than reused directly because those
+ * retry the syscall on a timer without ever forcing the GC pass the handle
+ * here is actually waiting on.
  */
 export function removeStateDir(dir: string): void {
-  const maxAttempts = 10;
+  const maxAttempts = 30;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       rmSync(dir, { recursive: true, force: true });
       return;
     } catch (error) {
-      if (!isTransientWindowsLock(error) || attempt === maxAttempts)
+      if (!isTransientWindowsLock(error) || attempt === maxAttempts) {
         throw error;
-      Bun.gc(true);
-      Bun.sleepSync(20 * attempt);
+      }
+      if (attempt % 3 === 1) Bun.gc(true);
+      Bun.sleepSync(Math.min(50 * attempt, 300));
     }
   }
 }
