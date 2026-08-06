@@ -8,9 +8,10 @@ is judged against it, and a proposal that violates one of its governing
 principles is an amendment to the thesis, not a feature.
 
 `.omp/RULES.md` holds the hard rules. This file is the background: layout,
-toolchain, conventions, and the delivery workflow. The skills under
-`.omp/skills/` are the operating manual for the workflow — read the relevant
-skill before acting, don't improvise from memory.
+toolchain, conventions, and the delivery workflow. The workflow itself — the
+tracker, worktrees, the dev loop, verification, the QA gate, stacked PRs — is
+provided by the **foreman** extension (`/foreman:help`); read the relevant
+`skill://` before acting, don't improvise from memory.
 
 ## Documentation
 
@@ -42,35 +43,36 @@ tree, the doc is stale — file it.
 | `apps/session-host`   | `@plotroom/session-host` | Bun sidecar embedding omp as the session runtime; tests run under `bun test`; ships as a compiled binary |
 | `apps/desktop`        | `@plotroom/desktop`      | Electron desktop shell (spawn-or-attach to a local server, or a remembered remote backend)               |
 | `packages/core`       | `@plotroom/core`         | Domain model and **rule predicates** — every product rule lives here once, called by every surface       |
-| `packages/db`         | `@plotroom/db`           | Persistence (better-sqlite3)                                                                             |
+| `packages/db`         | `@plotroom/db`           | Persistence (drizzle-orm over `bun:sqlite`); its suite runs under `bun test`                             |
 | `packages/toolkit`    | `@plotroom/toolkit`      | Design tokens and theme; `theme.generated.css` is generated — never hand-edit it                         |
 | `packages/ui`         | `@plotroom/ui`           | Shared UI components (panels, conversation surfaces)                                                     |
 | `packages/plugin-sdk` | `@plotroom/plugin-sdk`   | SDK plugins are built against                                                                            |
 | `packages/plugins/*`  | `@plotroom/plugin-*`     | Integrations (`filesystem`, `git`, `github`, `jira`) — they populate core concepts, never add new ones   |
-| `scripts/`            | —                        | Repo tooling and the release script; outside the turbo graph, checked by `pnpm check:scripts`            |
+| `scripts/`            | —                        | Repo tooling and the release script; outside the turbo graph, checked by `bun check:scripts`             |
 
 ## Toolchain and commands
 
-pnpm 9 (`packageManager` pinned), Node ≥ 22.18, turborepo, vitest
-(`apps/session-host` uses `bun test`), ESLint flat config, Prettier, husky +
+Bun 1.3.14 (`packageManager` pinned, `bun.lock`), Node ≥ 22.18, turborepo,
+vitest (`apps/session-host` and `packages/db` use `bun test`), oxlint
+(`--type-aware`) for `lint` plus an ESLint flat config for `lint:arch`,
+`tsgo` (TypeScript native preview) for typecheck, Prettier, husky +
 commitlint.
 
-| Command                           | What it does                                                    |
-| --------------------------------- | --------------------------------------------------------------- |
-| `pnpm dev`                        | Dev servers via turbo                                           |
-| `pnpm build`                      | Build everything                                                |
-| `pnpm check`                      | `turbo run typecheck lint test` (add `--filter=<pkg>` to scope) |
-| `pnpm check:scripts`              | Typecheck + lint + test for `scripts/`                          |
-| `pnpm verify`                     | `format:check` + `check` + `check:scripts` — the pre-PR gate    |
-| `pnpm --filter @plotroom/web e2e` | The Playwright e2e gate (build `@plotroom/web` first)           |
-| `pnpm format`                     | Prettier over the repo                                          |
+| Command                              | What it does                                                                  |
+| ------------------------------------ | ----------------------------------------------------------------------------- |
+| `bun dev`                            | Dev servers via turbo                                                         |
+| `bun build`                          | Build everything (only `web`, `toolkit`, `desktop` emit artifacts)            |
+| `bun check`                          | `turbo run typecheck lint lint:arch test` (add `--filter=<pkg>`)              |
+| `bun check:scripts`                  | Lint + test for `scripts/`                                                    |
+| `bun verify`                         | `format:check` + `check` + `check:scripts` — the pre-PR gate                  |
+| `bun run --filter=@plotroom/web e2e` | The Playwright e2e gate (`bunx turbo run build --filter=@plotroom/web` first) |
+| `bun compile`                        | Compile the session-host binary and run its smoke test                        |
+| `bun format`                         | Prettier over the repo                                                        |
 
-Turbo quirk that matters: `typecheck` depends on the package's **own** `build`
-because both are `tsc -b` over the same `dist/` — never run two of them
-concurrently in one package by hand, you'll tear `dist/`. Use one turbo
-invocation (`pnpm check --filter=…`) and let the graph order them. The
-`verification` skill has the full ladder from per-file feedback to the pre-PR
-gate.
+Nothing but `web`, `toolkit`, and `desktop` emits a `dist/` (#315): every
+other package exports raw TS, and `typecheck` is one root-scoped `tsgo` run
+over the whole workspace rather than a per-package `tsc -b`. `skill://verification`
+has the full ladder from per-file feedback to the pre-PR gate.
 
 ## Git conventions
 
@@ -78,12 +80,13 @@ gate.
   `feat fix docs refactor perf test build ci chore style revert`. Issue work
   uses `<type>/<issue>-<slug>` (e.g. `fix/291-actor-identity-gate`) in a
   worktree named `plotroom-<issue>-<slug>`, a sibling of the primary checkout —
-  see the `worktree` skill.
+  see `skill://worktree`.
 - **Commits:** Conventional Commits, enforced by commitlint — header ≤ 72
   chars, lower-case subject, no trailing period, kebab-case scope, body lines
   ≤ 100. One logical change per commit.
-- **Hooks:** pre-commit refuses commits on `main`, checks the branch name, and
-  runs `pnpm format:check` over the whole repo; commit-msg runs commitlint.
+- **Hooks:** pre-commit refuses commits on `main` (the `ALLOW_MAIN_COMMIT=1`
+  override is the operator's, never an agent's), checks the branch name, and
+  runs `bun format:check` over the whole repo; commit-msg runs commitlint.
 - **`main` is linear and never rewritten.** Nothing reaches it except a pull
   request, squashed or fast-forwarded after a rebase onto `origin/main` —
   and **only the operator merges**: the merge is the approval, an operator
@@ -92,8 +95,13 @@ gate.
 ## CI
 
 - `ci.yml` — code checks scoped by `turbo --affected`: one job runs
-  `pnpm check` + `pnpm check:scripts`; the e2e gate runs when `@plotroom/web`
+  `bun check` + `bun check:scripts`; the e2e gate runs when `@plotroom/web`
   is affected; the session-host binary matrix runs when it is.
+- `install.yml` — a frozen-lockfile install, the `@plotroom/db` suite, and the
+  FTS5 probe on all three OSes; triggered by manifest/lockfile/`packages/db`
+  changes.
+- `spike.yml` — the omp SDK spike suite against a real model; nightly and on a
+  session-host pin bump.
 - `checks.yml` — formatting, commit messages, and history shape; runs on every
   change with no path filter.
 - Documentation-shaped paths (`docs/**`, root `*.md`, `.omp/**`,
@@ -103,28 +111,32 @@ gate.
 
 Work is tracked in GitHub Issues on the **PlotRoom project board** (project
 `#1`, statuses `Backlog → To Do → In Progress → Review → Done`, plus
-`Rejected`). The `tracker` skill holds the canonical lifecycle, label
-vocabulary, board IDs, and the exact `gh` recipes — treat it as the single
-source of truth for anything tracker-shaped.
+`Rejected`), driven by the **foreman** extension. `skill://tracker` holds the
+canonical lifecycle, label vocabulary, and the exact `gh` recipes; the board
+IDs, label names, commit types, and check/verify/e2e commands foreman uses for
+this repo live in `.omp/foreman.json`, written by `/foreman:init`. Treat those
+two together as the single source of truth for anything tracker-shaped — and
+run `/foreman:doctor` when one of them stops matching GitHub.
 
 The shape: **ideas** (label `idea`) are recorded cheaply and groomed later into
 an **epic** or a **task** — or rejected. **Tasks** are small, single-PR units;
 anything bigger is an epic broken into task sub-issues. **Bugs** keep a
 severity-suffixed label (`bug:sev0`–`bug:sev3`) for life and skip the idea
 stage. Epics derive their status from their subtasks, and chains of dependent
-subtasks ship as **stacked pull requests** (`stacked-prs` skill) so review
+subtasks ship as **stacked pull requests** (`skill://stacked-prs`) so review
 never blocks the next layer.
 
-| To…                         | Use                                                     |
-| --------------------------- | ------------------------------------------------------- |
-| Record an idea              | `/plotroom:record <note>` — or the `tracker` skill      |
-| File and triage a bug       | `/plotroom:triage <report>` — or the `bug-triage` skill |
-| Groom ideas and the backlog | `/plotroom:groom [issue]` — the `grooming` skill        |
-| Deliver a task or bug       | `/plotroom:work <issue>` — the `dev-loop` skill         |
-| Deliver an epic             | `/plotroom:orchestrate <epic>` — the `epic-loop` skill  |
-| Snapshot the board          | `/plotroom:report`                                      |
+| To…                         | Use                                                  |
+| --------------------------- | ---------------------------------------------------- |
+| Record an idea              | `/foreman:record <note>` — or `skill://tracker`      |
+| File and triage a bug       | `/foreman:triage <report>` — or `skill://bug-triage` |
+| Groom ideas and the backlog | `/foreman:groom [issue]` — `skill://grooming`        |
+| Deliver a task or bug       | `/foreman:work <issue>` — `skill://dev-loop`         |
+| Deliver an epic             | `/foreman:orchestrate <epic>` — `skill://epic-loop`  |
+| Snapshot the board          | `/foreman:report`                                    |
+| Explain any of the above    | `/foreman:help [command\|skill\|agent]`              |
 
-Project agents: `planner` (read-only implementation planning), `qa` (the QA
+Foreman agents: `planner` (read-only implementation planning), `qa` (the QA
 gate — independent review plus e2e coverage), `issue-worker` (executes the
 full dev loop for one issue; what the epic orchestrator dispatches).
 

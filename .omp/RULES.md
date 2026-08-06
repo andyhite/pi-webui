@@ -1,42 +1,45 @@
 # PlotRoom — hard rules
 
-Several agents and the operator are working in this repository right now, on
-different branches, in different worktrees, and none of them can see each
-other's context. `AGENTS.md` is the full description of the conventions; these
-are the ones that must stay in view.
+The delivery workflow — issues, the board, worktrees, PRs, the QA gate, who
+merges — belongs to the **foreman** extension. Read its skills
+(`skill://tracker`, `skill://dev-loop`, `skill://worktree`,
+`skill://verification`, …) rather than improvising, and treat
+`.omp/foreman.json` as the source of truth for this repo's board, labels, and
+commands. `AGENTS.md` is the background: layout, toolchain, conventions.
 
-- **One issue, one branch, one worktree, one writer.** Work in a worktree of
-  your own, never on `main`, and never by switching the primary checkout's
-  branch.
+These are the rules foreman can't know — this product, this repository.
+
+## Working alongside others
+
+- **One issue, one branch, one worktree, one writer.** Never work on `main`,
+  never switch the primary checkout's branch.
 - **A worktree you did not create belongs to another session.** Read it if you
   are reviewing it; never edit, commit, install, build, or remove it.
-- **Move tracked state the moment it changes** — claim the issue (`In
-Progress`) before your first edit, record a blocker as an issue comment when
-  it becomes true, `Review` when the PR opens, `Done` only after merge and
-  cleanup. The board is the only shared memory; an item nobody moved reads as
-  work available. The `tracker` skill is the single source of truth for
-  statuses, labels, and recipes.
-- **Nothing reaches `main` except a pull request, and only the operator
-  merges it.** The merge **is** the approval; an operator comment on an open
-  PR **is** a change request — back to `In Progress`, address it, return to
-  `Review`. An agent merges **only on the operator's explicit instruction**
-  — never on its own judgment — and never pushes to `main` (branch
-  protection rejects it anyway), no local fast-forward,
-  no exception for one line. `main` stays linear: squash or fast-forward,
-  never a merge commit; keep the PR rebased onto `origin/main` while it
-  waits.
-- **Conventional Commits**, one logical change per commit; branches are
-  `<type>/<slug>` (issue work: `<type>/<issue>-<slug>`).
-- **Green `pnpm verify` is not proof.** It shows nothing broke, not that what
-  you built works — exercise the change itself, and run
-  `pnpm --filter @plotroom/web e2e` when you touched a surface it covers.
+- **The board is the only shared memory.** Move tracked state the moment it
+  changes; an item nobody moved reads as work available.
+
+## The product
+
+- **`docs/product-spec.md` is the thesis.** Every change is judged against it.
+  A proposal that violates a governing principle is an amendment to the spec,
+  not a feature — say so and get the operator's sign-off before building it.
+- **Rules are enforced, not documented.** One predicate in `@plotroom/core`,
+  called by every surface; never re-derive a rule at a call site. The
+  `lint:arch` pass exists to catch exactly that.
+- **Never truncate silently.** Content that was cut says so.
 - **Bugs stay bugs.** Severity rides the label (`bug:sev0`–`bug:sev3`),
   assigned at triage; a bug is never relabeled task or epic.
-- **A task without an epic must be tiny** — one small PR. Anything more gets
-  an epic and a breakdown before work starts.
-- **Rules are enforced, not documented.** One predicate in `@plotroom/core`,
-  called by every surface; never re-derive a rule at a call site.
-- **Never truncate silently.** Content that was cut says so.
 - **A documentation edit is never the price of merging something else.**
-- **Clean up after yourself, and only after yourself.** A task is not complete
-  while its worktree still exists.
+
+## The toolchain
+
+- **Bun, not pnpm/npm/yarn.** `bun@1.3.14` is pinned, `bun.lock` is the
+  lockfile, `bunx` replaces `npx`. Older `docs/` prose still says pnpm; it is
+  stale — `package.json` and `.github/workflows/` are the authority.
+- **Green `bun verify` is not proof.** It shows nothing broke, not that what
+  you built works — exercise the change itself, and run the e2e gate
+  (`bun run --filter=@plotroom/web e2e`, after building `@plotroom/web`) when
+  you touched a surface it covers.
+- **Generated files are never hand-edited** —
+  `packages/toolkit/src/theme.generated.css` comes from the token table,
+  `bun.lock` from Bun.
