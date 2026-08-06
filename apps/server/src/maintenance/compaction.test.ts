@@ -1,4 +1,5 @@
-import { describe, expect, it, mock } from "bun:test";
+import { expect } from "vitest";
+import { describe, it, mock } from "bun:test";
 import type { CompactionResult, Maintenance } from "@plotroom/db";
 import { Logger } from "../logging/logger.js";
 import {
@@ -85,8 +86,7 @@ describe("the compaction job (Epic 2.3, §15-3)", () => {
   });
 
   it("keeps sweeping after one sweep fails", () => {
-    const compact = mock
-      .fn<() => CompactionResult>()
+    const compact = mock<() => CompactionResult>()
       .mockImplementationOnce(() => {
         throw new Error("disk on fire");
       })

@@ -1,8 +1,9 @@
+import { expect } from "vitest";
 import { createHash } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, it } from "bun:test";
 import {
   ConnectionRefused,
   GraphStore,

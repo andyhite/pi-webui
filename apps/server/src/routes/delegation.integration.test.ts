@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { expect } from "vitest";
+import { afterEach, describe, it } from "bun:test";
 import type { RuntimeScript } from "../runtime/scripted.js";
 import {
   at,

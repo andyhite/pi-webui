@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { expect } from "vitest";
+import { afterEach, describe, it } from "bun:test";
 import { at, boot, cleanupHarnesses, list } from "../testing/harness.js";
 
 /**

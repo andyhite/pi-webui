@@ -1,3 +1,4 @@
+import { expect } from "vitest";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +9,7 @@ import type {
   RuntimeSessionHandle,
   SessionRuntimeAdapter,
 } from "@plotroom/core";
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, it } from "bun:test";
 
 import { createOmpRuntime, FRAME_FD } from "./omp.js";
 

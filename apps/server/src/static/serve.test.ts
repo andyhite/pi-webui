@@ -1,8 +1,9 @@
+import { expect } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, it } from "bun:test";
 import { serveRenderer } from "./serve.js";
 
 describe("serveRenderer (Epic 3.0 single-origin serving)", () => {

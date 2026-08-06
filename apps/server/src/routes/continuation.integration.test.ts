@@ -1,7 +1,8 @@
+import { expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, it } from "bun:test";
 import { openDatabase, WorkspaceStore } from "@plotroom/db";
 import type { RuntimeScript } from "../runtime/scripted.js";
 import {
