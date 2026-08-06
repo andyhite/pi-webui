@@ -1,55 +1,67 @@
 name: Install
 
-# A full `bun install --frozen-lockfile` **with scripts**, on Windows, followed by
-# a round trip through the SQLite binding it installs (#183).
+# A full `bun install --frozen-lockfile` on every OS `@plotroom/db` ships to, plus
+# that package's own suite run on each of them under `bun:sqlite` (#313), plus
+# #312's FTS5 platform gate.
 #
 # Its own workflow with its own trigger filter, because unlike every other job this
-# one's surface really is a list of files: it tests *installing*, so what can change
-# its answer is the lockfile, a manifest, `bunfig.toml`, the workspace definition, or the
-# way this job runs — and nothing else in the repository can. A path filter here
-# costs zero runner minutes on the changes that cannot affect it, where a job gated
-# on the dependency graph (see `ci.yml`) would still have to start a runner to be
-# told the graph is irrelevant.
+# one's surface really is a list of files: the lockfile, a manifest, `bunfig.toml`,
+# the workspace definition, this workflow itself, or `packages/db` — and nothing
+# else in the repository can change its answer. A path filter here costs zero
+# runner minutes on the changes that cannot affect it, where a job gated on the
+# dependency graph (see `ci.yml`) would still have to start a runner to be told the
+# graph is irrelevant.
 #
 # The tradeoff of filtering at the trigger: a workflow that never starts reports
 # neither success nor failure, so this cannot be a required check under branch
 # protection. `ci.yml`'s jobs can, because they are gated per job rather than per
 # trigger.
 #
-# Windows is the only platform where this can regress, and it regressed silently:
-# `better-sqlite3` carries a `binding.gyp` at its package root, so Bun runs
-# the default `install: node-gyp rebuild` for it even though it ships an N-API
-# prebuild per platform and needs no compiler — and node-gyp 10.2.0 does not
-# recognise the Visual Studio the runner image now ships ("unknown version
-# \"undefined\" found at .../Visual Studio\\18"). The fix is
-# `trustedDependencies`, and the thing that keeps it fixed is this job:
-# without it, the next dependency that wants a compiler is found by whoever tries to
-# build the Windows installer (#79), not by CI.
+# ## History: why this workflow exists, and why its Windows job changed shape twice
 #
-# The last step exercises the binding rather than running `@plotroom/db`'s suite.
-# That was the first shape of this job and it failed — for reasons that have nothing
-# to do with installing: 21 of its tests tear down with `EBUSY: resource busy or
-# locked, unlink ...\plotroom.db`, because Windows refuses to delete a file that
-# still has an open handle and `afterEach` removes the state directory straight
-# after `close()`. Filed as #202. Running it here would have made this job's red
-# mean two unrelated things, and the one it exists to catch is the install.
+# It began (#183) as a full `bun install --frozen-lockfile` **with scripts** on
+# Windows, because `better-sqlite3` carried a `binding.gyp` at its package root and
+# Bun ran the default `install: node-gyp rebuild` for it even though it shipped an
+# N-API prebuild per platform and needed no compiler — and node-gyp 10.2.0 did not
+# recognise the Visual Studio the runner image shipped. The fix was
+# `trustedDependencies`, and this job was what kept it fixed.
 #
-# `fts5-platform-gate` (#312) lives in this workflow rather than `ci.yml` for the
-# same reason the `windows` job does: it is not a function of the dependency graph
-# `ci.yml`'s `--affected` scoping reads, it is a function of *which OS*. Bun's own
-# docs make no promise about FTS5 or which SQLite compile flags its bundled build
-# carries, and Linux/Windows (Bun's static SQLite) vs. macOS (Apple's system
-# SQLite) makes platform variance plausible, not hypothetical. It is the gate in
-# front of #313 (bun:sqlite as the single driver): the probe
+# That job's first shape ran `@plotroom/db`'s suite directly and it failed — for
+# reasons that had nothing to do with installing: 21 of its tests tore down with
+# `EBUSY: resource busy or locked, unlink ...\plotroom.db`, because Windows refuses
+# to delete a file that still has an open handle and `afterEach` removed the state
+# directory straight after `close()`. Filed as #202. Running the suite there would
+# have made that job's red mean two unrelated things, so it was narrowed to a
+# round trip through the compiled binding instead — install, then load and query
+# `better-sqlite3` directly, asserting the *prebuild* loaded rather than a
+# freshly-compiled `.node`.
+#
+# #313 replaced that driver with `bun:sqlite` (no native binding, no
+# `binding.gyp`, nothing to compile), which retires the binding round trip and
+# reopens the original question `better-sqlite3` blocked: does the suite actually
+# pass on Windows? `db-suite` below is that answer, run fresh on all three OSes
+# rather than assumed from Linux — see #202 for the recorded result and whether
+# the swap moots the EBUSY finding outright (a Windows-only WAL/journal handle a
+# different driver holds differently) or merely changes which driver would need
+# the retry.
+#
+# `fts5-platform-gate` (#312) lives in this workflow for the same reason
+# `db-suite` does: it is not a function of the dependency graph `ci.yml`'s
+# `--affected` scoping reads, it is a function of *which OS*. Bun's own docs make
+# no promise about FTS5 or which SQLite compile flags its bundled build carries,
+# and Linux/Windows (Bun's static SQLite) vs. macOS (Apple's system SQLite) makes
+# platform variance plausible, not hypothetical. It is the gate in front of #313
+# (bun:sqlite as the single driver): the probe
 # (`packages/db/bun-probes/fts5-platform.test.ts`) creates an `fts5` virtual table
 # shaped exactly like `packages/db/src/search.ts`'s, exercises `MATCH`,
 # `snippet()`, and weighted `bm25()`, and checks
 # `sqlite_compileoption_used('ENABLE_FTS5')` — under `bun test`, not vitest,
 # because it imports `bun:sqlite` directly (see the probe file's own header for
-# why it is not under `src/`). This job does not pre-decide a fallback: if a
-# platform fails, #312's own fallback (`Database.setCustomSQLite()` with a shipped
-# SQLite library) is implemented on the same branch and this job re-run, not
-# skipped.
+# why it is not under `src/`). This job did not pre-decide a fallback: if a
+# platform had failed, #312's own fallback (`Database.setCustomSQLite()` with a
+# shipped SQLite library) would have been implemented on the same branch and this
+# job re-run, not skipped. See #309 for the addendum recording the measured
+# per-OS result.
 
 on:
   push:
@@ -63,13 +75,16 @@ on:
       - "bunfig.toml"
       - ".github/workflows/install.yml"
       - ".github/actions/setup/action.yml"
+      # `@plotroom/db`'s own suite and its bun:sqlite driver: this workflow's
+      # `db-suite` job runs on a change to either.
+      - "packages/db/src/**"
+      - "packages/db/package.json"
       # The FTS5 gate's own surface: the probe itself, and the two
       # `packages/db` source files whose shape it measures against (the
       # `search` virtual table's schema in `migrations.ts`, and the query
-      # surface in `search.ts`).
+      # surface in `search.ts`) are already covered by `packages/db/src/**`
+      # above; the probe directory is not.
       - "packages/db/bun-probes/**"
-      - "packages/db/src/migrations.ts"
-      - "packages/db/src/search.ts"
   pull_request:
     paths: *manifests
 
@@ -78,62 +93,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  windows:
-    name: Install on Windows
-    runs-on: windows-latest
-    timeout-minutes: 20
+  # #313: `@plotroom/db`'s own suite (unit, migration, and search tests all live
+  # under `src/`, run together as one `bun test`), fresh on every OS it ships to.
+  # This is what answers #202 rather than assumes it: `better-sqlite3` is gone, so
+  # nothing here compiles, and the only way to know whether the EBUSY teardown
+  # finding follows the old driver or the state directory's Windows semantics is
+  # to run the same suite against the new one.
+  db-suite:
+    name: "@plotroom/db suite (${{ matrix.os }})"
+    strategy:
+      # One OS's suite failing is itself the signal #202 needs — a fail-fast run
+      # would hide the other two platforms' results behind it.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      # The install step *is* the regression test. Without
-      # `neverBuiltDependencies`, Bun runs `install: node-gyp rebuild` for
-      # better-sqlite3 and it is what fails on a Windows runner, exactly as it did
-      # in #183's original log. No Bun and no turbo cache: nothing here builds or
-      # runs a turbo task.
       - uses: ./.github/actions/setup
+        with:
+          turbo-cache: db-suite
 
-      # What can be asserted on top of that, and what cannot. "Did Bun run a
-      # build?" is **not** reliably observable after the fact: Bun's side-effects
-      # cache replays a build performed by an earlier install, so a warm store
-      # neither runs the script nor prints that it did (measured both ways
-      # locally), and `binding.gyp` degrades its targets to `type: none` when a
-      # prebuild matches the host, so even a real node-gyp run emits only `.stamp`
-      # files. A guard on any of those passes when it should fail.
-      #
-      # What is observable, and is the claim a Windows installer actually rests
-      # on, is *which binary loads*: `lib/binding.js` prefers
-      # `build/Release/better_sqlite3.node` and falls back to `prebuilds/`. If a
-      # compile ever succeeds here, the first exists and this fails.
-      - name: Refuse a compiled binding
-        shell: bash
-        run: |
-          pkg=$(echo node_modules/.bun/better-sqlite3@*/node_modules/better-sqlite3)
-          test -d "$pkg" || { echo "better-sqlite3 not found at $pkg"; exit 1; }
-          test -f "$pkg/prebuilds/win32-x64.node" || {
-            echo "no win32-x64 prebuild shipped; this platform would need a compiler"
-            exit 1
-          }
-          if [ -f "$pkg/build/Release/better_sqlite3.node" ]; then
-            echo "a compiled binding exists and would load in preference to the prebuild"
-            exit 1
-          fi
-          echo "the shipped prebuild is what will load"
+      # `@plotroom/db` resolves `@plotroom/core` through its `default` export
+      # condition (`./dist/index.js`), which only `bun run test` inside
+      # `packages/db` does not produce on its own: that condition is for a
+      # consumer, not for turbo's own `dependsOn: ["^build"]` graph, and
+      # `bun run test` here runs outside turbo entirely. Build the one
+      # workspace dependency `@plotroom/db` actually has before testing it.
+      - name: Build @plotroom/core
+        run: bunx turbo run build --filter=@plotroom/core
 
-      # A round trip through the native module, which is the whole claim: the
-      # server's SQLite is what a Windows installer has to ship, and an install
-      # that "succeeded" without a loadable binding proves nothing. Run from
-      # `packages/db`, where `better-sqlite3` is actually a dependency — Bun's
-      # store is not hoisted to the root.
-      - name: Load the SQLite binding and round-trip a row
+      - name: Run the db suite under the pinned Bun
         working-directory: packages/db
-        run: >-
-          node -e "const D=require('better-sqlite3');
-          const d=new D(':memory:');
-          d.exec('create table t (x integer)');
-          d.prepare('insert into t values (?)').run(42);
-          const got=d.prepare('select x from t').get().x;
-          if (got !== 42) { throw new Error('round trip returned ' + got); }
-          console.log('sqlite ok via', require.resolve('better-sqlite3'));"
+        run: bun run test
 
   # #312's FTS5 platform gate. Bun's docs promise nothing about FTS5, so this
   # measures it directly on all three OSes rather than assuming Linux's result

@@ -1,7 +1,8 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { removeStateDir } from "./remove-state-dir.js";
 import { BlobReleasedError, BlobStore } from "./blob-store.js";
 import { openDatabase, type PlotroomDatabase } from "./client.js";
 import { blobPath } from "./paths.js";
@@ -22,7 +23,7 @@ beforeEach(() => {
 
 afterEach(() => {
   state.close();
-  rmSync(dir, { recursive: true, force: true });
+  removeStateDir(dir);
 });
 
 describe("blob storage split", () => {

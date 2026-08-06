@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { removeStateDir } from "./remove-state-dir.js";
 import type { Renderings } from "@plotroom/core";
 import { BlobStore } from "./blob-store.js";
 import { openDatabase, type PlotroomDatabase } from "./client.js";
@@ -31,7 +32,7 @@ beforeEach(() => {
 
 afterEach(() => {
   state.close();
-  rmSync(dir, { recursive: true, force: true });
+  removeStateDir(dir);
 });
 
 describe("external identity reconciles, never duplicates (spec §3.1)", () => {

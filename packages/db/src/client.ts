@@ -1,16 +1,31 @@
 import { mkdirSync } from "node:fs";
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import { Database } from "bun:sqlite";
+import { drizzle } from "drizzle-orm/bun-sqlite";
+import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { migrations } from "./migrations.js";
 import { stateLayout, type StateLayout } from "./paths.js";
 import * as schema from "./schema.js";
 
 export interface PlotroomDatabase {
-  readonly db: BetterSQLite3Database<typeof schema>;
-  readonly sqlite: Database.Database;
+  readonly db: BunSQLiteDatabase<typeof schema>;
+  readonly sqlite: Database;
   readonly layout: StateLayout;
   close(): void;
+}
+
+/**
+ * drizzle-orm's bun-sqlite session types every query builder `.run()` as
+ * `void` (its `SQLiteBunSession` extends `SQLiteSession<'sync', void, ...>`),
+ * even though the underlying bun:sqlite statement it delegates to really does
+ * return `{ changes, lastInsertRowid }` at runtime - confirmed empirically
+ * (drizzle-orm 0.45.2), not inferred from either project's docs. A call site
+ * that reads `.run().changes` casts through this type instead of `void`, so
+ * the gap is named once here rather than an inline `as unknown as` at each of
+ * the handful of sites that need it (`budget-store.ts`, `maintenance.ts`).
+ */
+export interface DrizzleRunChanges {
+  readonly changes: number;
+  readonly lastInsertRowid: number | bigint;
 }
 
 export interface OpenOptions {
@@ -27,12 +42,21 @@ export function openDatabase({ stateDir }: OpenOptions): PlotroomDatabase {
     mkdirSync(layout.blobsDir, { recursive: true });
   }
 
+  // `safeIntegers` left at its default (false): every INTEGER column here
+  // (timestamps, ordinals, ids) fits a JS `number` well under
+  // Number.MAX_SAFE_INTEGER, and better-sqlite3 - the driver this replaces -
+  // defaulted to plain numbers too (its own `safeIntegers` opts *into*
+  // bigint). Turning it on would flip `lastInsertRowid` and every read
+  // column to `bigint`, breaking `DrizzleRunChanges` and every call site
+  // typed `number` today for no behavioral gain this schema needs.
   const sqlite = new Database(inMemory ? ":memory:" : layout.databaseFile);
 
-  sqlite.pragma("journal_mode = WAL");
-  sqlite.pragma("foreign_keys = ON");
-  sqlite.pragma("synchronous = NORMAL");
-  sqlite.pragma("busy_timeout = 5000");
+  // bun:sqlite has no `.pragma()` helper (better-sqlite3's own addition, not a
+  // SQLite API): every PRAGMA is a plain statement through `.run()`.
+  sqlite.run("PRAGMA journal_mode = WAL");
+  sqlite.run("PRAGMA foreign_keys = ON");
+  sqlite.run("PRAGMA synchronous = NORMAL");
+  sqlite.run("PRAGMA busy_timeout = 5000");
 
   applyMigrations(sqlite);
 
@@ -40,12 +64,56 @@ export function openDatabase({ stateDir }: OpenOptions): PlotroomDatabase {
     db: drizzle(sqlite, { schema }),
     sqlite,
     layout,
-    close: () => sqlite.close(),
+    close: () => {
+      if (!inMemory) checkpointWal(sqlite);
+      // Plain `close()` (`throwOnError: false`, `sqlite3_close_v2`): it defers
+      // releasing the connection - and the file handle - until every
+      // `Statement` this process ever `.prepare()`d (directly, through
+      // Drizzle, or through search.ts) is finalized, which happens at GC, not
+      // synchronously with this call.
+      //
+      // `close(true)` (`sqlite3_close`, forcing every outstanding statement
+      // finalized up front) looks like the fix and is Bun's own documented
+      // one for the resulting Windows file-lock symptom (oven-sh/bun#25964) -
+      // measured here to throw "database is locked" instead, on every close,
+      // including in-memory test databases with nothing else touching the
+      // file: Drizzle's own prepared-statement cache keeps statements alive
+      // across calls by design, so "outstanding" at any given `close(true)`
+      // is the normal state, not a leak, and forcing them closed collides
+      // with SQLite's own bookkeeping. Not a viable fix without auditing
+      // every call site's statement lifetime — which this driver swap's
+      // scope does not extend to.
+      //
+      // The actual fix for the Windows symptom lives at the test-teardown
+      // boundary instead: `removeStateDir` (`src/remove-state-dir.ts`)
+      // forces a GC pass before removing the directory, and retries through
+      // the remaining EBUSY/EPERM window — see that file's own header for why
+      // GC is what the file handle here is actually waiting on.
+      sqlite.close();
+    },
   };
 }
 
-function applyMigrations(sqlite: Database.Database): void {
-  sqlite.exec(`
+/**
+ * Truncates the WAL file before closing (spec Sec.12: the state directory is
+ * the unit of portability, so nothing should be left mid-checkpoint in it).
+ *
+ * bun:sqlite links Apple's system SQLite on macOS (its own docs: chosen for a
+ * ~50% performance win over the bundled build), which sets
+ * `SQLITE_FCNTL_PERSIST_WAL` by default - the last connection closing does
+ * **not** delete or truncate `-wal`/`-shm`, unlike the SQLite build
+ * better-sqlite3 statically links everywhere. An explicit
+ * `PRAGMA wal_checkpoint(TRUNCATE)` forces the checkpoint and truncates the
+ * WAL to zero bytes regardless of that platform difference, so a copy of the
+ * state directory taken right after `close()` is the same portable file set
+ * on every OS, not one that varies by which SQLite build opened it last.
+ */
+function checkpointWal(sqlite: Database): void {
+  sqlite.run("PRAGMA wal_checkpoint(TRUNCATE)");
+}
+
+function applyMigrations(sqlite: Database): void {
+  sqlite.run(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id         INTEGER PRIMARY KEY,
       name       TEXT NOT NULL,
@@ -55,12 +123,12 @@ function applyMigrations(sqlite: Database.Database): void {
 
   const applied = new Set(
     sqlite
-      .prepare<[], { id: number }>("SELECT id FROM schema_migrations")
+      .prepare<{ id: number }, []>("SELECT id FROM schema_migrations")
       .all()
       .map((row) => row.id),
   );
 
-  const record = sqlite.prepare<[number, string]>(
+  const record = sqlite.prepare<unknown, [number, string]>(
     "INSERT INTO schema_migrations (id, name) VALUES (?, ?)",
   );
 
@@ -68,7 +136,7 @@ function applyMigrations(sqlite: Database.Database): void {
     if (applied.has(migration.id)) continue;
 
     const apply = sqlite.transaction(() => {
-      sqlite.exec(migration.sql);
+      sqlite.run(migration.sql);
       record.run(migration.id, migration.name);
     });
 
@@ -95,19 +163,20 @@ function applyMigrations(sqlite: Database.Database): void {
  * foreign key wrong fails here, loudly, instead of shipping a store that lies
  * about itself.
  */
-function applyRebuild(
-  sqlite: Database.Database,
-  apply: () => void,
-  name: string,
-): void {
-  sqlite.pragma("foreign_keys = OFF");
+function applyRebuild(sqlite: Database, apply: () => void, name: string): void {
+  sqlite.run("PRAGMA foreign_keys = OFF");
   try {
     apply();
   } finally {
-    sqlite.pragma("foreign_keys = ON");
+    sqlite.run("PRAGMA foreign_keys = ON");
   }
 
-  const violations = sqlite.pragma("foreign_key_check") as unknown[];
+  // A PRAGMA that returns rows needs `.prepare(...).all()`, not `.run()` -
+  // `run()` never surfaces the result set, which is the whole point of this
+  // check.
+  const violations = sqlite
+    .prepare<unknown, []>("PRAGMA foreign_key_check")
+    .all();
   if (violations.length > 0) {
     throw new Error(
       `migration ${name} left ${violations.length} foreign key violation(s); the store was not migrated`,

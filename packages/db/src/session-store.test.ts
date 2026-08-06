@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { removeStateDir } from "./remove-state-dir.js";
 import {
   humanAuthor,
   sessionAuthor,
@@ -38,7 +39,7 @@ beforeEach(() => {
 
 afterEach(() => {
   state.close();
-  rmSync(dir, { recursive: true, force: true });
+  removeStateDir(dir);
 });
 
 function startSession(overrides: Record<string, unknown> = {}) {
@@ -406,7 +407,7 @@ describe("the transcript", () => {
     expect(published?.publication.ordinal).toBe(1);
     expect(published?.publication.throughTurn).toBe(1);
     expect(sessions.get(session.id).transcriptObjectId).toBe(
-      published?.objectId,
+      published?.objectId ?? null,
     );
 
     // Nothing pending: an empty version would drift every consumer for nothing.
@@ -489,7 +490,9 @@ describe("the plan (§3.6, §3.1)", () => {
     });
 
     expect(published?.planObjectId).not.toBeNull();
-    expect(sessions.get(session.id).planObjectId).toBe(published?.planObjectId);
+    expect(sessions.get(session.id).planObjectId).toBe(
+      published?.planObjectId ?? null,
+    );
     expect(
       objects.read(published?.planObjectId as string).renderings.agentContent,
     ).toContain("wire the route");

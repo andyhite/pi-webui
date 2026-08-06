@@ -1,8 +1,13 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { humanAuthor } from "@plotroom/core";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { removeStateDir } from "./remove-state-dir.js";
+import {
+  humanAuthor,
+  type CommandDefinitionId,
+  type ObjectId,
+} from "@plotroom/core";
 import {
   makeRenderings,
   manualClock,
@@ -37,7 +42,7 @@ beforeEach(() => {
 
 afterEach(() => {
   state.close();
-  rmSync(dir, { recursive: true, force: true });
+  removeStateDir(dir);
 });
 
 /**
@@ -139,7 +144,9 @@ describe("command definitions are content, not code (§3.5)", () => {
     const id = producing().id;
     store.organize(id, "review");
 
-    expect(store.definitions("review").map((each) => each.id)).toEqual([id]);
+    expect(store.definitions("review").map((each) => each.id)).toEqual([
+      id as CommandDefinitionId,
+    ]);
     expect(store.definitions(null)).toEqual([]);
   });
 
@@ -275,7 +282,7 @@ describe("parameters: a derived default is confirmed, never applied (§3.5)", ()
     );
 
     const row = state.sqlite
-      .prepare<[string], { state: string; confirmed_at: number | null }>(
+      .prepare<{ state: string; confirmed_at: number | null }, [string]>(
         "SELECT state, confirmed_at FROM command_parameter_bindings WHERE command_id = ?",
       )
       .get(commandId);
@@ -603,7 +610,7 @@ describe("the pre-bind/post-bind two-state rule (§3.5)", () => {
 
     expect(effects[0]).toEqual({
       effect: "object_intact",
-      objectId: produced.objectId,
+      objectId: produced.objectId as ObjectId,
     });
     expect(objects.get(produced.objectId)).toBeDefined();
     expect(store.output(upstream.outputs[0]!.id).brokenAt).toBeNull();
@@ -661,7 +668,9 @@ describe("definitions are content, and deleting one is recoverable (§3.5)", () 
 
     store.restoreDefinition(definition.id);
 
-    expect(store.definitions().map((row) => row.id)).toContain(definition.id);
+    expect(store.definitions().map((row) => row.id)).toContain(
+      definition.id as CommandDefinitionId,
+    );
   });
 
   it("leaves command nodes already instantiated from it alone", () => {
