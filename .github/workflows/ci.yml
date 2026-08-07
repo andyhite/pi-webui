@@ -330,6 +330,17 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # #359: this job is non-blocking *as a whole* while its stability is
+    # unproven -- webkit/firefox never ran per-PR before this job existed
+    # (ADR §5), so neither engine had a track record before becoming a gate,
+    # and the result was `main` red on unrelated changes (#347, #357, #358).
+    # It still runs on every push-to-main and nightly (this file's own
+    # `schedule` trigger, above), and still reports: a failing step here does
+    # not fail the workflow, but the job shows its real per-step result and
+    # the artifact step below still uploads traces (see its own comment).
+    # Promotion bar, recorded on #359: 10 consecutive green nightly runs.
+    # Remove this line once that bar is met and #359 is resolved.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -357,7 +368,12 @@ jobs:
       - name: E2E (webkit, firefox)
         run: bun run --filter=@plotroom/web e2e:browsers
 
-      # Same reasoning as `e2e`'s own artifact step above.
+      # Same reasoning as `e2e`'s own artifact step above. `failure()` here
+      # reads this job's own step outcomes, unaffected by the job-level
+      # `continue-on-error` above (#359): that flag only changes how the
+      # *job's* conclusion is reported to the workflow/required-checks, not
+      # whether an earlier step in this same job counts as failed -- so a
+      # failing `E2E (webkit, firefox)` step still trips this upload.
       - name: Keep what the failure left behind
         if: failure()
         uses: actions/upload-artifact@v4
@@ -553,10 +569,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb
 
+      # #359: only these two native-shell-suite steps are non-blocking --
+      # everything above (sidecar staging, `cargo tauri build`, the bundle,
+      # the updater dry-run) stays blocking, because that is #316's proven,
+      # stable acceptance and this change must not weaken it. The suite
+      # itself is new (#317) and has already shown CI-only flakiness on this
+      # exact row (`Tauri core.invoke not available after 5s timeout`, a
+      # stale element reference, then ECONNRESET/ECONNREFUSED against the
+      # embedded WebDriver on 127.0.0.1:4445 -- see the run linked from #359,
+      # where the immediately preceding two runs of this same row passed).
+      # `continue-on-error: true` on the step (not the job) is deliberate: a
+      # failure here still fails only this step, so it still runs, still
+      # shows red in the job log, and does not mask a real failure in the
+      # build/bundle/updater steps around it. Promotion bar, recorded on
+      # #359: 10 consecutive green nightly runs. Remove these two lines once
+      # that bar is met and #359 is resolved.
       - name: Native shell suite (Linux)
         if: runner.os == 'Linux'
+        continue-on-error: true
         run: xvfb-run -a bun run --filter=@plotroom/desktop e2e
 
+      # Same reasoning as the Linux step above (#359).
       - name: Native shell suite
         if: runner.os != 'Linux'
+        continue-on-error: true
         run: bun run --filter=@plotroom/desktop e2e
