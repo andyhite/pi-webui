@@ -446,9 +446,16 @@ jobs:
       # every AppImage tool in the chain extract-and-run instead of
       # FUSE-mounting itself, sidestepping the kernel/container-permission
       # gap rather than only the missing userspace library.
+      #
+      # `NO_STRIP=true`: with that fixed, linuxdeploy still failed the same
+      # way -- verbose logs (tauri-apps/tauri#14796, an open upstream issue)
+      # show its `strip` call chokes on modern ELF `.relr.dyn` sections that
+      # ubuntu-latest's (24.04, "noble") system libraries carry; skipping
+      # strip is the maintainer-confirmed workaround.
       - name: Build the desktop bundle
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
+          NO_STRIP: "true"
         run: bun run --filter=@plotroom/desktop build
 
       # The updater dry-run this job's acceptance criteria names: not a real
