@@ -3,30 +3,20 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/copy-static-assets.mjs",
-    "start": "electron .",
+    "dev": "node scripts/stage-sidecars.mjs && cargo tauri dev",
+    "build": "node scripts/stage-sidecars.mjs && cargo tauri build",
+    "stage:sidecars": "node scripts/stage-sidecars.mjs",
     "lint": "oxlint --type-aware",
+    "lint:rust": "node scripts/ensure-test-stub.mjs && cd src-tauri && cargo clippy --all-targets -- -D warnings",
     "lint:arch": "eslint .",
-    "test": "vitest run",
-    "deploy:server": "node scripts/stage-resources.mjs",
-    "package": "node scripts/stage-resources.mjs && node scripts/package.mjs",
-    "package:linux": "node scripts/stage-resources.mjs && node scripts/package.mjs --linux"
+    "test": "node scripts/ensure-test-stub.mjs && cd src-tauri && cargo test"
   },
-  "description": "PlotRoom desktop shell (Electron main process)",
+  "description": "PlotRoom desktop shell (Tauri v2 — thin Rust main: window, spawn-or-attach, sidecar lifecycle, single-instance; see #316)",
   "author": "PlotRoom",
   "homepage": "https://github.com/plotroom/plotroom",
-  "dependencies": {
-    "@plotroom/server": "workspace:*",
-    "electron-updater": "^6.8.9"
-  },
   "devDependencies": {
-    "@types/node": "^26.1.2",
-    "electron": "^43.0.0",
-    "electron-builder": "^26.15.3",
-    "@plotroom/typescript-config": "workspace:*",
     "@plotroom/eslint-config": "workspace:*",
-    "globals": "^17.9.0"
+    "@tauri-apps/cli": "^2.11.4"
   }
 }

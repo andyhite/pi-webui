@@ -1,0 +1,36 @@
+[package]
+name = "plotroom-desktop"
+version = "0.0.0"
+description = "PlotRoom desktop shell — thin Rust main (window, spawn-or-attach, sidecar lifecycle, single-instance). See issue #316."
+authors = ["PlotRoom"]
+edition = "2021"
+
+[lib]
+name = "plotroom_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
+ureq = { version = "2", default-features = false }
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+# `tauri::test::mock_builder`/`mock_context` (updater dry-run, #316) and a
+# runtime to drive its `async fn check()`. Tauri's own async runtime needs a
+# reactor already running when called outside `.setup()`/`.run()`, which
+# `#[tokio::test]` provides for free.
+tauri = { version = "2", features = ["test"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

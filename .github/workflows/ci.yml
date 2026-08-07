@@ -71,6 +71,7 @@ jobs:
       turbo-scope: ${{ steps.decide.outputs.turbo-scope }}
       web: ${{ steps.decide.outputs.web }}
       session-host: ${{ steps.decide.outputs.session-host }}
+      desktop: ${{ steps.decide.outputs.desktop }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -152,6 +153,11 @@ jobs:
             else
               echo "session-host=false"
             fi
+            if affects @plotroom/desktop; then
+              echo "desktop=true"
+            else
+              echo "desktop=false"
+            fi
           } >> "$GITHUB_OUTPUT"
 
           # Say what was decided where a human will look, so a skipped job is
@@ -177,6 +183,7 @@ jobs:
             echo "| --- | --- |"
             echo "| e2e | $(if affects @plotroom/web; then echo yes; else echo no; fi) |"
             echo "| session-host-binary | $(if affects @plotroom/session-host; then echo yes; else echo no; fi) |"
+            echo "| desktop-package | $(if affects @plotroom/desktop; then echo yes; else echo no; fi) |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   code:
@@ -187,6 +194,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # #316: `apps/desktop`'s `test` (`cd src-tauri && cargo test`) is part
+      # of the same `turbo run ... test` this job invokes below, and
+      # compiling the `tauri` crate on Linux links against WebKitGTK at
+      # *build* time, not only at bundle time — `ubuntu-latest` does not ship
+      # these headers, unlike its preinstalled Rust toolchain, which does not
+      # need a separate setup step.
+      - name: Install Tauri's Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev
 
       - uses: ./.github/actions/setup
         with:
@@ -305,7 +323,7 @@ jobs:
   #
   # Three platforms, not five: `macos-latest` is arm64 and `ubuntu-latest` x64,
   # so a green run says nothing about `darwin-x64` or `linux-arm64`, both of
-  # which the SDK publishes an addon for. Adding `macos-13` and
+  # which the SDK publishes an addon for. Adding `macos-15-intel` and
   # `ubuntu-24.04-arm` is what would cover them; until then the gap is stated
   # rather than implied by a green check.
   session-host-binary:
@@ -341,3 +359,114 @@ jobs:
 
       - name: Compile the session host, and run what it built
         run: bun compile
+
+  # #316: the packaged desktop app, native-runner matrix, reusing
+  # `session-host-binary`'s pattern above (one native runner per OS, because
+  # neither the session-host addon nor a Tauri bundle can be produced for a
+  # platform the runner is not). `macos-15-intel` is Intel
+  # (`x86_64-apple-darwin`); `macos-latest` is Apple Silicon
+  # (`aarch64-apple-darwin`) — the ADR's "bundler config including Intel mac"
+  # is this row (`macos-13` was retired by GitHub in December 2025 and was
+  # replaced here with its recommended Intel successor), config-only until a
+  # real Intel runner exercises it (unverified on the Linux container #316's
+  # own PR was built on; see that PR for what is and is not proven there).
+  #
+  # Nothing is uploaded, same reasoning as `session-host-binary`: no release
+  # consumes a PR artifact, and this job's claim is "the bundle builds and
+  # the updater dry-run succeeds against a placeholder host" (per #316's
+  # acceptance), not a distributable. Signing is explicitly out of scope
+  # (#309's ADR §6, deferred) — every platform's bundle ships unsigned here.
+  desktop-package:
+    name: Desktop package (${{ matrix.os }})
+    needs: scope
+    if: needs.scope.outputs.desktop == 'true'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+        with:
+          bun: "true"
+          turbo-cache: desktop
+
+      # GitHub-hosted runners ship a Rust toolchain already; only Linux's
+      # WebKitGTK/GTK3 system libraries (Tauri's Linux webview + tray/AppIndicator
+      # dependencies) are not preinstalled. `libfuse2`: the appimage bundle
+      # target runs `linuxdeploy`, itself shipped as an AppImage, which needs
+      # FUSE to mount itself -- `libfuse2` is not preinstalled on GitHub's
+      # Ubuntu runner images (#316: "failed to run linuxdeploy" without it).
+      - name: Install Tauri's Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libgtk-3-dev \
+            libfuse2 \
+            patchelf
+
+      - name: Cache cargo registry and the src-tauri target directory
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            apps/desktop/src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      # The server's own compile step (#316) plus session-host's pre-existing
+      # one (#92) are this bundle's two sidecars; `stage-sidecars.mjs`
+      # co-locates them the way #308's S2 spike found necessary (server as
+      # `externalBin`, session-host + its native addons as `resources`)
+      # before `cargo tauri build` ever runs.
+      - name: Compile the server and session-host sidecars
+        run: |
+          bunx turbo run compile --filter=@plotroom/server --filter=@plotroom/session-host
+
+      # `stage-sidecars.mjs` also copies `apps/web/dist` into
+      # `resources/web-dist/` (threaded to the spawned server as
+      # `PLOTROOM_STATIC_DIR`, see the script's own comment) and throws if
+      # it is missing -- the renderer needs building here too, not only the
+      # two sidecars above.
+      - name: Build the web renderer
+        run: bunx turbo run build --filter=@plotroom/web
+
+      # `APPIMAGE_EXTRACT_AND_RUN=1`: `linuxdeploy` (which the appimage
+      # bundle target runs) is itself shipped as an AppImage, and even with
+      # `libfuse2` installed, actually mounting via FUSE inside GitHub's
+      # container still failed ("failed to run linuxdeploy") -- this makes
+      # every AppImage tool in the chain extract-and-run instead of
+      # FUSE-mounting itself, sidestepping the kernel/container-permission
+      # gap rather than only the missing userspace library.
+      #
+      # `NO_STRIP=true`: with that fixed, linuxdeploy still failed the same
+      # way -- verbose logs (tauri-apps/tauri#14796, an open upstream issue)
+      # show its `strip` call chokes on modern ELF `.relr.dyn` sections that
+      # ubuntu-latest's (24.04, "noble") system libraries carry; skipping
+      # strip is the maintainer-confirmed workaround.
+      - name: Build the desktop bundle
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          NO_STRIP: "true"
+        run: bun run --filter=@plotroom/desktop build
+
+      # The updater dry-run this job's acceptance criteria names: not a real
+      # release, a placeholder/local static host per #309's ADR §6 (hosting
+      # and signing explicitly deferred) — `tests/updater_dry_run.rs` starts
+      # its own local HTTP server standing in for that placeholder host and
+      # proves the plugin's `check()` round-trips against it. Already run by
+      # `bun run --filter=@plotroom/desktop test` above (`cargo test`), so
+      # this step exists to name the acceptance criterion in the job log
+      # rather than to run anything new.
+      - name: Updater dry-run against a placeholder host
+        run: cd apps/desktop/src-tauri && cargo test --test updater_dry_run

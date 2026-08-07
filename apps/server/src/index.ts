@@ -370,7 +370,22 @@ export function startServer(config = loadServerConfig()) {
 
 // Top-level bootstrap only; everything else uses Logger. console.error is
 // allowed by the lint config specifically for this kind of last-resort exit.
-if (import.meta.url === `file://${process.argv[1]}`) {
+//
+// `bootServer` is a function, not inline top-level code, because it has two
+// separate callers with two separate "is this the real entrypoint" answers:
+// `import.meta.main` correctly guards a *direct* invocation (`bun --watch
+// src/index.ts`, the e2e harnesses' spawned `SERVER_ENTRY`) on every
+// platform, but is unconditionally `false` inside a `bun build --compile`
+// executable — a confirmed Bun limitation (oven-sh/bun#6009), reproduced
+// here on Windows specifically (confirmed via a one-shot diagnostic in the
+// `Session host binary (windows-latest)` CI job: the compiled binary's own
+// `import.meta.main` read `false`, so this whole block silently never ran —
+// exit 0, nothing bound, nothing logged). `compiled-entrypoint.ts` is
+// `Bun.build`'s `compile` entrypoint instead of this file specifically so
+// the compiled binary can call `bootServer()` unconditionally, needing no
+// "am I the entrypoint" check at all (`compile.ts`'s own comment has the
+// full story).
+export function bootServer(): void {
   try {
     // A bind failure arrives after `startServer` has returned — the socket is
     // still connecting — so it needs its own report. Without this it is an
@@ -398,3 +413,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   }
 }
+
+if (import.meta.main) bootServer();
