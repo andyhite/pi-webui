@@ -10,16 +10,16 @@ PlotRoom is one server plus however many surfaces talk to it. Nothing here is st
 
 | Process              | Package                  | What it does                                                                                    | Started by                                                                                                                                                                                                                                      |
 | -------------------- | ------------------------ | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Server               | `@plotroom/server`       | The HTTP API and WebSocket endpoint; the single owner of all state (`apps/server/src/index.ts`) | The operator directly (`node dist/index.js`, or `pnpm dev`), or spawned by the desktop shell                                                                                                                                                    |
+| Server               | `@plotroom/server`       | The HTTP API and WebSocket endpoint; the single owner of all state (`apps/server/src/index.ts`) | The operator directly (`bun run dev` in `apps/server`, or `bun dev` at the repo root), or the compiled binary the desktop shell spawns as a sidecar (§6)                                                                                        |
 | Web                  | `@plotroom/web`          | The React canvas UI                                                                             | In production it is static assets the server serves single-origin alongside `/api` and `/ws` (`apps/server/src/static/serve.ts`); in dev, its own Vite dev server (`apps/web/vite.config.ts`) proxies `/api`/`/ws` to the server's dev listener |
-| Desktop              | `@plotroom/desktop`      | The Electron shell window                                                                       | The operator, launching the packaged app or `apps/desktop`'s `start` script                                                                                                                                                                     |
+| Desktop              | `@plotroom/desktop`      | The Tauri v2 shell window (a thin Rust main; no product logic)                                  | The operator, launching the packaged app or `apps/desktop`'s `dev` script (`cargo tauri dev`)                                                                                                                                                   |
 | Session-host sidecar | `@plotroom/session-host` | One omp-embedding process per running agent session                                             | The server, per session launch (`apps/server/src/runtime/omp.ts`), via `bun` (or a compiled binary, §6)                                                                                                                                         |
 
 **Who starts what, concretely:**
 
 - The **server** is the one process every other surface depends on. It owns the SQLite database, the workspaces, the run spine, and every schedule (§3). It never starts itself from a trigger — it is asked to start by a human command or by the desktop shell's spawn-or-attach (§6).
 - The **web app** is not a separate running process in production: `configureApp` serves whatever `apps/web` built from `config.staticDir`, and 404s to a JSON error rather than a blank page if the build is missing (`apps/server/src/app.ts:504-527`). In dev, Vite runs as its own process and proxies API/WS calls through — never a second source of truth for state.
-- The **desktop shell** does not run the product's logic itself. Its only two jobs are connecting this window to a backend (spawn-or-attach locally, or a remembered remote origin) and hosting the OS chrome — see §6.
+- The **desktop shell** does not run the product's logic itself — #316's Rust-main scope fence is strictly window lifecycle, spawn-or-attach, sidecar lifecycle, and single-instance enforcement, nothing else. It connects this window to a _local_ server (spawn-or-attach, §6.1) and hosts the OS chrome; the Electron shell's remote-backend switching was not carried into the Tauri v2 port (§6.2).
 - Each **session-host sidecar** is a child of the server, one per running agent session, spawned with its own process group and framed IPC over fd 3 (`apps/server/src/runtime/omp.ts`). The server owns its whole lifecycle: it is the thing that spawns it, feeds it, reads its observation stream, and can signal its process group to abort it. Nothing about a sidecar is itself schedulable — it exists only because a run was initiated (§4.1).
 
 ---
@@ -59,7 +59,7 @@ The configuration surface is `apps/server/src/config.ts`. Its own header states 
 
 There is no environment variable for which plugins ship in the box (`pluginsInBox`) — that is a property of the build, not the machine, so it is not part of this table.
 
-**Desktop's own copy.** `apps/desktop/src/config.ts` reads the _same_ `PLOTROOM_PORT` variable to decide what to spawn-or-attach against, with the same bound (1–65535) and the same default (`4600`, as `DEFAULT_PLOTROOM_PORT`) — duplicated rather than imported, because Electron's main process cannot import `@plotroom/server` (it declares no package exports). The two literals are kept in step by hand; if they ever diverge, a desktop build would spawn a server it cannot then attach to, or refuse a port the server accepts.
+**Desktop's own copy.** `apps/desktop/src-tauri/src/lib.rs`'s `resolve_host`/`resolve_port` read the same `PLOTROOM_HOST`/`PLOTROOM_PORT` variables to decide what to spawn-or-attach against, with the same default (`4600`, as `DEFAULT_PLOTROOM_PORT`) — duplicated rather than imported, because a Rust process cannot import `@plotroom/server` (a TypeScript package). Unlike the server's own env parsing (§2.1, `PORT_BOUND`, throws on a malformed value), the Rust side falls back to the default when a value fails to parse as a `u16` rather than erroring — a real behavioral difference from the pre-Tauri shell worth knowing if `PLOTROOM_PORT` is ever set to something invalid ahead of a desktop launch. The two defaults are still kept in step by hand; if they ever diverge, a desktop build would spawn a server it cannot then attach to, or refuse a port the server accepts.
 
 ### 2.2 Settings-over-env precedence (§11)
 
@@ -172,39 +172,115 @@ All of §12's durability endpoints are mounted under `/api` by `maintenanceRoute
 
 ### 6.1 Spawn-or-attach
 
-On launch, the desktop shell decides what to connect to in one place (`connectToActiveBackend`, `apps/desktop/src/main.ts`) and never a second way. When no remote backend is active, it runs `spawnOrAttach` (`apps/desktop/src/spawn-or-attach.ts`):
+On launch, the desktop shell decides what to connect to in one place — the
+`.setup()` closure in `run()` (`apps/desktop/src-tauri/src/lib.rs`), calling
+`spawn_or_attach` (`apps/desktop/src-tauri/src/spawn_or_attach.rs`), ported
+from the deleted Electron `spawn-or-attach.ts` (#316):
 
-1. **Probe the configured port first.** It health-probes `PLOTROOM_PORT` (default `4600`) before ever spawning anything. If something is already listening and healthy there, it **attaches** — no process spawned, nothing killed on shutdown.
-2. **Spawn otherwise.** If nothing answers, it spawns the server as a child process and waits for the child to report, over a dedicated IPC message, the address it actually bound — never the address it was _asked_ to bind, because a stored `host`/`port` override can move it (issue [#87](https://github.com/plotroom/plotroom/issues/87)). If the child exits before ever reporting an address, that is a distinct, named failure (`ServerNeverReportedItsAddressError`), not a hang.
-3. **Health-wait on the child-reported address.** It probes _that_ address (not the originally-requested port) until healthy or a 10-second default timeout elapses (`ServerNeverBecameHealthyError`). If the spawn attempt fails to become healthy in time, it kills its own child, waits for it to actually exit, and only then re-probes the _original_ configured port — on the theory that a healthy answer there afterward can only be a genuinely different process (a concurrent launch, or someone starting the server by hand), never the corpse of what this call just killed.
-4. **Shutdown kills only its own child.** `stop()` is a no-op when attached; when spawned, it kills the process this exact call started and nothing else. Window-close and before-quit both call it, and the comment in `main.ts` states the boundary explicitly: an attached local server or a remote backend belongs to whoever started it and outlives this window.
+1. **Probe the configured host/port first.** It health-probes
+   `PLOTROOM_HOST`/`PLOTROOM_PORT` (default `127.0.0.1:4600` — §2.1's
+   "Desktop's own copy") against `/api/health`. If something already
+   answers healthy, it **attaches** — no process spawned, nothing killed on
+   shutdown.
+2. **Spawn otherwise.** It spawns the compiled server binary as a sidecar
+   (`apps/desktop/src-tauri/src/sidecar.rs`) with the _same_ host/port
+   passed as env vars — never a second, independently-learned "actually
+   bound" address. Process-group protections guard the sidecar if this
+   process dies unexpectedly: `PR_SET_PDEATHSIG(SIGKILL)` in a `pre_exec`
+   hook on Linux, a portable `setpgid`-only variant elsewhere (the #308
+   spike's confirmed finding — a plain spawned child is _not_ killed when
+   its parent dies on Linux; it is re-parented to init and keeps running).
+3. **Health-wait on that same address.** Polls `/api/health` until healthy
+   or a 10-second deadline (`SpawnOrAttachError::NeverBecameHealthy`).
+4. **Shutdown kills only its own child.** Tracked only when this launch
+   actually spawned the sidecar (`SpawnedSidecar` in Tauri's managed state,
+   never set for an attach); window-close tears the sidecar down only when
+   it's the last window, and only then.
 
-**Known gaps, open:**
+**#260/#261 closed by construction, not ported forward.** Both named bugs in
+the deleted TS implementation's IPC-learned "actually bound address" path —
+a second value that could diverge from what was asked for. The Rust port
+has no such second value: the host/port it asks the sidecar to bind and the
+host/port it probes and loads are the _same_ configured value, and every
+wait here is a bounded poll against an explicit deadline rather than an
+unbounded wait on something the child may never send. (The GitHub issues
+themselves are not closed by this doc; the code they described no longer
+exists.)
 
-- **[#260](https://github.com/plotroom/plotroom/issues/260)** — the desktop's health probe and final load URL both hardcode `127.0.0.1`, discarding the host the spawned server actually reported. A stored `host` override to anything other than loopback still gets probed and loaded at the wrong address after a successful spawn.
-- **[#261](https://github.com/plotroom/plotroom/issues/261)** — `await child.listening` (waiting for the spawned child to report its bound address) has no deadline of its own. A child that hangs before ever sending that message hangs `spawnOrAttach` forever, with no error — where the previous health-wait always timed out at 10 seconds.
+### 6.2 Remote backends — removed in the Tauri v2 port
 
-### 6.2 Remote backends
+The Electron shell could connect to a **remote backend** instead of
+spawning its own server: remembering multiple backends
+(`{ id, label, url, credential }`) and switching between them, with
+credential injection at the network layer (`installCredentialInjection`,
+rewriting outgoing requests with `Authorization: Bearer <credential>`).
 
-The desktop shell can connect to a **remote backend** instead of spawning its own server, remembering multiple backends and switching between them (`apps/desktop/src/desktop-config.ts`, stored in a small JSON file under Electron's `userData` — not the server's own settings store, because this state exists whether or not any server is running yet).
+**None of this exists in the Tauri v2 shell.** #316's Rust-main scope fence
+is strictly window lifecycle, spawn-or-attach to a _local_ server,
+sidecar lifecycle, and single-instance enforcement — no remote-backend
+picker, no credential store, no network-layer request rewriting. PR #336
+(the swap) explicitly records removing the Electron backend-picker module
+and its tests, and nothing since has re-added the capability: it is not
+named as a follow-up in #316's own comments, in epic #304's subtask list,
+or in issue [#46](https://github.com/plotroom/plotroom/issues/46) (open for
+desktop credential-at-rest, scoped shell-agnostically) or
+[#45](https://github.com/plotroom/plotroom/issues/45) (open for remote-host
+attachment verification — credential prompt and reconnect behavior — also
+shell-agnostic). An operator who needs the desktop app to talk to anything
+other than a local server has no supported path to do so from the shell
+itself today.
 
-Each remembered backend is `{ id, label, url, credential }`, where `credential` is `null` when none is remembered. On launch, if a backend is active, the shell health-checks it (`checkRemoteBackendHealth`) before loading anything; a failed check shows a named error page pointing at the backend picker rather than loading a page that will silently fail every request.
+### 6.3 Desktop credential storage — not applicable today
 
-**Credential injection happens in the main process, never the renderer.** The renderer served by a remote backend is the exact same renderer served locally — it has no idea it might be talking to a remote origin, and nothing in `apps/web`/`packages/ui` appends a credential to its own requests. Instead, `installCredentialInjection` (`apps/desktop/src/main.ts`) rewrites every outgoing request bound for that backend's origin at the network layer (`session.webRequest.onBeforeSendHeaders`), adding `Authorization: Bearer <credential>` — covering both plain HTTP (`/api/*`) and the `/ws` upgrade handshake, since Chromium represents a WebSocket handshake as an ordinary HTTP request at this layer. Matching is by hostname + port with resolved default ports, in the same security class (http/ws together, https/wss together) — deliberately not full origin, so the identical connection's differing `http:`/`ws:` scheme for the same backend still matches, and deliberately never crossing secure and insecure, so a credential never silently downgrades to cleartext.
+Spec §12's stated intention — "the desktop application keeps its backend
+credential in the platform keychain, never in a file" — described the
+Electron shell's remote-backend credential (§6.2, removed): stored as a
+plain string in a JSON file, no keychain integration. That storage, and
+everything it protected, is gone along with remote-backend switching: the
+Tauri v2 shell holds no desktop-specific credential of any kind, because it
+never talks to anything but a local, loopback server (§6.1) — credential-optional
+by the rule in §8.
 
-### 6.3 Credential at rest — honest state
-
-Spec §12 states the intention plainly: **"the desktop application keeps its backend credential in the platform keychain, never in a file."** That is not what the code does today. `desktop-config.ts` stores `credential` as a plain string field in a JSON file on disk — there is no `safeStorage`, `keytar`, or other keychain integration anywhere in `apps/desktop/src`. This is a **recorded direction, not a shipped guarantee.**
-
-**Open: [#46](https://github.com/plotroom/plotroom/issues/46)** — adopting `Electron.safeStorage` (or equivalent) is explicitly blocked on a scheduled revisit of the desktop shell itself: the shell is Electron today, but Electrobun is deferred until a runtime swap lands, and the mechanism differs by which shell wins that revisit. Until then, the plaintext credential in the desktop config file is meant to be documented honestly wherever deployment is described, rather than silently assumed safe.
+**Open: [#46](https://github.com/plotroom/plotroom/issues/46)** — desktop
+credential-at-rest via the platform keychain. Still open, still
+unimplemented, and explicitly scoped by epic #304 to run "against whichever
+shell this epic lands... sequence them after child 12" — it now targets the
+Tauri v2 shell, but only once (or if) remote-backend attachment
+([#45](https://github.com/plotroom/plotroom/issues/45), also open) is
+rebuilt on top of it. Neither issue has a shipped implementation to
+describe yet.
 
 ### 6.4 Updater state — honest state
 
-Update **checking** is wired and safe by construction: `configureUpdater` (`apps/desktop/src/updater.ts`) treats a check as a scheduled read (principle 2's stated exception) — on launch and on a configurable interval, spending nothing and changing nothing. A found update always asks the operator via a native dialog before downloading, unless the operator separately opted into `autoInstallUpdates` (persisted in the desktop config, default `false`); installing always asks again after download regardless of that setting, and installing silently on quit is never wired at all.
+`tauri-plugin-updater` is registered
+(`apps/desktop/src-tauri/src/lib.rs`) and configured in
+`tauri.conf.json`'s `plugins.updater` block: one endpoint
+(`http://127.0.0.1:4601/updates/{{target}}/{{arch}}/{{current_version}}`),
+`dangerousInsecureTransportProtocol: true` (the flag plain `http` needs to
+be allowed at all), and a `pubkey` a real signature check would use. This is
+the **placeholder host** #309's ADR §6 named: real hosting, real signing
+(Apple notarization, Windows Authenticode), and a channel strategy are
+explicitly deferred to a follow-up issue not yet filed. Swapping to a real
+host means swapping the endpoint back to `https` and removing the
+insecure-transport flag — nothing else in the file changes for that swap.
 
-What is **not** yet settled is the packaging and release story this depends on: installers, code signing, and the update-feed host and channel strategy.
+**What's wired today is narrower than "the plugin is registered."** No code
+in `apps/desktop/src-tauri/src` calls `check()`/`download()`/`install()` —
+there is no scheduled check on launch or interval, no native update dialog,
+and no `autoInstallUpdates`-style setting (all present in the deleted
+Electron `updater.ts`; none ported). The renderer calls no Tauri JS API
+either (#316's scope fence), so nothing on that side triggers a check.
+The only place the updater flow runs at all is a dry-run integration test
+(`apps/desktop/src-tauri/tests/updater_dry_run.rs`), proving the plugin's
+`check()` round-trip — fetch the manifest, parse it, compare versions —
+against a real local HTTP server standing in for the eventual host. It
+stops at `check()` deliberately: `download()`/`install()` verify a minisign
+signature against `tauri.conf.json`'s `pubkey`, which needs a real signed
+artifact this deferred-signing epic does not produce.
 
-**Open: [#294](https://github.com/plotroom/plotroom/issues/294)** — the epic tracking everything between "the app builds" and "an operator can install a signed, updating desktop app": the shell decision, installers, signing, the release script, and versioning. **Open: [#79](https://github.com/plotroom/plotroom/issues/79)** — the specific installers/signing/update-feed task, settled to target Electron with `electron-builder`/`electron-updater` (Electrobun deferred), but still blocked on the operator inputs it always needed: certificates, accounts, and an update-feed host. `electron-builder.yml`'s `publish` field is deliberately left unset in the meantime, so a packaging check fails gracefully rather than crashing.
+In short: the desktop app has no operator-visible update-checking behavior
+today. The plugin is proven to work against a placeholder host in a test;
+nothing in the shipped app calls it yet.
 
 ---
 
@@ -227,4 +303,9 @@ PlotRoom has no user system — access control is a single shared secret, not ac
 - Once configured, the credential is checked on every `/api/*` request and the `/ws` upgrade, identically (`credentialMiddleware`), read fresh per request rather than captured once — a settings write that changes it takes effect from the very next request, no restart. It travels as `Authorization: Bearer <credential>` for ordinary calls, or a `credential` query parameter for the browser's native WebSocket constructor (which cannot set custom headers on the handshake) — both compared in constant time over a digest, so a wrong credential costs the same regardless of what was presented.
 - Origin/Host validation (`originCheckMiddleware`) is the companion check, gating the same routes: loopback origins are always trusted at any port; anything else must be in the configured `trustedOrigins` list.
 
-This is also the seam the desktop shell's remote-backend credential (§6.2/§6.3) is _for_ — it is the same shared secret, injected by the desktop's main process into requests bound for a non-local backend that requires it.
+The desktop shell itself never needs this credential today: it only ever
+spawns or attaches to a server on `127.0.0.1` (§6.1), which is loopback and
+therefore credential-optional by the rule above. The Electron shell's
+remote-backend credential injection (a separate seam) was not carried into
+the Tauri v2 port — see §6.2/§6.3 for what that means for remote attachment
+today.
