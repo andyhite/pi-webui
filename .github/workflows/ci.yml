@@ -394,7 +394,10 @@ jobs:
 
       # GitHub-hosted runners ship a Rust toolchain already; only Linux's
       # WebKitGTK/GTK3 system libraries (Tauri's Linux webview + tray/AppIndicator
-      # dependencies) are not preinstalled.
+      # dependencies) are not preinstalled. `libfuse2`: the appimage bundle
+      # target runs `linuxdeploy`, itself shipped as an AppImage, which needs
+      # FUSE to mount itself -- `libfuse2` is not preinstalled on GitHub's
+      # Ubuntu runner images (#316: "failed to run linuxdeploy" without it).
       - name: Install Tauri's Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -404,6 +407,7 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libgtk-3-dev \
+            libfuse2 \
             patchelf
 
       - name: Cache cargo registry and the src-tauri target directory

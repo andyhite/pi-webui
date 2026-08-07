@@ -60,15 +60,38 @@ fn dirs_state_dir() -> PathBuf {
 /// directory Tauri populated from `bundle.resources`/`bundle.externalBin`;
 /// a `cargo tauri dev` run has neither, and falls back to the same
 /// sibling-`apps/*/out` layout dev already assumed under Electron.
+///
+/// Two path corrections here, both found running the real packaged app on
+/// this platform for the first time (#316's own "macOS unverified" gap —
+/// both silently wrong on macOS, both silently right on Linux, which is
+/// exactly why the gap stayed hidden):
+///
+/// - `binaries_dir` is the *executable's own* directory
+///   (`current_exe().parent()`), never `resource_dir()`: Tauri places
+///   `externalBin` sidecars beside the app's own binary, not inside its
+///   resources directory — the same directory on Linux (deb/AppImage
+///   install both together) but genuinely different on macOS
+///   (`Contents/MacOS/` vs `Contents/Resources/`).
+/// - the resource *root* actually used below is `resource_dir` **plus**
+///   `resources/`: `tauri.conf.json`'s `bundle.resources` glob
+///   (`"resources/**/*"`, relative to `src-tauri/`) preserves that
+///   `resources/` path segment when Tauri copies matches into the bundle,
+///   so `stage-sidecars.mjs`'s own `src-tauri/resources/plotroom-session-host`
+///   lands at `Contents/Resources/resources/plotroom-session-host`, not
+///   `Contents/Resources/plotroom-session-host`.
 fn resolve_sidecar_layout(app: &tauri::AppHandle) -> SidecarLayout {
-    if let Ok(resource_dir) = app.path().resource_dir() {
+    if let Ok(app_resource_dir) = app.path().resource_dir() {
+        let resource_dir = app_resource_dir.join("resources");
+        let binaries_dir = env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.to_path_buf()))
+            .unwrap_or_else(|| resource_dir.clone());
         let session_host_candidate = resource_dir.join(if cfg!(windows) {
             "plotroom-session-host.exe"
         } else {
             "plotroom-session-host"
         });
         if session_host_candidate.exists() {
-            let binaries_dir = resource_dir.clone();
             return SidecarLayout::packaged(&resource_dir, &binaries_dir);
         }
     }
