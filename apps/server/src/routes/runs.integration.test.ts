@@ -6,9 +6,11 @@ import { expect, afterEach, describe, it } from "bun:test";
 import {
   endStateFacts,
   humanAuthor,
+  sessionAuthor,
   INHERIT_APP_TOOLS,
   type DomainEvent,
   type SessionEnd,
+  type SessionId,
 } from "@plotroom/core";
 import { openDatabase, RunStore, SessionStore } from "@plotroom/db";
 import { openWebSocket } from "../test-support/bun-websocket.js";
@@ -1367,6 +1369,80 @@ describe("end states are distinct (§3.6, principle 11)", () => {
 
     const read = await harness.ok(`/runs/${str(started, "run.id")}`);
     expect(at(read, "run.status")).toBe("stopped");
+  });
+
+  it("records a session actor's stop as by: session, and publishes with that author (issue #64)", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness);
+    const started = await run(harness, fixture.commandId, neverEnds);
+    const sessionId = str(started, "session.id");
+
+    const events: DomainEvent[] = [];
+    const unsubscribe = harness.handle.bus.subscribe((event) => {
+      events.push(event);
+    });
+
+    // A peer session's own gesture (§6.7) — the same shape a `session_stop`
+    // tool call or an approved `session_delete` arrives in, whoever calls it.
+    const stopped = await harness.ok(`/sessions/${sessionId}/stop`, {
+      method: "POST",
+      body: { mode: "graceful" },
+      actor: "session:peer-session",
+    });
+    unsubscribe();
+
+    expect(at(stopped, "session.end.kind")).toBe("stopped");
+    expect(at(stopped, "session.end.by")).toBe("session");
+
+    const published = events.findLast(
+      (
+        event,
+      ): event is Extract<
+        DomainEvent,
+        { entity: "session"; verb: "created" | "updated" }
+      > =>
+        event.entity === "session" &&
+        event.verb === "updated" &&
+        event.session.id === sessionId,
+    );
+    expect(published?.author).toEqual(
+      sessionAuthor("peer-session" as SessionId),
+    );
+  });
+
+  it("still records an operator's stop as by: user, publishing with the human author (issue #64)", async () => {
+    const harness = await boot(repository());
+    const fixture = await command(harness);
+    const started = await run(harness, fixture.commandId, neverEnds);
+    const sessionId = str(started, "session.id");
+
+    const events: DomainEvent[] = [];
+    const unsubscribe = harness.handle.bus.subscribe((event) => {
+      events.push(event);
+    });
+
+    const stopped = await harness.ok(`/sessions/${sessionId}/stop`, {
+      method: "POST",
+      body: { mode: "graceful" },
+      actor: "human",
+    });
+    unsubscribe();
+
+    expect(at(stopped, "session.end.kind")).toBe("stopped");
+    expect(at(stopped, "session.end.by")).toBe("user");
+
+    const published = events.findLast(
+      (
+        event,
+      ): event is Extract<
+        DomainEvent,
+        { entity: "session"; verb: "created" | "updated" }
+      > =>
+        event.entity === "session" &&
+        event.verb === "updated" &&
+        event.session.id === sessionId,
+    );
+    expect(published?.author).toEqual({ kind: "human" });
   });
 
   it("records an out-of-budget stop as its own outcome, not a failure (§8)", async () => {

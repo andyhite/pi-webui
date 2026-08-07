@@ -146,6 +146,14 @@ export interface StopSessionInput {
    */
   readonly cause: "user" | "budget";
   readonly scope?: BudgetScope;
+  /**
+   * Who is stopping it (§6.7, issue #64), threaded the same way `endOpenSession`
+   * takes its caller's actor: a peer session's own `session_stop` and the stop
+   * an approved `session_delete` performs record `by: "session"` rather than
+   * the operator's. Omitted defaults to the operator — exactly right for the
+   * budget enforcer's own stop, which is nobody's gesture (§8).
+   */
+  readonly actor?: Author;
 }
 
 /** What a graceful close waits for before the database is closed. */
@@ -1065,13 +1073,16 @@ export class RunService {
     const { stores } = this.deps;
     stores.sessions.get(input.sessionId);
     const at = stores.clock();
+    const actor: Author = input.actor ?? { kind: "human" };
+    const by: "user" | "session" =
+      actor.kind === "session" ? "session" : "user";
 
     const end: SessionEnd =
       input.cause === "budget"
-        ? classifyEnd({ kind: "stopped", by: "user" }, at, {
+        ? classifyEnd({ kind: "stopped", by }, at, {
             budgetStop: { scope: input.scope ?? "run" },
           })
-        : { kind: "stopped", by: "user", at };
+        : { kind: "stopped", by, at };
 
     // Recorded before the runtime is touched, deliberately: stopping the handle
     // makes the adapter report its own end reason, and the first outcome wins
@@ -1085,7 +1096,7 @@ export class RunService {
     }
 
     await this.endRunFor(stopped);
-    this.publishSession(stopped, { kind: "human" });
+    this.publishSession(stopped, actor);
 
     return stopped;
   }

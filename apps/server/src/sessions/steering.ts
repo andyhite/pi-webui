@@ -875,6 +875,7 @@ export class SteeringService {
         sessionId,
         mode: "graceful",
         cause: "user",
+        actor: input.actor,
       });
       stopped.push(sessionId);
     }
@@ -981,6 +982,7 @@ export class SteeringService {
           sessionId,
           mode: "graceful",
           cause: "user",
+          actor: plan.requestedBy,
         });
         return;
 

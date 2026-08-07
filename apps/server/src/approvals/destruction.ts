@@ -78,7 +78,10 @@ export interface DestructionGate {
  * deletion performs is the same stop the operator's stop button performs: one
  * end state, one event, one way work ends (§6.7).
  */
-export type LiveSessionStop = (sessionId: string) => Promise<void>;
+export type LiveSessionStop = (
+  sessionId: string,
+  actor: Author,
+) => Promise<void>;
 
 export interface DestructionContext extends DestructionGate {
   /**
@@ -317,7 +320,7 @@ export async function destroySession(
   // restore gives back a session that says how it ended rather than one still
   // claiming to be live.
   const stopped = wasLive && before.session.deletion.deletedAt === null;
-  if (stopped) await stopSession(sessionId);
+  if (stopped) await stopSession(sessionId, gate.author);
 
   // `atomically` rather than `destruction`: the gate above already ran, and asking
   // it twice would make it unclear which of the two is the one that matters.
