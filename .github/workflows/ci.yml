@@ -436,7 +436,15 @@ jobs:
     name: Desktop package (${{ matrix.os }})
     needs: scope
     if: needs.scope.outputs.desktop == 'true'
-    timeout-minutes: 30
+    # #317 added a debug `cargo build` plus the native shell suite on top
+    # of packaging, and `macos-15-intel` was already the tightest row
+    # before that: #319 measured it at ~1598s (~26.6min) for packaging
+    # alone, most of it `cargo install tauri-cli` compiling from source
+    # (tracked to get fast by #350). 60 is real headroom over that
+    # baseline rather than a number picked to make one slow row pass --
+    # the fix for the slow row is #350, not dropping its native-shell
+    # coverage or padding this cap indefinitely.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
