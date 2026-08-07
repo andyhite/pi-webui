@@ -53,6 +53,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   apiPost,
   startMilestoneServer,
+  stopOnTeardown,
   type MilestoneServer,
 } from "./server-harness.js";
 
@@ -67,10 +68,8 @@ test.beforeAll(async () => {
 // failure reason under a second, unrelated one. `startMilestoneServer`
 // itself now tears down whatever it already created before rethrowing (see
 // its own doc comment), so there is nothing left to leak either way —
-// this guard exists only so a genuine beforeAll failure surfaces cleanly.
-test.afterAll(async () => {
-  if (server) await server.stop();
-});
+// `stopOnTeardown` only ever calls `stop()` when `server` was actually set.
+stopOnTeardown(() => server);
 
 function requireServer(): MilestoneServer {
   if (!server) {

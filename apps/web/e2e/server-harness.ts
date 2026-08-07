@@ -12,13 +12,25 @@
  * fake path the way the Sync 2 gate's fetch/WS-only harness uses) — this
  * gate loads the actually-served page, single origin, and drives it with a
  * real browser tab.
+ *
+ * `ephemeralPort` used to be a copy authored here; it now comes from
+ * `@plotroom/server/testing/ports` (#227) — one implementation instead of
+ * five drifting doc comments.
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { test } from "@playwright/test";
+import { ephemeralPort } from "@plotroom/server/testing/ports";
 
 const SERVER_ENTRY = fileURLToPath(
   new URL("../../server/src/index.ts", import.meta.url),
@@ -26,41 +38,14 @@ const SERVER_ENTRY = fileURLToPath(
 const WEB_DIST = fileURLToPath(new URL("../dist", import.meta.url));
 
 /**
- * An OS-assigned free port (review finding n1): a fixed, incrementing
- * counter starting from a hardcoded base could hand out a port a *leaked*
- * prior server (a run this suite forgot to kill) is still bound to —
- * `waitForHealth` would then happily report the stale process healthy, and
- * every assertion after that would run against the wrong server entirely.
- * Binding a throwaway socket to port 0 and reading back what the OS
- * assigned cannot collide with anything already listening, leaked or not.
- *
- * The server *can* now be asked to bind port 0 and report what it got —
- * `startServer(...).listening`, and its startup line names the bound port
- * rather than the configured one — but that is a value inside the server's own
- * process, and this harness spawns the server as a **child** it has to reach
- * over HTTP before it can read anything the child says. So the probe stays, and
- * with it a narrow TOCTOU window between closing it and the child binding;
- * acceptable for test tooling, and still strictly safer than a static counter.
- * `apps/server`'s own in-process suites ask for 0 instead.
+ * Where a failed run's server-side evidence goes so it rides along with
+ * what CI already keeps: `actions/upload-artifact` (`ci.yml`) uploads
+ * `apps/web/test-results/` — Playwright's own default output directory —
+ * whole, so a subdirectory here needs no workflow change to be collected.
  */
-export function ephemeralPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.unref();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      if (address === null || typeof address === "string") {
-        probe.close(() =>
-          reject(new Error("could not determine an ephemeral port")),
-        );
-        return;
-      }
-      const { port } = address;
-      probe.close(() => resolve(port));
-    });
-  });
-}
+const DEBUG_STATE_ROOT = fileURLToPath(
+  new URL("../test-results/server-debug", import.meta.url),
+);
 
 /** A real repository to branch from: provisioning uses `git worktree`. */
 function gitRepository(scratch: string[]): string {
@@ -184,9 +169,45 @@ export const MILESTONE_SCRIPT = {
   ],
 };
 
-async function waitForHealth(port: number, timeoutMs = 20_000): Promise<void> {
+/** Everything a spawned child has written to stdout/stderr so far, joined. */
+function captureOutput(child: ChildProcess): () => string {
+  const chunks: Buffer[] = [];
+  const onData = (chunk: Buffer) => chunks.push(chunk);
+  child.stdout?.on("data", onData);
+  child.stderr?.on("data", onData);
+  return () => Buffer.concat(chunks).toString("utf8").trim();
+}
+
+/**
+ * Polls `/api/health` until it answers, and — the fix for #227's second
+ * finding — races the child's own `exit` event so a bind failure
+ * (`plotroom-server: failed to start: … EADDRINUSE …`, printed
+ * unconditionally by `bootServer` regardless of `PLOTROOM_LOG_LEVEL`)
+ * surfaces as that message instead of the opaque "never became healthy"
+ * timeout this used to be the only way to reach: `stdio` used to be
+ * `"ignore"`, so the child's own report of what went wrong was thrown away
+ * before anything could read it.
+ */
+async function waitForHealth(
+  child: ChildProcess,
+  port: number,
+  readOutput: () => string,
+  timeoutMs = 20_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+  let exited:
+    { code: number | null; signal: NodeJS.Signals | null } | undefined;
+  child.once("exit", (code, signal) => {
+    exited = { code, signal };
+  });
   for (;;) {
+    if (exited) {
+      const output = readOutput();
+      throw new Error(
+        `server exited (code ${exited.code}, signal ${exited.signal}) before becoming healthy` +
+          (output ? `:\n${output}` : " (nothing on stdout/stderr)"),
+      );
+    }
     try {
       const response = await fetch(`http://127.0.0.1:${port}/api/health`);
       if (response.ok) return;
@@ -194,9 +215,15 @@ async function waitForHealth(port: number, timeoutMs = 20_000): Promise<void> {
       // not listening yet
     }
     if (Date.now() >= deadline) {
-      throw new Error(`server on port ${port} never became healthy`);
+      const output = readOutput();
+      throw new Error(
+        `server on port ${port} never became healthy` +
+          (output ? `:\n${output}` : ""),
+      );
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 50);
+    await promise;
   }
 }
 
@@ -205,7 +232,37 @@ export interface MilestoneServer {
   readonly baseUrl: string;
   readonly stateDir: string;
   readonly repositoryPath: string;
-  stop(): Promise<void>;
+  /**
+   * `keepStateOnFailure`: when the caller's own test failed, copy
+   * `plotroom.db` and the child's captured output into
+   * `apps/web/test-results/server-debug/` — inside Playwright's own output
+   * tree — before deleting the real scratch state dir, instead of erasing
+   * the server side of the failure's evidence while CI already keeps the
+   * browser side (trace, console, DOM) (#227). Omitted or `false` keeps the
+   * original behavior exactly: delete everything, unconditionally.
+   */
+  stop(options?: { readonly keepStateOnFailure?: boolean }): Promise<void>;
+}
+
+/**
+ * `afterAll(...)`'s drop-in replacement for `if (server) await server.stop()`
+ * (#227): Playwright's `afterAll` never sees a preceding test's outcome, only
+ * its own, so this tracks failure the documented way — an `afterEach`
+ * comparing `testInfo.status` to what was expected — and passes the result
+ * into `stop()` so a failing file's server-side evidence survives instead of
+ * being deleted before CI can look for it.
+ */
+export function stopOnTeardown(
+  getServer: () => MilestoneServer | undefined,
+): void {
+  let anyFailed = false;
+  test.afterEach((_fixtures, testInfo) => {
+    if (testInfo.status !== testInfo.expectedStatus) anyFailed = true;
+  });
+  test.afterAll(async () => {
+    const server = getServer();
+    if (server) await server.stop({ keepStateOnFailure: anyFailed });
+  });
 }
 
 function killAndWait(child: ChildProcess): Promise<void> {
@@ -289,7 +346,7 @@ export async function startMilestoneServer(
     const port = await ephemeralPort();
 
     child = spawn("bun", [SERVER_ENTRY], {
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
         PLOTROOM_PORT: String(port),
@@ -307,8 +364,9 @@ export async function startMilestoneServer(
             }),
       },
     });
+    const readOutput = captureOutput(child);
 
-    await waitForHealth(port);
+    await waitForHealth(child, port, readOutput);
 
     const started = child;
     return {
@@ -316,8 +374,11 @@ export async function startMilestoneServer(
       baseUrl: `http://127.0.0.1:${port}`,
       stateDir,
       repositoryPath,
-      stop: async () => {
+      stop: async (stopOptions = {}) => {
         await killAndWait(started);
+        if (stopOptions.keepStateOnFailure) {
+          preserveDebugState(stateDir, readOutput());
+        }
         for (const dir of scratch)
           rmSync(dir, { recursive: true, force: true });
       },
@@ -326,6 +387,26 @@ export async function startMilestoneServer(
     if (child) await killAndWait(child);
     for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
     throw error;
+  }
+}
+
+/**
+ * Copies `plotroom.db` and the child's captured output out of a state
+ * directory `stop()` is about to delete, into `DEBUG_STATE_ROOT` — a
+ * subdirectory named after `stateDir`'s own unique suffix, so two failures
+ * in the same run never collide.
+ */
+function preserveDebugState(stateDir: string, output: string): void {
+  const dest = join(DEBUG_STATE_ROOT, basename(stateDir));
+  mkdirSync(dest, { recursive: true });
+  writeFileSync(
+    join(dest, "server.log"),
+    output.length > 0 ? output : "(nothing captured on stdout/stderr)\n",
+    "utf8",
+  );
+  const databaseFile = join(stateDir, "plotroom.db");
+  if (existsSync(databaseFile)) {
+    copyFileSync(databaseFile, join(dest, "plotroom.db"));
   }
 }
 

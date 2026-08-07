@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./testing/ports": "./src/testing/ports.ts"
+  },
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "compile": "bun src/compile.ts",

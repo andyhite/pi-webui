@@ -195,10 +195,13 @@ async function withFreshServer<T>(
   mkdirSync(join(stateDir, "workspaces"), { recursive: true });
   const repositoryPath = initGitRepository();
   const server = await startMilestoneServer({ stateDir, repositoryPath });
+  let passed = false;
   try {
-    return await run(server);
+    const result = await run(server);
+    passed = true;
+    return result;
   } finally {
-    await server.stop();
+    await server.stop({ keepStateOnFailure: !passed });
     rmSync(stateDir, { recursive: true, force: true });
     rmSync(repositoryPath, { recursive: true, force: true });
   }
@@ -215,6 +218,7 @@ test.describe("arrangement durability (§5, §12)", () => {
     mkdirSync(join(stateDir, "workspaces"), { recursive: true });
     const repositoryPath = initGitRepository();
 
+    let passed = false;
     try {
       let server = await startMilestoneServer({ stateDir, repositoryPath });
       try {
@@ -257,11 +261,12 @@ test.describe("arrangement durability (§5, §12)", () => {
 
           const afterRestart = await readNodePosition(freshPage, nodeId);
           expect(afterRestart).toEqual(draggedTo);
+          passed = true;
         } finally {
           await freshContext.close();
         }
       } finally {
-        await server.stop();
+        await server.stop({ keepStateOnFailure: !passed });
       }
     } finally {
       rmSync(stateDir, { recursive: true, force: true });

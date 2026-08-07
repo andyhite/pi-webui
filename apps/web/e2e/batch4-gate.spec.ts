@@ -54,6 +54,7 @@ import {
   apiPatch,
   apiPost,
   startMilestoneServer,
+  stopOnTeardown,
   type MilestoneServer,
 } from "./server-harness.js";
 
@@ -63,9 +64,7 @@ test.beforeAll(async () => {
   server = await startMilestoneServer({ concurrencyLimit: 8 });
 });
 
-test.afterAll(async () => {
-  if (server) await server.stop();
-});
+stopOnTeardown(() => server);
 
 function requireServer(): MilestoneServer {
   if (!server) {

@@ -292,11 +292,12 @@ jobs:
 
       # What a failed test already wrote, kept: `playwright.config.ts` sets
       # `trace: "retain-on-failure"`, so each failure leaves a trace (network
-      # log, console, DOM snapshots, screencast) and an `error-context.md` with
-      # the page's accessibility snapshot — the browser side of the run, not the
-      # spawned server's, whose output the harness discards and whose state
-      # directory it removes (#227). Without this it died with the runner and
-      # what reached a human was the assertion alone.
+      # log, console, DOM snapshots, screencast) — the browser side of the
+      # run. `server-harness.ts`'s `startMilestoneServer` (#227) now covers
+      # the server side the same way: on a test failure it copies the
+      # spawned server's captured stdout/stderr and `plotroom.db` into
+      # `apps/web/test-results/server-debug/` before deleting its scratch
+      # state dir, so this same upload picks that up too, unprompted.
       #
       # **Download it before pressing "re-run".** GitHub keeps artifacts for a
       # run's latest attempt only, so a re-run — this team's habitual response to

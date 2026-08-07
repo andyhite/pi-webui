@@ -56,8 +56,12 @@ test.beforeEach(async () => {
   server = await startMilestoneServer();
 });
 
-test.afterEach(async () => {
-  if (server) await server.stop();
+test.afterEach(async (_fixtures, testInfo) => {
+  if (server) {
+    await server.stop({
+      keepStateOnFailure: testInfo.status !== testInfo.expectedStatus,
+    });
+  }
   server = undefined;
 });
 

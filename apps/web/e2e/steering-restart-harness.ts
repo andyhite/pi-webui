@@ -15,34 +15,15 @@
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ephemeralPort } from "@plotroom/server/testing/ports";
 
 const SERVER_ENTRY = fileURLToPath(
   new URL("../../server/src/index.ts", import.meta.url),
 );
 const WEB_DIST = fileURLToPath(new URL("../dist", import.meta.url));
-
-function ephemeralPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.unref();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      if (address === null || typeof address === "string") {
-        probe.close(() =>
-          reject(new Error("could not determine an ephemeral port")),
-        );
-        return;
-      }
-      const { port } = address;
-      probe.close(() => resolve(port));
-    });
-  });
-}
 
 function gitRepository(dir: string): void {
   const git = (...args: string[]) =>
@@ -59,9 +40,40 @@ function gitRepository(dir: string): void {
   git("commit", "-m", "initial");
 }
 
-async function waitForHealth(port: number, timeoutMs = 20_000): Promise<void> {
+/** Everything a spawned child has written to stdout/stderr so far, joined. */
+function captureOutput(child: ChildProcess): () => string {
+  const chunks: Buffer[] = [];
+  const onData = (chunk: Buffer) => chunks.push(chunk);
+  child.stdout?.on("data", onData);
+  child.stderr?.on("data", onData);
+  return () => Buffer.concat(chunks).toString("utf8").trim();
+}
+
+/**
+ * Same fix as `server-harness.ts`'s own `waitForHealth` (#227): races the
+ * child's `exit` event so a bind failure surfaces as the child's own
+ * `plotroom-server: failed to start: …` line instead of an opaque timeout.
+ */
+async function waitForHealth(
+  child: ChildProcess,
+  port: number,
+  readOutput: () => string,
+  timeoutMs = 20_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+  let exited:
+    { code: number | null; signal: NodeJS.Signals | null } | undefined;
+  child.once("exit", (code, signal) => {
+    exited = { code, signal };
+  });
   for (;;) {
+    if (exited) {
+      const output = readOutput();
+      throw new Error(
+        `server exited (code ${exited.code}, signal ${exited.signal}) before becoming healthy` +
+          (output ? `:\n${output}` : " (nothing on stdout/stderr)"),
+      );
+    }
     try {
       const response = await fetch(`http://127.0.0.1:${port}/api/health`);
       if (response.ok) return;
@@ -69,9 +81,15 @@ async function waitForHealth(port: number, timeoutMs = 20_000): Promise<void> {
       // not listening yet
     }
     if (Date.now() >= deadline) {
-      throw new Error(`server on port ${port} never became healthy`);
+      const output = readOutput();
+      throw new Error(
+        `server on port ${port} never became healthy` +
+          (output ? `:\n${output}` : ""),
+      );
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 50);
+    await promise;
   }
 }
 
@@ -136,7 +154,7 @@ export async function startRestartableServer(
   const port = await ephemeralPort();
 
   const child = spawn("bun", [SERVER_ENTRY], {
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
       PLOTROOM_PORT: String(port),
@@ -152,7 +170,7 @@ export async function startRestartableServer(
     },
   });
 
-  await waitForHealth(port);
+  await waitForHealth(child, port, captureOutput(child));
 
   return {
     port,
