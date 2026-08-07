@@ -64,6 +64,7 @@ import {
   apiPatch,
   apiPost,
   startMilestoneServer,
+  stopOnTeardown,
   type MilestoneServer,
 } from "./server-harness.js";
 import {
@@ -256,9 +257,7 @@ test.describe("queue triage verbs: mute, snooze, acknowledge are three different
     server = await startMilestoneServer({ concurrencyLimit: 8 });
   });
 
-  test.afterAll(async () => {
-    if (server) await server.stop();
-  });
+  stopOnTeardown(() => server);
 
   test("mute hides for good, snooze hides only until it elapses, acknowledge hides immediately over the real Queue panel", async ({
     page,

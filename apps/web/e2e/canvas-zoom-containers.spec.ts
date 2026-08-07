@@ -45,6 +45,7 @@ import { expect, test, type Page } from "@playwright/test";
 import {
   apiPost,
   startMilestoneServer,
+  stopOnTeardown,
   type MilestoneServer,
 } from "./server-harness.js";
 
@@ -54,9 +55,7 @@ test.beforeAll(async () => {
   server = await startMilestoneServer();
 });
 
-test.afterAll(async () => {
-  if (server) await server.stop();
-});
+stopOnTeardown(() => server);
 
 function requireServer(): MilestoneServer {
   if (!server) {

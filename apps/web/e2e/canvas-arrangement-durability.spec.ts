@@ -30,6 +30,7 @@ import {
   apiPatch,
   apiPost,
   startMilestoneServer,
+  stopOnTeardown,
   type MilestoneServer,
 } from "./server-harness.js";
 import {
@@ -153,9 +154,7 @@ test.describe("(b) reset arrangement, through the real UI", () => {
     server = await startMilestoneServer();
   });
 
-  test.afterAll(async () => {
-    if (server) await server.stop();
-  });
+  stopOnTeardown(() => server);
 
   function requireServer(): MilestoneServer {
     if (!server) {
@@ -319,9 +318,7 @@ test.describe("(c) a contained node's own arrangement", () => {
     server = await startMilestoneServer();
   });
 
-  test.afterAll(async () => {
-    if (server) await server.stop();
-  });
+  stopOnTeardown(() => server);
 
   function requireContainedServer(): MilestoneServer {
     if (!server) {

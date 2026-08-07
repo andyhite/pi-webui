@@ -52,8 +52,13 @@ test.beforeEach(async () => {
   server = await startMilestoneServer();
 });
 
-test.afterEach(async () => {
-  if (server) await server.stop();
+// eslint-disable-next-line no-empty-pattern -- Playwright requires an object-destructuring first parameter to parse "no fixtures needed"; a plain identifier fails at file load.
+test.afterEach(async ({}, testInfo) => {
+  if (server) {
+    await server.stop({
+      keepStateOnFailure: testInfo.status !== testInfo.expectedStatus,
+    });
+  }
   server = undefined;
 });
 

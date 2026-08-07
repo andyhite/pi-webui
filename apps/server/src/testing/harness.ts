@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadServerConfig, type ServerConfigOverrides } from "../config.js";
 import { startServer } from "../index.js";
 import type { RuntimeScript } from "../runtime/scripted.js";
+export { ephemeralPort } from "./ports.js";
 
 /**
  * A real server, over HTTP, for the integration suites (Epics 4.2, 5.5).
@@ -39,44 +39,6 @@ export interface CallOptions {
 export interface CallResult {
   readonly status: number;
   readonly body: unknown;
-}
-
-/**
- * A port the OS says is free, rather than one this module guessed — for the few
- * callers that need a port *before* something binds it (a webhook receiver of
- * their own, or an assertion about a configured port).
- *
- * Per-worker bands were the previous answer and they were not enough: a band is
- * still a static range, so a leaked server from an earlier run, another suite's
- * harness, or anything else on the machine can already hold a port in it — and the
- * failure is not always a clean `EADDRINUSE`. It can be requests landing on *the
- * other server*, which surfaces as an unrelated refusal somewhere far away.
- *
- * Binding a throwaway socket to port 0 and reading back what the OS assigned cannot
- * collide with anything already listening, leaked or not — but it does not close
- * the window between this probe closing and the caller binding, and that window is
- * real: CI has produced `EADDRINUSE` in one suite and `ECONNREFUSED` on the same
- * port in another, in one run. **Anything booting a PlotRoom server asks for port
- * 0 and reads `handle.listening` instead** (`boot` below); this stays for the
- * cases that cannot.
- */
-export function ephemeralPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.unref();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      if (address === null || typeof address === "string") {
-        probe.close(() =>
-          reject(new Error("could not determine an ephemeral port")),
-        );
-        return;
-      }
-      const { port } = address;
-      probe.close(() => resolve(port));
-    });
-  });
 }
 
 /**

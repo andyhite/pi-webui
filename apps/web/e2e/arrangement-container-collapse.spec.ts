@@ -49,6 +49,7 @@ test("an edge into a collapsed container draws to its frame, and reappears on ex
   mkdirSync(join(stateDir, "workspaces"), { recursive: true });
   const repositoryPath = initGitRepository();
 
+  let passed = false;
   try {
     const server = await startMilestoneServer({ stateDir, repositoryPath });
     try {
@@ -162,8 +163,9 @@ test("an edge into a collapsed container draws to its frame, and reappears on ex
         page.getByTestId(`canvas-node-${command.node.id}`),
       ).toBeVisible();
       await expect(edgeLocator).toBeVisible();
+      passed = true;
     } finally {
-      await server.stop();
+      await server.stop({ keepStateOnFailure: !passed });
     }
   } finally {
     rmSync(stateDir, { recursive: true, force: true });

@@ -12,7 +12,9 @@
  * `@plotroom/server` is a devDependency so this package's own dependency
  * graph resolves it (#315: no build — the entry spawned below is
  * `apps/server/src/index.ts` directly, via `bun`, nothing here imports its
- * source as a module).
+ * source as a module). `ephemeralPort` is the one exception: it comes from
+ * that dependency's own `@plotroom/server/testing/ports` export (#227),
+ * instead of being a sixth copy of the same probe.
  *
  * `createHttpClient`/`createApiGraphDataSource` still enforce the
  * same-origin rule on every path they're given; the origin resolution a
@@ -21,9 +23,8 @@
  * no page origin to be relative to.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,37 +37,11 @@ import {
   createHttpClient,
 } from "@plotroom/ui";
 import type { GraphSnapshot } from "@plotroom/ui";
+import { ephemeralPort } from "@plotroom/server/testing/ports";
 
 const SERVER_ENTRY = fileURLToPath(
   new URL("../../../server/src/index.ts", import.meta.url),
 );
-
-/**
- * A port the OS says is free, never one a counter guessed. A static band is the
- * worse of the two failures available here: 47_100 is inside Linux's own
- * ephemeral range (32768–60999), so any port-0 bind anywhere on the machine can
- * already hold it — including `apps/server`'s suites, which `turbo run test` runs
- * at the same time as this one. The probe closes before the child binds, which is
- * a window; a counter is not a window, it is a standing collision.
- */
-function ephemeralPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.unref();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      if (address === null || typeof address === "string") {
-        probe.close(() =>
-          reject(new Error("could not determine an ephemeral port")),
-        );
-        return;
-      }
-      const { port } = address;
-      probe.close(() => resolve(port));
-    });
-  });
-}
 
 interface RunningServer {
   readonly port: number;
@@ -74,9 +49,40 @@ interface RunningServer {
   stop(): Promise<void>;
 }
 
-async function waitForHealth(port: number, timeoutMs = 15_000): Promise<void> {
+/** Everything a spawned child has written to stdout/stderr so far, joined. */
+function captureOutput(child: ChildProcess): () => string {
+  const chunks: Buffer[] = [];
+  const onData = (chunk: Buffer) => chunks.push(chunk);
+  child.stdout?.on("data", onData);
+  child.stderr?.on("data", onData);
+  return () => Buffer.concat(chunks).toString("utf8").trim();
+}
+
+/**
+ * Races the child's own `exit` event so a bind failure surfaces as the
+ * child's own `plotroom-server: failed to start: …` line instead of an
+ * opaque timeout (#227) — `stdio` used to be `"ignore"`, discarding it.
+ */
+async function waitForHealth(
+  child: ChildProcess,
+  port: number,
+  readOutput: () => string,
+  timeoutMs = 15_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+  let exited:
+    { code: number | null; signal: NodeJS.Signals | null } | undefined;
+  child.once("exit", (code, signal) => {
+    exited = { code, signal };
+  });
   for (;;) {
+    if (exited) {
+      const output = readOutput();
+      throw new Error(
+        `server exited (code ${exited.code}, signal ${exited.signal}) before becoming healthy` +
+          (output ? `:\n${output}` : " (nothing on stdout/stderr)"),
+      );
+    }
     try {
       const response = await fetch(`http://127.0.0.1:${port}/api/health`);
       if (response.ok) return;
@@ -84,9 +90,15 @@ async function waitForHealth(port: number, timeoutMs = 15_000): Promise<void> {
       // not listening yet
     }
     if (Date.now() >= deadline) {
-      throw new Error(`server on port ${port} never became healthy`);
+      const output = readOutput();
+      throw new Error(
+        `server on port ${port} never became healthy` +
+          (output ? `:\n${output}` : ""),
+      );
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 50);
+    await promise;
   }
 }
 
@@ -95,7 +107,7 @@ async function startServer(): Promise<RunningServer> {
   const stateDir = mkdtempSync(join(tmpdir(), "plotroom-web-gate-"));
 
   const child = spawn("bun", [SERVER_ENTRY], {
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
       PLOTROOM_PORT: String(port),
@@ -108,7 +120,7 @@ async function startServer(): Promise<RunningServer> {
     },
   });
 
-  await waitForHealth(port);
+  await waitForHealth(child, port, captureOutput(child));
 
   return {
     port,
