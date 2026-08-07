@@ -114,7 +114,7 @@ pub fn run() {
     // read as a hang until this was added.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // A second launch focuses the existing window instead of
             // opening a second one, and never spawns a second server —
@@ -125,7 +125,19 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+
+    // #317's native shell suite (`apps/desktop/e2e`) drives this app over an
+    // embedded WebDriver server, the way `@wdio/tauri-service`'s `embedded`
+    // provider works on every OS the packaging matrix covers (no external
+    // `tauri-driver`, no WebKitGTK/Edge-WebDriver install, real support on
+    // macOS where neither of those exist). Registered only in debug builds
+    // -- the crate's own documented pattern -- so a release bundle never
+    // links an active HTTP server nobody asked it to serve.
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+
+    builder
         .setup(|app| {
             let host = resolve_host();
             let port = resolve_port();

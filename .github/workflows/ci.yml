@@ -53,6 +53,12 @@ on:
       - ".github/**/*.md"
   pull_request:
     paths-ignore: *documentation
+  # #317: `webkit`/`firefox` (`e2e-browser-matrix`, below) run here and on
+  # every push to `main` — never per-PR, so growing the browser matrix never
+  # costs a pull request anything. Off-peak UTC, arbitrary minute past the
+  # hour to avoid GitHub's documented top-of-hour scheduling congestion.
+  schedule:
+    - cron: "17 3 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -310,6 +316,56 @@ jobs:
           # step there is nothing to keep, and saying so is the one fact a reader
           # of that log wants.
 
+  # #317: the browser engine matrix's other two legs. `chromium` (the `e2e`
+  # job above) is the per-PR gate and stays exactly as it was — this job
+  # never runs on `pull_request`, so growing the matrix costs a pull request
+  # nothing. `webkit` and `firefox` run here instead, on every push to
+  # `main` and nightly (this file's own `schedule` trigger). Same hermetic
+  # spawned-server harness as `e2e`, just the other two `playwright.config.ts`
+  # projects (see that file's own comment on why `webkit` is a standards
+  # proxy, not WebKitGTK/WKWebView identity — closing that gap is
+  # `desktop-package`'s native shell suite, below).
+  e2e-browser-matrix:
+    name: E2E browser matrix (webkit, firefox)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+        with:
+          turbo-cache: e2e
+
+      - name: Build what the gate serves
+        run: bunx turbo run build --filter=@plotroom/web
+
+      # A separate cache key from `e2e`'s own: that job's key already
+      # resolves under the same lockfile hash and caches only `chromium`,
+      # so sharing one key here would mean whichever job's `actions/cache`
+      # save lands first wins and the other's browsers (`webkit`/`firefox`
+      # here, `chromium` there) never get cached at all.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ hashFiles('bun-lock.yaml') }}
+          restore-keys: playwright-browsers-${{ runner.os }}-
+
+      - name: Install Playwright's WebKit and Firefox
+        run: bunx playwright install --with-deps webkit firefox
+
+      - name: E2E (webkit, firefox)
+        run: bun run --filter=@plotroom/web e2e:browsers
+
+      # Same reasoning as `e2e`'s own artifact step above.
+      - name: Keep what the failure left behind
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-browser-matrix-failure
+          path: apps/web/test-results/
+          retention-days: 14
+
   # The packaged session host is one compiled binary per platform (issue #92):
   # `bun build --compile` plus the SDK's native addon staged beside it, which
   # `bun compile` produces and then runs. Bun can cross-compile, but the addon
@@ -380,7 +436,15 @@ jobs:
     name: Desktop package (${{ matrix.os }})
     needs: scope
     if: needs.scope.outputs.desktop == 'true'
-    timeout-minutes: 30
+    # #317 added a debug `cargo build` plus the native shell suite on top
+    # of packaging, and `macos-15-intel` was already the tightest row
+    # before that: #319 measured it at ~1598s (~26.6min) for packaging
+    # alone, most of it `cargo install tauri-cli` compiling from source
+    # (tracked to get fast by #350). 60 is real headroom over that
+    # baseline rather than a number picked to make one slow row pass --
+    # the fix for the slow row is #350, not dropping its native-shell
+    # coverage or padding this cap indefinitely.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -470,3 +534,29 @@ jobs:
       # rather than to run anything new.
       - name: Updater dry-run against a placeholder host
         run: cd apps/desktop/src-tauri && cargo test --test updater_dry_run
+
+      # #317's native shell suite: window lifecycle, sidecar spawn ->
+      # single-instance/attach, canvas-visible + wheel-zoom smoke, and a
+      # best-effort close, driven over `@wdio/tauri-service`'s embedded
+      # WebDriver provider against a *debug* build (the embedded driver
+      # plugin only registers behind `#[cfg(debug_assertions)]`, see
+      # `src-tauri/src/lib.rs`) -- reusing the sidecars/renderer this job
+      # already staged and built above.
+      - name: Build the debug binary for the native shell suite
+        run: bun run --filter=@plotroom/desktop e2e:build
+
+      # WebKitGTK needs a real X display even for the embedded provider;
+      # GitHub's Linux runner has none by default.
+      - name: Install Xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Native shell suite (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a bun run --filter=@plotroom/desktop e2e
+
+      - name: Native shell suite
+        if: runner.os != 'Linux'
+        run: bun run --filter=@plotroom/desktop e2e

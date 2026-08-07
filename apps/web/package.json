@@ -9,8 +9,8 @@
     "lint": "oxlint --type-aware",
     "lint:arch": "eslint .",
     "test": "vitest run",
-    "e2e": "playwright test --config e2e/playwright.config.ts",
-    "e2e:electrobun": "playwright test --config e2e/playwright.electrobun.config.ts"
+    "e2e": "playwright test --config e2e/playwright.config.ts --project=chromium",
+    "e2e:browsers": "playwright test --config e2e/playwright.config.ts --project=webkit --project=firefox"
   },
   "dependencies": {
     "@plotroom/core": "workspace:*",

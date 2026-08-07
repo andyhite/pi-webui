@@ -54,6 +54,41 @@ export async function dragNodeBy(
     );
   }
   await page.mouse.up();
+  await waitForSettled(node);
+}
+
+/**
+ * #317's browser matrix surfaced this: xyflow's own drag-driven repositioning
+ * commits its final frame asynchronously relative to the dispatched
+ * `mouseup` — reliably already flushed by the time Chromium's event loop
+ * returns control to Playwright, but not guaranteed under WebKit's or
+ * Firefox's own render scheduling (measured: reading a "settled" box
+ * immediately after `mouse.up()` caught a stale, still-moving position on
+ * Firefox often enough to fail rigid-body push assertions). A bounded poll
+ * on the node's own box, not a fixed sleep — it converges on whatever the
+ * DOM's true post-drag position is, on every engine, rather than masking a
+ * real regression behind a wait that always passes.
+ */
+async function waitForSettled(
+  node: Locator,
+  quietMs = 50,
+  timeoutMs = 3_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let last = await requireBox(node);
+  while (Date.now() < deadline) {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, quietMs);
+    await promise;
+    const next = await requireBox(node);
+    if (
+      Math.round(next.x) === Math.round(last.x) &&
+      Math.round(next.y) === Math.round(last.y)
+    ) {
+      return;
+    }
+    last = next;
+  }
 }
 
 /**

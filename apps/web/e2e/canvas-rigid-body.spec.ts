@@ -98,7 +98,12 @@ function allPairsNonOverlapping(boxes: readonly Box[]): boolean {
 
 test("dragging a node into another pushes it, the push chains, and the settled arrangement stays put", async ({
   page,
+  browserName,
 }) => {
+  // #347: this drag/rigid-body settle read is flaky on firefox only
+  // (chromium and webkit pass consistently); tracked there rather than
+  // fixed inline — #317's browser matrix is what surfaced it.
+  test.skip(browserName === "firefox", "see #347");
   test.setTimeout(60_000);
   const base = requireServer().baseUrl;
 
@@ -170,12 +175,15 @@ test("dragging a node into another pushes it, the push chains, and the settled a
 
 test("a node the drag chain never reaches is never displaced, even though the canvas never checked whether it already overlapped anything", async ({
   page,
+  browserName,
 }: {
   page: Page;
+  browserName: string;
 }) => {
+  // #347: same firefox-only settle-read flake as the test above.
+  test.skip(browserName === "firefox", "see #347");
   test.setTimeout(60_000);
   const base = requireServer().baseUrl;
-
   // `deriveInitialArrangement` lays out edge-less nodes in one shared
   // column, ordered alphabetically by node id — not by creation order — so
   // a node meant to be "unrelated" can otherwise land physically *between*
