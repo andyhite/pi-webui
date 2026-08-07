@@ -256,7 +256,8 @@ export function stopOnTeardown(
   getServer: () => MilestoneServer | undefined,
 ): void {
   let anyFailed = false;
-  test.afterEach((_fixtures, testInfo) => {
+  // eslint-disable-next-line no-empty-pattern -- Playwright requires an object-destructuring first parameter to parse "no fixtures needed"; a plain identifier fails at file load.
+  test.afterEach(({}, testInfo) => {
     if (testInfo.status !== testInfo.expectedStatus) anyFailed = true;
   });
   test.afterAll(async () => {
