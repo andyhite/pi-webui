@@ -34,8 +34,9 @@ These are the rules foreman can't know — this product, this repository.
 ## The toolchain
 
 - **Bun, not pnpm/npm/yarn.** `bun@1.3.14` is pinned, `bun.lock` is the
-  lockfile, `bunx` replaces `npx`. Older `docs/` prose still says pnpm; it is
-  stale — `package.json` and `.github/workflows/` are the authority.
+  lockfile, `bunx` replaces `npx`. `package.json` and `.github/workflows/`
+  are the authority for exactly what the toolchain is, if anything ever
+  looks inconsistent.
 - **Green `bun verify` is not proof.** It shows nothing broke, not that what
   you built works — exercise the change itself, and run the e2e gate
   (`bun run --filter=@plotroom/web e2e`, after building `@plotroom/web`) when
