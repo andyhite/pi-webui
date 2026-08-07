@@ -38,6 +38,7 @@ import {
   startMilestoneServer,
   type MilestoneServer,
 } from "./server-harness.js";
+import { dragNodeBy, flowPosition } from "./canvas-drag-helpers.js";
 
 /** A minimal real git repository — provisioning is never exercised here, but the server expects one configured. */
 function initGitRepository(): string {
@@ -57,14 +58,6 @@ function initGitRepository(): string {
 }
 
 /**
- * xyflow's own logical position for a node — `data-testid="rf__node-<id>"`
- * is the library's own stable hook (`@xyflow/react`), and its `style`
- * attribute's `translate(Xpx,Ypx)` is the node's absolute flow-space
- * position, independent of the viewport's own pan/zoom (applied separately,
- * to the ancestor `.react-flow__viewport`) — reading it is what makes every
- * assertion in this file coordinate-free rather than assuming a zoom level.
- */
-/**
  * CSS serializes the `translate()` at limited precision (a handful of
  * significant digits) while the value the write path actually sends the
  * server is a full-precision float, so "the same position" has to mean
@@ -83,20 +76,22 @@ function roundPoint(point: { x: number; y: number }): {
   };
 }
 
+/**
+ * xyflow's own logical position for a node, rounded to a tenth of a pixel
+ * (CSS serializes `translate()` at limited precision, while the write path
+ * sends the server a full-precision float, so "the same position" has to
+ * mean "the same to a small tolerance", never bit-for-bit) — delegates the
+ * actual parsing to the shared `flowPosition` (`canvas-drag-helpers.ts`),
+ * which also covers Firefox's own single-argument `translate(Xpx)`
+ * serialization when a node's y offset is exactly zero.
+ */
 async function readNodePosition(
   page: Page,
   nodeId: string,
 ): Promise<{ x: number; y: number }> {
-  const style = await page
-    .locator(`[data-testid="rf__node-${nodeId}"]`)
-    .getAttribute("style");
-  const match = style?.match(/translate\(([-0-9.]+)px,\s*([-0-9.]+)px\)/);
-  if (!match) {
-    throw new Error(
-      `could not read a translate() out of node ${nodeId}'s style: ${style}`,
-    );
-  }
-  return roundPoint({ x: Number(match[1]), y: Number(match[2]) });
+  return roundPoint(
+    await flowPosition(page.locator(`[data-testid="rf__node-${nodeId}"]`)),
+  );
 }
 
 async function boundingBoxOrThrow(
@@ -108,23 +103,13 @@ async function boundingBoxOrThrow(
   return box;
 }
 
-/** A real mouse-driven drag of a canvas node — xyflow's own drag handling responds to genuine pointer input, not the HTML5 DnD `milestone.spec.ts` uses for palette drops. */
-async function dragNodeBy(
-  page: Page,
-  nodeId: string,
-  deltaX: number,
-  deltaY: number,
-): Promise<void> {
-  const box = await boundingBoxOrThrow(page, nodeId);
-  const startX = box.x + box.width / 2;
-  const startY = box.y + box.height / 2;
-  await page.mouse.move(startX, startY);
-  await page.mouse.down();
-  await page.mouse.move(startX + deltaX, startY + deltaY, { steps: 10 });
-  await page.mouse.up();
-}
-
-/** Drags `nodeId` until its pointer lands on `targetNodeId`'s *original* center — enough overlap to force the rigid-body push solver to displace it. */
+/**
+ * Drags `nodeId` until its pointer lands on `targetNodeId`'s *original*
+ * center — enough overlap to force the rigid-body push solver to displace
+ * it. Settles the target too (`alsoSettle`, shared `dragNodeBy`'s own
+ * hardening, #347): the pushed neighbour can still be mid-commit after the
+ * dragged node's own box has already stopped moving.
+ */
 async function dragNodeOnto(
   page: Page,
   nodeId: string,
@@ -132,19 +117,15 @@ async function dragNodeOnto(
 ): Promise<void> {
   const source = await boundingBoxOrThrow(page, nodeId);
   const target = await boundingBoxOrThrow(page, targetNodeId);
-  await page.mouse.move(
-    source.x + source.width / 2,
-    source.y + source.height / 2,
-  );
-  await page.mouse.down();
-  await page.mouse.move(
-    target.x + target.width / 2,
-    target.y + target.height / 2,
+  await dragNodeBy(
+    page,
+    page.getByTestId(`canvas-node-${nodeId}`),
     {
-      steps: 10,
+      x: target.x + target.width / 2 - (source.x + source.width / 2),
+      y: target.y + target.height / 2 - (source.y + source.height / 2),
     },
+    { alsoSettle: [page.getByTestId(`canvas-node-${targetNodeId}`)] },
   );
-  await page.mouse.up();
 }
 
 async function seedTicketNode(
@@ -218,7 +199,10 @@ test.describe("arrangement durability (§5, §12)", () => {
         await page.goto(`${server.baseUrl}/`);
         await expect(page.getByTestId(`canvas-node-${nodeId}`)).toBeVisible();
 
-        await dragNodeBy(page, nodeId, 260, 180);
+        await dragNodeBy(page, page.getByTestId(`canvas-node-${nodeId}`), {
+          x: 260,
+          y: 180,
+        });
         const draggedTo = await readNodePosition(page, nodeId);
 
         // The write is debounced (`createArrangementWriteQueue`); wait for
@@ -255,10 +239,7 @@ test.describe("arrangement durability (§5, §12)", () => {
 
   test("a rigid-body push during one drag persists the displaced neighbour too, via PATCH /api/arrangement", async ({
     page,
-    browserName,
   }) => {
-    // #347: firefox-only drag-settle flake surfaced by #317's browser matrix.
-    test.skip(browserName === "firefox", "see #347");
     await withFreshServer(async (server) => {
       const a = await seedTicketNode(server.baseUrl, "OXY-8002a push fixture");
       const b = await seedTicketNode(server.baseUrl, "OXY-8002b push fixture");
@@ -292,10 +273,7 @@ test.describe("arrangement durability (§5, §12)", () => {
 
   test("reset arrangement clears the authored position on the server, and the canvas re-derives", async ({
     page,
-    browserName,
   }) => {
-    // #347: firefox-only drag-settle flake surfaced by #317's browser matrix.
-    test.skip(browserName === "firefox", "see #347");
     await withFreshServer(async (server) => {
       const { nodeId } = await seedTicketNode(
         server.baseUrl,
@@ -305,7 +283,10 @@ test.describe("arrangement durability (§5, §12)", () => {
       await page.goto(`${server.baseUrl}/`);
       await expect(page.getByTestId(`canvas-node-${nodeId}`)).toBeVisible();
 
-      await dragNodeBy(page, nodeId, 220, 140);
+      await dragNodeBy(page, page.getByTestId(`canvas-node-${nodeId}`), {
+        x: 220,
+        y: 140,
+      });
       const draggedTo = await readNodePosition(page, nodeId);
 
       await expect
