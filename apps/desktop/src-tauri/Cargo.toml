@@ -22,6 +22,15 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Embedded WebDriver server for #317's native shell suite
+# (`apps/desktop/e2e`), registered only behind `#[cfg(debug_assertions)]` in
+# `lib.rs` per the crate's own documented pattern — always present as a
+# dependency (so a release build's `cargo tauri build` links cleanly and
+# `capabilities/default.json`'s `wdio-webdriver:default` permission resolves
+# against a real plugin), never an active `.plugin(...)` call outside a
+# debug build, so no shipped bundle ever exposes the embedded driver's HTTP
+# server.
+tauri-plugin-wdio-webdriver = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
