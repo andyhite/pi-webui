@@ -1,11 +1,10 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, afterEach, describe, it } from "bun:test";
 import { loadServerConfig, type ServerConfigOverrides } from "../config.js";
 import { startServer } from "../index.js";
-import { ephemeralPort } from "../testing/harness.js";
+import { ephemeralPort, occupyPort } from "../testing/ports.js";
 
 /**
  * Blocking finding #1: persisted host/port/allowNonLoopbackBind overrides
@@ -201,11 +200,10 @@ describe("a stored host/port that is legal but unbindable falls back and is repo
     handles.pop();
 
     // Something else holds `occupiedPort` for the whole of the second boot —
-    // a plain listener is enough, this is only about the port being taken.
-    const blocker = createServer();
-    await new Promise<void>((resolve) => {
-      blocker.listen(occupiedPort, "127.0.0.1", resolve);
-    });
+    // occupied on both stacks (#343): a caller resolving `127.0.0.1` here is
+    // the only one this test's own config uses, but `occupyPort` covers
+    // `::1` too so this blocker means the same thing on every platform.
+    const blocker = await occupyPort(occupiedPort);
     try {
       // Asked for `firstPort` again (free, since the first server released
       // it) — the stored override still wins the *attempt*, but it cannot
@@ -230,7 +228,7 @@ describe("a stored host/port that is legal but unbindable falls back and is repo
 
       void second;
     } finally {
-      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+      await blocker.close();
     }
   });
 
@@ -264,13 +262,16 @@ describe("a stored host/port that is legal but unbindable falls back and is repo
     await first.close();
     handles.pop();
 
-    // No host argument: `localhost` resolves dual-stack on this machine
-    // (IPv6 `::1` ahead of `127.0.0.1`), so a blocker bound to one alone
-    // would leave the stored port bindable on the other — occupy both.
-    const blocker = createServer();
-    await new Promise<void>((resolve) => {
-      blocker.listen(occupiedPort, resolve);
-    });
+    // `localhost` resolves dual-stack on this machine (IPv6 `::1` ahead of
+    // `127.0.0.1`), so a blocker bound to one alone would leave the stored
+    // port bindable on the other. `createServer().listen(port)` with no
+    // host binds `::` only, and whether that also covers IPv4 depends on
+    // `net.ipv6.bindv6only` — true on macOS (#343: this test failed 4/4
+    // runs there, since the port was never actually occupied on IPv4),
+    // false on the Linux CI runners this test has only ever run on.
+    // `occupyPort` binds both explicitly instead, so this means the same
+    // thing on every platform.
+    const blocker = await occupyPort(occupiedPort);
     try {
       const { handle: second, port: secondPort } = await boot(
         baseOverrides(dir, firstPort),
@@ -306,7 +307,7 @@ describe("a stored host/port that is legal but unbindable falls back and is repo
 
       void second;
     } finally {
-      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+      await blocker.close();
     }
   });
 

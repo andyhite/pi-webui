@@ -1,4 +1,4 @@
-import { createServer } from "node:net";
+import { createServer, type Server } from "node:net";
 
 /**
  * A port the OS says is free, rather than one this module guessed — for the
@@ -45,4 +45,52 @@ export function ephemeralPort(): Promise<number> {
       probe.close(() => resolve(port));
     });
   });
+}
+
+/** Releases every listener {@link occupyPort} bound. */
+export interface PortOccupant {
+  close(): Promise<void>;
+}
+
+/**
+ * Genuinely occupies `port` on every stack a test's own connection might
+ * resolve to, so a test asserting "this port is unbindable" cannot pass by
+ * accident (#343). A single hostless `createServer().listen(port)` is not
+ * enough: it binds the IPv6 wildcard address `::` alone, and whether that
+ * *also* covers IPv4 traffic on the same port is a kernel setting
+ * (`net.ipv6.bindv6only`) — 0 (mapped, the common Linux default) on the CI
+ * runners this suite has only ever passed on, unset/1 (not mapped) on
+ * macOS. So the same hostless blocker occupies the port everywhere on Linux
+ * and occupies only the IPv6 side of it on macOS, where a caller resolving
+ * `127.0.0.1`, or dual-stack `localhost` when it resolves there first,
+ * still finds the port free.
+ *
+ * Binds `127.0.0.1` and `::1` explicitly instead, in parallel, and resolves
+ * only once both are listening — occupied on both stacks, on every
+ * platform, regardless of that kernel setting.
+ */
+export async function occupyPort(port: number): Promise<PortOccupant> {
+  const [ipv4, ipv6] = await Promise.all([
+    bindBlocker(port, "127.0.0.1"),
+    bindBlocker(port, "::1"),
+  ]);
+  return {
+    close: async () => {
+      await Promise.all([closeServer(ipv4), closeServer(ipv6)]);
+    },
+  };
+}
+
+function bindBlocker(port: number, host: string): Promise<Server> {
+  const { promise, resolve, reject } = Promise.withResolvers<Server>();
+  const server = createServer();
+  server.once("error", reject);
+  server.listen(port, host, () => resolve(server));
+  return promise;
+}
+
+function closeServer(server: Server): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  server.close(() => resolve());
+  return promise;
 }
