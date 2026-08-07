@@ -46,7 +46,6 @@ export async function smokeTest(binary: string): Promise<void> {
       ...environment(),
       PLOTROOM_PORT: String(port),
       PLOTROOM_STATE_DIR: stateDir,
-      PLOTROOM_COMPILE_SMOKE_TEST: "1",
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -128,7 +127,7 @@ async function compile(): Promise<void> {
   mkdirSync(outDir, { recursive: true });
 
   const built = await Bun.build({
-    entrypoints: [join(import.meta.dir, "index.ts")],
+    entrypoints: [join(import.meta.dir, "compiled-entrypoint.ts")],
     compile: {
       outfile: binary,
       autoloadBunfig: false,

@@ -370,26 +370,22 @@ export function startServer(config = loadServerConfig()) {
 
 // Top-level bootstrap only; everything else uses Logger. console.error is
 // allowed by the lint config specifically for this kind of last-resort exit.
-// `import.meta.main` (not a manual `import.meta.url === file://${argv[1]}`
-// comparison, which this used to be): the latter breaks on Windows, where
-// `process.argv[1]` is backslash-separated and unencoded while `import.meta.url`
-// is a `file://` URL, so the two never compared equal and this whole block
-// silently never ran — the compiled server exited immediately with nothing
-// listening and no output (discovered via the `Session host binary
-// (windows-latest)` CI job, #316: the first place `@plotroom/server` runs as
-// a standalone compiled binary and is smoke-tested for real).
-if (process.env.PLOTROOM_COMPILE_SMOKE_TEST) {
-  // Temporary, env-gated diagnostic for the still-open Windows compiled-
-  // binary smoke test failure (#316): fires only under `compile.ts`'s
-  // smoke test, never in production or the integration suite (which import
-  // `startServer` directly and never set this var), so it says whether
-  // this module even reached this line and what `import.meta.main`
-  // evaluated to before deciding anything about the guard below.
-  console.error(
-    `[compile-smoke] index.ts reached the entrypoint guard: platform=${process.platform} main=${String(import.meta.main)} argv=${JSON.stringify(process.argv)}`,
-  );
-}
-if (import.meta.main) {
+//
+// `bootServer` is a function, not inline top-level code, because it has two
+// separate callers with two separate "is this the real entrypoint" answers:
+// `import.meta.main` correctly guards a *direct* invocation (`bun --watch
+// src/index.ts`, the e2e harnesses' spawned `SERVER_ENTRY`) on every
+// platform, but is unconditionally `false` inside a `bun build --compile`
+// executable — a confirmed Bun limitation (oven-sh/bun#6009), reproduced
+// here on Windows specifically (confirmed via a one-shot diagnostic in the
+// `Session host binary (windows-latest)` CI job: the compiled binary's own
+// `import.meta.main` read `false`, so this whole block silently never ran —
+// exit 0, nothing bound, nothing logged). `compiled-entrypoint.ts` is
+// `Bun.build`'s `compile` entrypoint instead of this file specifically so
+// the compiled binary can call `bootServer()` unconditionally, needing no
+// "am I the entrypoint" check at all (`compile.ts`'s own comment has the
+// full story).
+export function bootServer(): void {
   try {
     // A bind failure arrives after `startServer` has returned — the socket is
     // still connecting — so it needs its own report. Without this it is an
@@ -417,3 +413,5 @@ if (import.meta.main) {
     process.exit(1);
   }
 }
+
+if (import.meta.main) bootServer();
