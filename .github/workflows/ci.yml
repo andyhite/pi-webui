@@ -439,7 +439,16 @@ jobs:
       - name: Build the web renderer
         run: bunx turbo run build --filter=@plotroom/web
 
+      # `APPIMAGE_EXTRACT_AND_RUN=1`: `linuxdeploy` (which the appimage
+      # bundle target runs) is itself shipped as an AppImage, and even with
+      # `libfuse2` installed, actually mounting via FUSE inside GitHub's
+      # container still failed ("failed to run linuxdeploy") -- this makes
+      # every AppImage tool in the chain extract-and-run instead of
+      # FUSE-mounting itself, sidestepping the kernel/container-permission
+      # gap rather than only the missing userspace library.
       - name: Build the desktop bundle
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
         run: bun run --filter=@plotroom/desktop build
 
       # The updater dry-run this job's acceptance criteria names: not a real
