@@ -39,6 +39,7 @@ import {
 import {
   dragNodeBy,
   flowPosition,
+  waitForSettled,
   zoomPastWorkstreamLevel,
 } from "./canvas-drag-helpers.js";
 
@@ -367,10 +368,7 @@ test.describe("(c) a contained node's own arrangement", () => {
 
   test("a contained node's drag is persisted as an offset inside its container, and pushes the sibling it lands on", async ({
     page,
-    browserName,
   }) => {
-    // #347: firefox-only drag-settle flake surfaced by #317's browser matrix.
-    test.skip(browserName === "firefox", "see #347");
     test.setTimeout(90_000);
     const base = requireContainedServer().baseUrl;
 
@@ -485,10 +483,15 @@ test.describe("(c) a contained node's own arrangement", () => {
     const onto = await pushedCard.boundingBox();
     if (!from || !onto) throw new Error("a contained card had no bounding box");
     expect(OVERLAP_GAP).toBeLessThan(onto.height);
-    await dragNodeBy(page, draggedCard, {
-      x: onto.x - from.x,
-      y: onto.y - from.y + OVERLAP_GAP,
-    });
+    // #347: `alsoSettle` waits for the pushed sibling too — settling only
+    // the dragged card let a caller read the sibling's still-committing
+    // frame on WebKit.
+    await dragNodeBy(
+      page,
+      draggedCard,
+      { x: onto.x - from.x, y: onto.y - from.y + OVERLAP_GAP },
+      { alsoSettle: [pushedCard] },
+    );
 
     const pushedAfter = await relativeOf(pushedWrapper);
     // Not merely "it moved": the direction is the thing this test exists to
@@ -556,6 +559,10 @@ test.describe("(c) a contained node's own arrangement", () => {
     await expect(page.getByTestId("attention-header-count")).toBeVisible();
     await zoomPastWorkstreamLevel(page);
     await expect(draggedCard).toBeVisible();
+    // #347: a reload re-derives the container's layout from scratch, which
+    // can still be mid-commit the instant `draggedCard` first becomes
+    // visible — settle both cards before trusting their positions.
+    await waitForSettled([draggedCard, pushedCard]);
     const reloadedDragged = await relativeOf(draggedWrapper);
     const reloadedPushed = await relativeOf(pushedWrapper);
     expect(reloadedDragged.x).toBeCloseTo(draggedRelative.x, 0);

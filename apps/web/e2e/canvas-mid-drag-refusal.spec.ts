@@ -266,7 +266,26 @@ test.describe("mid-drag refusal", () => {
     page,
     browserName,
   }) => {
-    // #347: firefox-only drag-settle flake surfaced by #317's browser matrix.
+    // #347: this one is a *different* failure from the settle-read race the
+    // rest of this issue fixed, and stays skipped on firefox with that
+    // distinction on record. Reproduced directly (2 runs, ~4 minutes, both
+    // hit the exact same signature before a 10-run budget's worth of time
+    // ran out): `beginConnectionDrag`'s `sourceHandle.hover()` times out
+    // with Playwright's own actionability log naming a *different*,
+    // unrelated node's `canvas-node-<id>` div as the element intercepting
+    // pointer events at the handle's coordinates — i.e. on firefox this
+    // fresh three-node graph (content, a workstream-contained command, and
+    // the session node `createEndedSessionNode` places) derives an
+    // arrangement where two independent top-level nodes visually overlap
+    // enough to block one another's connection handle. No drag is even in
+    // flight yet at that point, so no amount of settle-polling after a
+    // gesture touches it — the bug (if it is one) is in whatever `deriveInitialArrangement`/
+    // card sizing produces *before* this test's own interaction starts,
+    // and plausibly downstream of firefox measuring rendered card
+    // width/height differently (its own font metrics) than
+    // chromium/webkit, not the render-commit race #347 diagnosed. Left for
+    // its own investigation against `packages/ui`'s placement/derive code
+    // under firefox specifically, rather than guessed at here.
     test.skip(browserName === "firefox", "see #347");
     test.setTimeout(60_000);
     const base = requireServer().baseUrl;

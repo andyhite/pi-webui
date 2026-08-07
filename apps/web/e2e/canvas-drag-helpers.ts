@@ -33,11 +33,21 @@ async function requireBox(locator: Locator): Promise<Box> {
  * both hang off (`onNodeDrag`/`onNodeDragStop` in `PlotCanvas.tsx`). Moves in
  * several intermediate steps so xyflow's own drag-threshold and per-frame
  * push solver both see real motion, not a single teleport.
+ *
+ * `alsoSettle`, when given, names every other node this gesture is expected
+ * to disturb (a rigid-body push's siblings, a container's other children) —
+ * `waitForSettled` below waits for *all* of them, dragged node included, to
+ * stop moving together before returning. Settling only the dragged node's
+ * own box (the original, narrower shape of this helper) is exactly the gap
+ * #347 traced: a pushed sibling can still be mid-commit after the node under
+ * the pointer has already stopped, and a caller that reads the sibling right
+ * after `dragNodeBy` returns catches that stale frame.
  */
 export async function dragNodeBy(
   page: Page,
   node: Locator,
   delta: { readonly x: number; readonly y: number },
+  options?: { readonly alsoSettle?: readonly Locator[] },
 ): Promise<void> {
   const box = await requireBox(node);
   const start = center(box);
@@ -54,7 +64,7 @@ export async function dragNodeBy(
     );
   }
   await page.mouse.up();
-  await waitForSettled(node);
+  await waitForSettled([node, ...(options?.alsoSettle ?? [])]);
 }
 
 /**
@@ -64,26 +74,36 @@ export async function dragNodeBy(
  * returns control to Playwright, but not guaranteed under WebKit's or
  * Firefox's own render scheduling (measured: reading a "settled" box
  * immediately after `mouse.up()` caught a stale, still-moving position on
- * Firefox often enough to fail rigid-body push assertions). A bounded poll
- * on the node's own box, not a fixed sleep — it converges on whatever the
- * DOM's true post-drag position is, on every engine, rather than masking a
+ * Firefox often enough to fail rigid-body push assertions, and #347's
+ * webkit escalation showed the same gap for a *pushed* node's box, and for a
+ * node re-rendered fresh after a `page.reload()`). A bounded poll on every
+ * given node's own box, not a fixed sleep — it converges on whatever the
+ * DOM's true settled position is, on every engine, rather than masking a
  * real regression behind a wait that always passes.
+ *
+ * Exported (not just `dragNodeBy`'s own internal use) so a spec can also
+ * settle nodes a gesture disturbed indirectly — a reload's fresh render, or
+ * a second drag's push reaching a node the first call never named — before
+ * reading their positions for an assertion.
  */
-async function waitForSettled(
-  node: Locator,
+export async function waitForSettled(
+  nodes: readonly Locator[],
   quietMs = 50,
   timeoutMs = 3_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  let last = await requireBox(node);
+  let last = await Promise.all(nodes.map(requireBox));
   while (Date.now() < deadline) {
     const { promise, resolve } = Promise.withResolvers<void>();
     setTimeout(resolve, quietMs);
     await promise;
-    const next = await requireBox(node);
+    const next = await Promise.all(nodes.map(requireBox));
     if (
-      Math.round(next.x) === Math.round(last.x) &&
-      Math.round(next.y) === Math.round(last.y)
+      next.every(
+        (box, i) =>
+          Math.round(box.x) === Math.round(last[i]!.x) &&
+          Math.round(box.y) === Math.round(last[i]!.y),
+      )
     ) {
       return;
     }
@@ -196,13 +216,20 @@ export async function flowPosition(
     const styled = element as HTMLElement;
     return styled.style.transform;
   });
-  const match = /translate\(([-0-9.]+)px,\s*([-0-9.]+)px\)/.exec(transform);
+  // Firefox's CSSOM collapses `translate(Xpx, 0px)` down to the CSS
+  // `translate()` function's single-argument form (`translate(Xpx)`,
+  // Y implied zero) when the node's Y offset is exactly zero — Chromium and
+  // WebKit always serialize both components. The second group is therefore
+  // optional, defaulting to "0" rather than failing to parse at all.
+  const match = /translate\(([-0-9.]+)px(?:,\s*([-0-9.]+)px)?\)/.exec(
+    transform,
+  );
   if (!match) {
     throw new Error(
       `could not parse a flow-space transform from "${transform}"`,
     );
   }
-  return { x: Number(match[1]), y: Number(match[2]) };
+  return { x: Number(match[1]), y: Number(match[2] ?? 0) };
 }
 
 /**

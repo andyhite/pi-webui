@@ -33,6 +33,7 @@ import {
   boxesByNodeId,
   dragNodeBy,
   overlaps,
+  waitForSettled,
   type Box,
 } from "./canvas-drag-helpers.js";
 
@@ -100,9 +101,22 @@ test("dragging a node into another pushes it, the push chains, and the settled a
   page,
   browserName,
 }) => {
-  // #347: this drag/rigid-body settle read is flaky on firefox only
-  // (chromium and webkit pass consistently); tracked there rather than
-  // fixed inline — #317's browser matrix is what surfaced it.
+  // #347: webkit's version of this settle race is fixed (`alsoSettle` on
+  // the `dragNodeBy` call below, plus a bounded re-settle for the "stays
+  // put" check in place of a fixed sleep) and verified stable over 10+
+  // consecutive runs. Firefox stays skipped: 10/10 repeat runs of this
+  // exact, hardened test still failed here, and *widening* the settle
+  // bound (1s quiet, 15s timeout) made the divergence worse, not better —
+  // one run's "stays put" delta went from 15px to over 11,000px the longer
+  // it was given to wait. That rules out a simple commit-timing race (which
+  // a longer bound would fix); it points at either an unbounded/continuous
+  // reflow (a debounced `fitView` or auto-pan still chasing the dragged
+  // node) or an unstable solver iteration specific to Firefox's layout
+  // pipeline for a drag this large — a real product-facing question,
+  // not a test-timing one, and outside a settle-poll's power to paper
+  // over. Needs its own investigation issue against
+  // `packages/ui/src/canvas/PlotCanvas.tsx`'s `onNodeDrag` under Firefox
+  // specifically, filed separately rather than guessed at here.
   test.skip(browserName === "firefox", "see #347");
   test.setTimeout(60_000);
   const base = requireServer().baseUrl;
@@ -128,15 +142,24 @@ test("dragging a node into another pushes it, the push chains, and the settled a
   const [midId, midBox] = ordered[1] as [string, Box];
   const [farId, farBox] = ordered[2] as [string, Box];
 
+  const topLoc = page.getByTestId(`canvas-node-${topId}`);
+  const midLoc = page.getByTestId(`canvas-node-${midId}`);
+  const farLoc = page.getByTestId(`canvas-node-${farId}`);
+
   // Drag the top node down far enough to overlap the middle node deeply —
   // deep enough that separating them pushes the middle node down into the
   // far node's own space too, so the push has to travel through the chain
   // rather than stop at the first contact.
   const dragDistance = farBox.y + farBox.height - topBox.y + 40;
-  await dragNodeBy(page, page.getByTestId(`canvas-node-${topId}`), {
-    x: 0,
-    y: dragDistance,
-  });
+  // #347: `alsoSettle` waits for the pushed siblings too, not just the node
+  // under the pointer — settling only `topLoc` let a caller read
+  // `midLoc`/`farLoc` mid-commit on WebKit.
+  await dragNodeBy(
+    page,
+    topLoc,
+    { x: 0, y: dragDistance },
+    { alsoSettle: [midLoc, farLoc] },
+  );
 
   const settled = await boxesByNodeId(page, [topId, midId, farId]);
   const settledTop = settled.get(topId) as Box;
@@ -156,8 +179,12 @@ test("dragging a node into another pushes it, the push chains, and the settled a
 
   // (c) At rest stays put: no further input, and the settled positions do
   // not drift — proof this is a one-shot solver reacting to a drag frame,
-  // never a continuous simulation still running after the human let go.
-  await page.waitForTimeout(600);
+  // never a continuous simulation still running after the human let go. A
+  // further bounded settle-poll, not a fixed sleep: a still-running
+  // simulation would keep finding motion and time out, rather than this
+  // silently comparing a mid-drift frame the way a blind `waitForTimeout`
+  // would.
+  await waitForSettled([topLoc, midLoc, farLoc], 250);
   const afterPause = await boxesByNodeId(page, [topId, midId, farId]);
   // Rounded to whole pixels: width/height can wobble by a sub-pixel from
   // text layout measurement alone, which is not a claim about drift — the
@@ -180,7 +207,15 @@ test("a node the drag chain never reaches is never displaced, even though the ca
   page: Page;
   browserName: string;
 }) => {
-  // #347: same firefox-only settle-read flake as the test above.
+  // #347: webkit's settle race here is fixed (`alsoSettle` on the second
+  // `dragNodeBy` call below settles the pushed sibling and this node
+  // together) and verified stable over 10 consecutive runs. Firefox stays
+  // skipped: even with that same hardening, 10 repeat runs of this file
+  // passed this test only 4/10 times on firefox (same shape of large,
+  // inconsistent position delta as the sibling test above) — not the
+  // narrow early-read race #347 diagnosed, but the same broader
+  // Firefox-specific instability documented on the test above; tracked
+  // there rather than duplicated here.
   test.skip(browserName === "firefox", "see #347");
   test.setTimeout(60_000);
   const base = requireServer().baseUrl;
@@ -215,10 +250,21 @@ test("a node the drag chain never reaches is never displaced, even though the ca
   const [dragId, dragBox] = orderedAB[0] as [string, Box];
   const [otherId, otherBox] = orderedAB[1] as [string, Box];
 
-  await dragNodeBy(page, page.getByTestId(`canvas-node-${dragId}`), {
-    x: 0,
-    y: otherBox.y - dragBox.y + 20,
-  });
+  // #347: `alsoSettle` waits for the pushed sibling AND the untouched node
+  // too — the webkit failure here was reading `untouchedAfter` while it was
+  // still mid-commit from this second drag's own push pass, not because it
+  // had actually moved.
+  await dragNodeBy(
+    page,
+    page.getByTestId(`canvas-node-${dragId}`),
+    { x: 0, y: otherBox.y - dragBox.y + 20 },
+    {
+      alsoSettle: [
+        page.getByTestId(`canvas-node-${otherId}`),
+        page.getByTestId(`canvas-node-${idUntouched}`),
+      ],
+    },
+  );
 
   const after = await boxesByNodeId(page, [idUntouched, idA, idB]);
   const otherAfter = after.get(otherId) as Box;
