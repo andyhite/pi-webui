@@ -94,6 +94,33 @@ async function readNodePosition(
   );
 }
 
+/**
+ * `readAuthoredPosition` (the server, a `PATCH`ed float64 round-tripped
+ * through JSON, no precision lost) and `readNodePosition` (the DOM,
+ * `style.transform`'s string re-serialized *out of the browser's own CSS
+ * engine*) start from the same conceptual value but do not preserve it
+ * identically: browsers store `transform`'s components at `float` (32-bit)
+ * precision internally, not JavaScript's `double`, so reading a translated
+ * position back out of the DOM is a lossy round-trip the server's side of
+ * the same comparison never takes. That loss is usually far below
+ * `roundPoint`'s own tenth-of-a-pixel bucket — invisible — except when the
+ * true value sits within a float32 ULP of a bucket's own boundary, where it
+ * can nudge the DOM's read onto the *other* side of that boundary from the
+ * server's exact one. The two sides then round to *adjacent* tenths of a
+ * pixel forever: not a race either value is still converging out of (caught
+ * live while diagnosing this fix — server 86.7, DOM 86.8, both for the same
+ * drag, https://github.com/andyhite/plotroom/issues/365), so no amount of
+ * `expect.poll` waiting was ever going to close it. A tolerance one bucket
+ * wide absorbs exactly that cross-representation slop and nothing more —
+ * still sharp enough to fail on a genuinely wrong position.
+ */
+function samePosition(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): boolean {
+  return Math.abs(a.x - b.x) <= 0.15 && Math.abs(a.y - b.y) <= 0.15;
+}
+
 async function boundingBoxOrThrow(
   page: Page,
   nodeId: string,
@@ -209,7 +236,12 @@ test.describe("arrangement durability (§5, §12)", () => {
         // the server to actually have it rather than racing the debounce
         // window with a fixed sleep.
         await expect
-          .poll(() => readAuthoredPosition(server.baseUrl, nodeId))
+          .poll(async () => {
+            const authored = await readAuthoredPosition(server.baseUrl, nodeId);
+            return authored && samePosition(authored, draggedTo)
+              ? draggedTo
+              : authored;
+          })
           .toEqual(draggedTo);
 
         await server.stop();
@@ -263,10 +295,19 @@ test.describe("arrangement durability (§5, §12)", () => {
       expect(afterPushB).not.toEqual(beforePush);
 
       await expect
-        .poll(async () => ({
-          a: await readAuthoredPosition(server.baseUrl, a.nodeId),
-          b: await readAuthoredPosition(server.baseUrl, b.nodeId),
-        }))
+        .poll(async () => {
+          const authored = {
+            a: await readAuthoredPosition(server.baseUrl, a.nodeId),
+            b: await readAuthoredPosition(server.baseUrl, b.nodeId),
+          };
+          const expected = { a: afterPushA, b: afterPushB };
+          return authored.a &&
+            authored.b &&
+            samePosition(authored.a, afterPushA) &&
+            samePosition(authored.b, afterPushB)
+            ? expected
+            : authored;
+        })
         .toEqual({ a: afterPushA, b: afterPushB });
     });
   });
@@ -290,7 +331,12 @@ test.describe("arrangement durability (§5, §12)", () => {
       const draggedTo = await readNodePosition(page, nodeId);
 
       await expect
-        .poll(() => readAuthoredPosition(server.baseUrl, nodeId))
+        .poll(async () => {
+          const authored = await readAuthoredPosition(server.baseUrl, nodeId);
+          return authored && samePosition(authored, draggedTo)
+            ? draggedTo
+            : authored;
+        })
         .toEqual(draggedTo);
 
       await page.keyboard.press("Control+k");
