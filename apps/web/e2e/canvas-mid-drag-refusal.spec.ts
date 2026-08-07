@@ -283,10 +283,11 @@ test.describe("mid-drag refusal", () => {
     // card sizing produces *before* this test's own interaction starts,
     // and plausibly downstream of firefox measuring rendered card
     // width/height differently (its own font metrics) than
-    // chromium/webkit, not the render-commit race #347 diagnosed. Left for
-    // its own investigation against `packages/ui`'s placement/derive code
-    // under firefox specifically, rather than guessed at here.
-    test.skip(browserName === "firefox", "see #347");
+    // chromium/webkit, not the render-commit race #347 diagnosed. Filed as
+    // its own investigation issue, #358, against `packages/ui`'s
+    // placement/derive code under firefox specifically, rather than
+    // guessed at here.
+    test.skip(browserName === "firefox", "see #347, tracked as #358");
     test.setTimeout(60_000);
     const base = requireServer().baseUrl;
 

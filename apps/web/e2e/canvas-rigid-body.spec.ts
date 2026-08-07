@@ -114,10 +114,10 @@ test("dragging a node into another pushes it, the push chains, and the settled a
   // node) or an unstable solver iteration specific to Firefox's layout
   // pipeline for a drag this large — a real product-facing question,
   // not a test-timing one, and outside a settle-poll's power to paper
-  // over. Needs its own investigation issue against
+  // over. Filed as its own investigation issue, #357, against
   // `packages/ui/src/canvas/PlotCanvas.tsx`'s `onNodeDrag` under Firefox
-  // specifically, filed separately rather than guessed at here.
-  test.skip(browserName === "firefox", "see #347");
+  // specifically, rather than guessed at here.
+  test.skip(browserName === "firefox", "see #347, tracked as #357");
   test.setTimeout(60_000);
   const base = requireServer().baseUrl;
 
@@ -214,9 +214,9 @@ test("a node the drag chain never reaches is never displaced, even though the ca
   // passed this test only 4/10 times on firefox (same shape of large,
   // inconsistent position delta as the sibling test above) — not the
   // narrow early-read race #347 diagnosed, but the same broader
-  // Firefox-specific instability documented on the test above; tracked
-  // there rather than duplicated here.
-  test.skip(browserName === "firefox", "see #347");
+  // Firefox-specific instability filed as #357, tracked there rather than
+  // duplicated here.
+  test.skip(browserName === "firefox", "see #347, tracked as #357");
   test.setTimeout(60_000);
   const base = requireServer().baseUrl;
   // `deriveInitialArrangement` lays out edge-less nodes in one shared
