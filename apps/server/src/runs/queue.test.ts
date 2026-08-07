@@ -5,7 +5,7 @@ import { createEventBus } from "../events/bus.js";
 import { Logger } from "../logging/logger.js";
 import { createStores, type ApiStores } from "../routes/api.js";
 import { RunQueueService } from "./queue.js";
-import type { RunService } from "./service.js";
+import type { RunOneResult, RunService } from "./service.js";
 
 /**
  * The queue's own decisions, over real rows.
@@ -25,6 +25,15 @@ import type { RunService } from "./service.js";
  */
 const stores: { current: ApiStores | null } = { current: null };
 const databases: PlotroomDatabase[] = [];
+
+/** A result shape good enough for a stub that never inspects it. */
+const FAKE_RUN_ONE_RESULT = {
+  run: {},
+  session: {},
+  status: {},
+  warning: null,
+  replayed: false,
+} as unknown as RunOneResult;
 
 afterEach(() => {
   for (const database of databases.splice(0)) database.close();
@@ -55,6 +64,12 @@ interface FixtureOptions {
    * about, and one the unwired fixture cannot express.
    */
   readonly wired?: boolean;
+  /**
+   * Replaces the default throwing stub, for a test that needs an admission to
+   * actually resolve — controllably, rather than instantly — to observe what the
+   * queue does while one is still in flight.
+   */
+  readonly runOne?: RunService["runOne"];
 }
 
 function fixture(options: FixtureOptions | number = {}): Fixture {
@@ -70,12 +85,14 @@ function fixture(options: FixtureOptions | number = {}): Fixture {
 
   let attempts = 0;
   const runs = {
-    runOne: () => {
-      attempts += 1;
-      throw new Error(
-        "the queue started a run it should not have: nothing in a batch that is not running may be admitted",
-      );
-    },
+    runOne:
+      settings.runOne ??
+      (() => {
+        attempts += 1;
+        throw new Error(
+          "the queue started a run it should not have: nothing in a batch that is not running may be admitted",
+        );
+      }),
   } as unknown as RunService;
 
   const queue = new RunQueueService({
@@ -442,5 +459,77 @@ describe("the drain loop terminates (§4.1)", () => {
     await board.queue.drain();
     expect(board.stores.queue.waiting()).toHaveLength(0);
     expect(board.runAttempts()).toBe(0);
+  });
+});
+
+describe("shutdown closes the door on admission (issue #71)", () => {
+  it("drain() refuses to admit anything once stopped, leaving entries queued", async () => {
+    const board = fixture();
+    expect(board.stores.queue.waiting()).toHaveLength(2);
+
+    board.queue.stopQueue();
+    await board.queue.drain();
+
+    expect(board.runAttempts()).toBe(0);
+    expect(board.stores.queue.entry(board.siblingEntryId).state).toBe("queued");
+    expect(board.stores.queue.entry(board.entryId).state).toBe("queued");
+  });
+
+  it("runOne() refuses a fresh admission once stopped, rather than starting it", async () => {
+    const board = fixture();
+
+    board.queue.stopQueue();
+
+    await expect(
+      board.queue.runOne({
+        commandId: board.producerCommandId,
+        initiationKey: "a-key-nobody-used-yet",
+        actor: humanAuthor,
+      }),
+    ).rejects.toThrow(/shutting down/);
+
+    expect(board.runAttempts()).toBe(0);
+  });
+
+  it("settleInFlight() waits for an admission already past the gate before it resolves", async () => {
+    const admissionStarted = Promise.withResolvers<void>();
+    const releaseAdmission = Promise.withResolvers<void>();
+
+    const board = fixture({
+      runOne: async () => {
+        admissionStarted.resolve();
+        await releaseAdmission.promise;
+        return FAKE_RUN_ONE_RESULT;
+      },
+    });
+
+    // Started through the one door, before the gate closes — exactly the shape
+    // of a `POST /api/runs` that landed just ahead of a shutdown.
+    const admission = board.queue.runOne({
+      commandId: board.producerCommandId,
+      initiationKey: "already-in-flight",
+      actor: humanAuthor,
+    });
+    await admissionStarted.promise;
+
+    board.queue.stopQueue();
+
+    let settled = false;
+    const waiting = board.queue.settleInFlight().then(() => {
+      settled = true;
+    });
+
+    // No timer, and none needed: `waiting` cannot settle until the pending
+    // admission does, and nothing here resolves that — so flushing whatever
+    // microtasks are already queued is enough to prove it deterministically,
+    // not by racing a guessed delay against it.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseAdmission.resolve();
+    await waiting;
+    expect(settled).toBe(true);
+    await expect(admission).resolves.toMatchObject({ admitted: true });
   });
 });

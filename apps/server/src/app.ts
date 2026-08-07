@@ -558,7 +558,10 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     hub,
     runs,
     queue,
-    stopQueue: unsubscribeQueue,
+    stopQueue: () => {
+      unsubscribeQueue();
+      queue.stopQueue();
+    },
     steering,
     stopSteering: unsubscribeSteering,
     compaction,

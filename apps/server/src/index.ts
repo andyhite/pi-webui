@@ -334,6 +334,12 @@ export function startServer(config = loadServerConfig()) {
       runtime.attentionTick.stop();
       await runtime.notifications.drain();
 
+      // An admission already past `stopQueue`'s gate when it closed is let
+      // finish rather than left half-spawned (issue #71's worse half): without
+      // this, a session-host process that was still registering itself with the
+      // hub below would be missed by the sweep and survive `db.close()`.
+      await runtime.queue.settleInFlight();
+
       // A graceful close does not orphan a runtime: every live session is
       // recorded as **interrupted** here and its process terminated, rather than
       // left spending money against a workspace nothing is watching until the

@@ -869,6 +869,31 @@ describe("the limit bounds initiation, not one endpoint (§4.1)", () => {
   });
 });
 
+describe("shutdown closes the admission door (issue #71)", () => {
+  it("refuses POST /api/runs once the queue has stopped, rather than starting a session", async () => {
+    const harness = await bootWithScript(staysOpen, 4);
+    const fixture = await command(harness, { name: "A" });
+
+    harness.handle.queue.stopQueue();
+
+    const refused = await harness.call("/runs", {
+      method: "POST",
+      body: {
+        commandId: fixture.commandId,
+        initiationKey: "post-shutdown-1",
+        runtime: { script: staysOpen },
+      },
+    });
+
+    expect(refused.status).toBe(409);
+    expect(String(at(refused.body, "error.message"))).toMatch(/shutting down/);
+
+    // Nothing was admitted: no session exists for this gesture, and a later
+    // reconciliation cannot find one either.
+    expect(list(await harness.ok("/run-queue"), "queued")).toHaveLength(0);
+  });
+});
+
 describe("a restart does not strand admitted work (§4.1, principle 11)", () => {
   /**
    * Two things the queue owes a restart, and it owed neither before this:
