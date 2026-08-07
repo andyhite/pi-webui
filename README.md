@@ -33,7 +33,7 @@ itself, is corrected against it.
 
 - `apps/server` — the HTTP API server; owns runs, budgets, claims, approvals, integrations, and the runtime boundary
 - `apps/web` — the React 19 canvas UI operators use to author and steer
-- `apps/desktop` — the Electron desktop shell wrapping the web app with a backend picker and OS integration
+- `apps/desktop` — the Tauri v2 desktop shell (a thin Rust main) wrapping the web app: window lifecycle, spawn-or-attach to a local server, and sidecar lifecycle for the compiled server/session-host binaries
 - `apps/session-host` — the Bun sidecar embedding the agent runtime, exposing tools and observations to the server
 - `packages/core` — the domain model and rule predicates every surface calls, once
 - `packages/db` — persistence for the graph, runs, budgets, claims, and credentials
