@@ -36,27 +36,30 @@ tree, the doc is stale — file it.
 
 ## Layout
 
-| Path                  | Package                  | What it is                                                                                               |
-| --------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `apps/web`            | `@plotroom/web`          | React 19 + Vite canvas UI; the Playwright e2e gate lives in `apps/web/e2e`                               |
-| `apps/server`         | `@plotroom/server`       | The HTTP API server the web app and desktop shell talk to                                                |
-| `apps/session-host`   | `@plotroom/session-host` | Bun sidecar embedding omp as the session runtime; tests run under `bun test`; ships as a compiled binary |
-| `apps/desktop`        | `@plotroom/desktop`      | Electron desktop shell (spawn-or-attach to a local server, or a remembered remote backend)               |
-| `packages/core`       | `@plotroom/core`         | Domain model and **rule predicates** — every product rule lives here once, called by every surface       |
-| `packages/db`         | `@plotroom/db`           | Persistence (drizzle-orm over `bun:sqlite`); its suite runs under `bun test`                             |
-| `packages/toolkit`    | `@plotroom/toolkit`      | Design tokens and theme; `theme.generated.css` is generated — never hand-edit it                         |
-| `packages/ui`         | `@plotroom/ui`           | Shared UI components (panels, conversation surfaces)                                                     |
-| `packages/plugin-sdk` | `@plotroom/plugin-sdk`   | SDK plugins are built against                                                                            |
-| `packages/plugins/*`  | `@plotroom/plugin-*`     | Integrations (`filesystem`, `git`, `github`, `jira`) — they populate core concepts, never add new ones   |
-| `scripts/`            | —                        | Repo tooling and the release script; outside the turbo graph, checked by `bun check:scripts`             |
+| Path                  | Package                  | What it is                                                                                                                                                             |
+| --------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/web`            | `@plotroom/web`          | React 19 + Vite canvas UI; the Playwright e2e gate lives in `apps/web/e2e`                                                                                             |
+| `apps/server`         | `@plotroom/server`       | The HTTP API server the web app and desktop shell talk to                                                                                                              |
+| `apps/session-host`   | `@plotroom/session-host` | Bun sidecar embedding omp as the session runtime; tests run under `bun test`; ships as a compiled binary                                                               |
+| `apps/desktop`        | `@plotroom/desktop`      | Tauri v2 desktop shell — thin Rust main (window lifecycle, spawn-or-attach, sidecar lifecycle, single-instance); server and session-host ship as compiled-Bun sidecars |
+| `packages/core`       | `@plotroom/core`         | Domain model and **rule predicates** — every product rule lives here once, called by every surface                                                                     |
+| `packages/db`         | `@plotroom/db`           | Persistence (drizzle-orm over `bun:sqlite`); its suite runs under `bun test`                                                                                           |
+| `packages/toolkit`    | `@plotroom/toolkit`      | Design tokens and theme; `theme.generated.css` is generated — never hand-edit it                                                                                       |
+| `packages/ui`         | `@plotroom/ui`           | Shared UI components (panels, conversation surfaces)                                                                                                                   |
+| `packages/plugin-sdk` | `@plotroom/plugin-sdk`   | SDK plugins are built against                                                                                                                                          |
+| `packages/plugins/*`  | `@plotroom/plugin-*`     | Integrations (`filesystem`, `git`, `github`, `jira`) — they populate core concepts, never add new ones                                                                 |
+| `scripts/`            | —                        | Repo tooling and the release script; outside the turbo graph, checked by `bun check:scripts`                                                                           |
 
 ## Toolchain and commands
 
-Bun 1.3.14 (`packageManager` pinned, `bun.lock`), Node ≥ 22.18, turborepo,
-vitest (`apps/session-host` and `packages/db` use `bun test`), oxlint
-(`--type-aware`) for `lint` plus an ESLint flat config for `lint:arch`,
-`tsgo` (TypeScript native preview) for typecheck, Prettier, husky +
-commitlint.
+Bun 1.3.14 (`packageManager` pinned, `bun.lock`), Node ≥ 22.18 (kept for
+tools pinned to it — Playwright's e2e runner does not yet support Bun),
+turborepo, vitest (`apps/session-host` and `packages/db` use `bun test`),
+oxlint (`--type-aware`) for `lint` plus an ESLint flat config for
+`lint:arch`, `tsgo` (TypeScript native preview) for typecheck, Prettier,
+husky + commitlint. `apps/desktop`'s Tauri v2 shell is Rust/Cargo (`cargo
+clippy`, `cargo test`), wired into the same `turbo run lint`/`test` tasks as
+every TS package — the toolchain, not the task graph, is what differs.
 
 | Command                              | What it does                                                                  |
 | ------------------------------------ | ----------------------------------------------------------------------------- |
@@ -69,10 +72,13 @@ commitlint.
 | `bun compile`                        | Compile the session-host binary and run its smoke test                        |
 | `bun format`                         | Prettier over the repo                                                        |
 
-Nothing but `web`, `toolkit`, and `desktop` emits a `dist/` (#315): every
-other package exports raw TS, and `typecheck` is one root-scoped `tsgo` run
-over the whole workspace rather than a per-package `tsc -b`. `skill://verification`
-has the full ladder from per-file feedback to the pre-PR gate.
+Nothing but `web` and `toolkit` emits a `dist/` from a TypeScript build
+(#315): every other TS package exports raw source directly. `apps/desktop`'s
+`cargo tauri build` (#316) produces a native binary, not a `dist/`, and has
+no `.ts` files of its own to typecheck. `typecheck` is one root-scoped
+`tsgo` run over the remaining TS workspace rather than a per-package
+`tsc -b`. `skill://verification` has the full ladder from per-file feedback
+to the pre-PR gate.
 
 ## Git conventions
 
@@ -100,8 +106,12 @@ has the full ladder from per-file feedback to the pre-PR gate.
 ## CI
 
 - `ci.yml` — code checks scoped by `turbo --affected`: one job runs
-  `bun check` + `bun check:scripts`; the e2e gate runs when `@plotroom/web`
-  is affected; the session-host binary matrix runs when it is.
+  `bun check` + `bun check:scripts` (this already covers `apps/desktop`'s
+  `cargo clippy`/`cargo test`, wired through the same `lint`/`test` turbo
+  tasks); the e2e gate runs when `@plotroom/web` is affected; the
+  session-host binary matrix runs when it is; the desktop packaging job
+  (`ubuntu-latest`, `macos-latest`, `macos-15-intel`, `windows-latest`) runs
+  when `@plotroom/desktop` is affected.
 - `install.yml` — a frozen-lockfile install, the `@plotroom/db` suite, and the
   FTS5 probe on all three OSes; triggered by manifest/lockfile/`packages/db`
   changes.
