@@ -393,11 +393,11 @@ jobs:
   # job's claim is that the binary builds and starts on each platform, which the
   # compile's own smoke test makes. Release wiring is #79/#94's.
   #
-  # Three platforms, not five: `macos-latest` is arm64 and `ubuntu-latest` x64,
-  # so a green run says nothing about `darwin-x64` or `linux-arm64`, both of
-  # which the SDK publishes an addon for. Adding `macos-15-intel` and
-  # `ubuntu-24.04-arm` is what would cover them; until then the gap is stated
-  # rather than implied by a green check.
+  # All five platforms the SDK publishes a native addon for get a runner:
+  # `macos-latest` (darwin-arm64), `macos-15-intel` (darwin-x64, GitHub's
+  # recommended Intel-mac successor — `macos-13` was retired in December
+  # 2025), `ubuntu-latest` (linux-x64), `ubuntu-24.04-arm` (linux-arm64) and
+  # `windows-latest` (win32-x64).
   session-host-binary:
     name: Session host binary (${{ matrix.os }})
     needs: scope
@@ -412,7 +412,14 @@ jobs:
       # the binary is the whole question here.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os:
+          [
+            ubuntu-latest,
+            ubuntu-24.04-arm,
+            macos-latest,
+            macos-15-intel,
+            windows-latest,
+          ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
