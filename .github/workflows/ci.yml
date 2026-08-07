@@ -323,7 +323,7 @@ jobs:
   #
   # Three platforms, not five: `macos-latest` is arm64 and `ubuntu-latest` x64,
   # so a green run says nothing about `darwin-x64` or `linux-arm64`, both of
-  # which the SDK publishes an addon for. Adding `macos-13` and
+  # which the SDK publishes an addon for. Adding `macos-15-intel` and
   # `ubuntu-24.04-arm` is what would cover them; until then the gap is stated
   # rather than implied by a green check.
   session-host-binary:
@@ -363,9 +363,11 @@ jobs:
   # #316: the packaged desktop app, native-runner matrix, reusing
   # `session-host-binary`'s pattern above (one native runner per OS, because
   # neither the session-host addon nor a Tauri bundle can be produced for a
-  # platform the runner is not). `macos-13` is Intel (`x86_64-apple-darwin`);
-  # `macos-latest` is Apple Silicon (`aarch64-apple-darwin`) — the ADR's
-  # "bundler config including Intel mac" is this row, config-only until a
+  # platform the runner is not). `macos-15-intel` is Intel
+  # (`x86_64-apple-darwin`); `macos-latest` is Apple Silicon
+  # (`aarch64-apple-darwin`) — the ADR's "bundler config including Intel mac"
+  # is this row (`macos-13` was retired by GitHub in December 2025 and was
+  # replaced here with its recommended Intel successor), config-only until a
   # real Intel runner exercises it (unverified on the Linux container #316's
   # own PR was built on; see that PR for what is and is not proven there).
   #
@@ -382,7 +384,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-13, windows-latest]
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
