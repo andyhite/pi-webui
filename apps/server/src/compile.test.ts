@@ -9,6 +9,11 @@ import {
   smokeTest,
 } from "./compile.js";
 
+/** `true(1)` is a POSIX standard, but not at one standard path — `/bin/true`
+ * on Linux, `/usr/bin/true` on macOS — so it is resolved off `PATH` rather
+ * than hardcoded. */
+const NEVER_LISTENS = Bun.which("true");
+
 describe("BINARY_NAME", () => {
   it("names a per-platform artifact, .exe only on Windows", () => {
     expect(BINARY_NAME).toBe(
@@ -34,11 +39,18 @@ describe("smokeTest", () => {
     30_000,
   );
 
-  it("refuses a binary that never answers health, rather than hanging forever", async () => {
-    // `/bin/true`-shaped: a program that exists, runs, and never listens on
-    // anything — the exact shape `smokeTest`'s bounded poll exists to catch
-    // rather than hang on (the same class of bug named on #261, applied to
-    // this compile-time check instead of the desktop shell's spawn path).
-    await expect(smokeTest("/bin/true")).rejects.toThrow(ServerCompileError);
-  }, 25_000);
+  it.skipIf(NEVER_LISTENS === null)(
+    "refuses a binary that never answers health, rather than hanging forever",
+    async () => {
+      // `true`-shaped: a program that exists, runs, and never listens on
+      // anything — the exact shape `smokeTest`'s bounded poll exists to
+      // catch rather than hang on (the same class of bug named on #261,
+      // applied to this compile-time check instead of the desktop shell's
+      // spawn path).
+      await expect(smokeTest(NEVER_LISTENS as string)).rejects.toThrow(
+        ServerCompileError,
+      );
+    },
+    25_000,
+  );
 });

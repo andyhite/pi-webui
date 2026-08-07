@@ -181,16 +181,13 @@ impl Spawner for ServerSpawner {
     }
 }
 
-/// On Unix: put the child in its own process group (so a group-wide signal
+/// On Linux: put the child in its own process group (so a group-wide signal
 /// never also hits this process) and arm `PR_SET_PDEATHSIG` so the kernel
 /// kills the child itself the moment this process dies for *any* reason —
 /// a crash, a forced quit, anything — closing the orphan risk #308's S2
 /// spike measured directly (a plain spawned child survives its parent's
-/// death, re-parented to init). A no-op stub on non-Unix platforms: Windows
-/// has no equivalent single syscall, and its job-object-based alternative is
-/// unverified on this container (no Windows hardware — recorded honestly on
-/// #316 rather than guessed at here).
-#[cfg(unix)]
+/// death, re-parented to init).
+#[cfg(target_os = "linux")]
 unsafe fn pre_exec_detach(command: &mut Command) {
     use std::os::unix::process::CommandExt;
     command.pre_exec(|| {
@@ -215,6 +212,31 @@ unsafe fn pre_exec_detach(command: &mut Command) {
     });
 }
 
+/// On macOS and other non-Linux Unix: still moves the child into its own
+/// process group, so `kill_process_group`'s `killpg` on our own shutdown
+/// path (window closed, app quitting) reaches it. `PR_SET_PDEATHSIG` is a
+/// Linux-only syscall — `libc` does not even declare it here — with no
+/// drop-in equivalent (a `kqueue` `EVFILT_PROC`/`NOTE_EXIT` watch from the
+/// child side is the closest analog and real added complexity, not a
+/// one-line port). A sidecar orphaned by *this* process crashing (as
+/// opposed to our own chosen shutdown, which does not depend on this at
+/// all) is therefore a real, stated gap on macOS rather than a silently
+/// claimed fix — recorded on #316 next to the Windows job-object gap below.
+#[cfg(all(unix, not(target_os = "linux")))]
+unsafe fn pre_exec_detach(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    command.pre_exec(|| {
+        if libc::setpgid(0, 0) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    });
+}
+
+/// A no-op stub on non-Unix platforms: Windows has no equivalent single
+/// syscall, and its job-object-based alternative is unverified on this
+/// container (no Windows hardware — recorded honestly on #316 rather than
+/// guessed at here).
 #[cfg(not(unix))]
 unsafe fn pre_exec_detach(_command: &mut Command) {}
 

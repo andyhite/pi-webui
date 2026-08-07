@@ -24,6 +24,11 @@ export class ServerCompileError extends Error {}
 
 const MEGABYTE = 1_000_000;
 
+/** Long enough for a cold compiled binary on a contended runner, short enough
+ * to fail (mirrors `apps/session-host/src/compile.ts`'s own `START_TIMEOUT_MS`
+ * — the CI Windows runner did not answer within the previous 20s bound). */
+const START_TIMEOUT_MS = 120_000;
+
 /**
  * Did the compiled artifact actually start and answer its own health route?
  * A green build that produced a binary which cannot boot is a failure this
@@ -46,10 +51,25 @@ export async function smokeTest(binary: string): Promise<void> {
     stderr: "pipe",
   });
 
+  // Drained from the start, not after the race: a child that filled the pipe
+  // buffer would block on its own write and never answer the health check.
+  const stdout = new Response(child.stdout).text();
+  const stderr = new Response(child.stderr).text();
+
+  // A child that already exited will never suddenly start answering health
+  // checks — tracked so the poll below fails fast on a binary that cannot
+  // start, rather than spending the full deadline on a dead process (the
+  // same class of check as `apps/session-host/src/compile.ts`'s `running`
+  // race).
+  let exited = false;
+  void child.exited.then(() => {
+    exited = true;
+  });
+
   try {
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + START_TIMEOUT_MS;
     let healthy = false;
-    while (Date.now() < deadline) {
+    while (Date.now() < deadline && !exited) {
       try {
         const res = await fetch(`http://127.0.0.1:${String(port)}/api/health`);
         if (res.ok) {
@@ -59,11 +79,19 @@ export async function smokeTest(binary: string): Promise<void> {
       } catch {
         // Not listening yet — retry until the deadline.
       }
+      // Executor form: the workspace's `lib` targets ES2023
+      // (`tsconfig.json`), which predates `Promise.withResolvers` — see
+      // `src/runtime/omp.ts`'s own note on the same tradeoff.
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
     if (!healthy) {
+      child.kill();
+      const [out, err] = await Promise.all([stdout, stderr]);
+      const reason = exited
+        ? `the compiled server exited before answering /api/health (code ${String(child.exitCode)})`
+        : `the compiled server never answered /api/health within ${String(START_TIMEOUT_MS / 1000)}s on port ${String(port)}`;
       throw new ServerCompileError(
-        `the compiled server never answered /api/health within 20s on port ${String(port)}`,
+        `${reason}\nstdout: ${out.trim() || "(empty)"}\nstderr: ${err.trim() || "(empty)"}`,
       );
     }
   } finally {

@@ -114,7 +114,7 @@ pub fn run() {
                 poll_interval: Duration::from_millis(200),
             };
 
-            let layout = resolve_sidecar_layout(&app.handle());
+            let layout = resolve_sidecar_layout(app.handle());
             let mut spawner = ServerSpawner::new(layout, host.clone(), port, state_dir);
             let mut attach_probe = HttpHealthProbe::new(&config);
 
