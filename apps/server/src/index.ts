@@ -378,6 +378,17 @@ export function startServer(config = loadServerConfig()) {
 // listening and no output (discovered via the `Session host binary
 // (windows-latest)` CI job, #316: the first place `@plotroom/server` runs as
 // a standalone compiled binary and is smoke-tested for real).
+if (process.env.PLOTROOM_COMPILE_SMOKE_TEST) {
+  // Temporary, env-gated diagnostic for the still-open Windows compiled-
+  // binary smoke test failure (#316): fires only under `compile.ts`'s
+  // smoke test, never in production or the integration suite (which import
+  // `startServer` directly and never set this var), so it says whether
+  // this module even reached this line and what `import.meta.main`
+  // evaluated to before deciding anything about the guard below.
+  console.error(
+    `[compile-smoke] index.ts reached the entrypoint guard: platform=${process.platform} main=${String(import.meta.main)} argv=${JSON.stringify(process.argv)}`,
+  );
+}
 if (import.meta.main) {
   try {
     // A bind failure arrives after `startServer` has returned — the socket is

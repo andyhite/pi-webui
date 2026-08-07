@@ -46,6 +46,7 @@ export async function smokeTest(binary: string): Promise<void> {
       ...environment(),
       PLOTROOM_PORT: String(port),
       PLOTROOM_STATE_DIR: stateDir,
+      PLOTROOM_COMPILE_SMOKE_TEST: "1",
     },
     stdout: "pipe",
     stderr: "pipe",
