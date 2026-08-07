@@ -370,7 +370,15 @@ export function startServer(config = loadServerConfig()) {
 
 // Top-level bootstrap only; everything else uses Logger. console.error is
 // allowed by the lint config specifically for this kind of last-resort exit.
-if (import.meta.url === `file://${process.argv[1]}`) {
+// `import.meta.main` (not a manual `import.meta.url === file://${argv[1]}`
+// comparison, which this used to be): the latter breaks on Windows, where
+// `process.argv[1]` is backslash-separated and unencoded while `import.meta.url`
+// is a `file://` URL, so the two never compared equal and this whole block
+// silently never ran — the compiled server exited immediately with nothing
+// listening and no output (discovered via the `Session host binary
+// (windows-latest)` CI job, #316: the first place `@plotroom/server` runs as
+// a standalone compiled binary and is smoke-tested for real).
+if (import.meta.main) {
   try {
     // A bind failure arrives after `startServer` has returned — the socket is
     // still connecting — so it needs its own report. Without this it is an
