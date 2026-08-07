@@ -245,8 +245,13 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     // forward reference: the run service is constructed below, because the gate it
     // runs behind is built from this service — and the closure is not called until
     // a request is answered, long after both exist.
-    stopSession: async (sessionId) => {
-      await runs.stopSession({ sessionId, mode: "graceful", cause: "user" });
+    stopSession: async (sessionId, actor) => {
+      await runs.stopSession({
+        sessionId,
+        mode: "graceful",
+        cause: "user",
+        actor,
+      });
     },
     claims,
     proposals: {
@@ -553,7 +558,10 @@ export function configureApp(app: Hono, deps: AppDependencies): AppRuntime {
     hub,
     runs,
     queue,
-    stopQueue: unsubscribeQueue,
+    stopQueue: () => {
+      unsubscribeQueue();
+      queue.stopQueue();
+    },
     steering,
     stopSteering: unsubscribeSteering,
     compaction,

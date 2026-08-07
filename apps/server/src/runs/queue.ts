@@ -119,6 +119,25 @@ export class RunQueueService {
   #drainAgain = false;
 
   /**
+   * Set once a shutdown has begun (issue #71's first half). `drain()` and the
+   * immediate-admission branch of `runOne` both refuse rather than start
+   * anything once this is true — closing the window where a `PUT
+   * /api/settings/concurrencyLimit` raise or a fresh `POST /api/runs` could
+   * admit a session against a database about to close.
+   */
+  #stopped = false;
+
+  /**
+   * Every admission still running when {@link stopQueue} flipped `#stopped` —
+   * started before the gate closed, so it is let finish rather than left half
+   * spawned. {@link settleInFlight} is what a shutdown awaits, before it sweeps
+   * live sessions, so one of these that is still registering its session-host
+   * process is not missed and left running past `db.close()` (issue #71's
+   * worse half).
+   */
+  readonly #inFlight = new Set<Promise<unknown>>();
+
+  /**
    * A mutable copy of `deps.concurrencyLimit`, so a settings write can change
    * it without a restart (§11, Epic 8.3) — `deps` itself stays exactly what
    * every other field on it always was: read once, at construction.
@@ -127,6 +146,40 @@ export class RunQueueService {
 
   constructor(private readonly deps: RunQueueDeps) {
     this.#concurrencyLimit = deps.concurrencyLimit;
+  }
+
+  /**
+   * Shut the door on new admission (issue #71). Idempotent, and safe to call
+   * from a shutdown path with nothing else guarding it.
+   */
+  stopQueue(): void {
+    this.#stopped = true;
+  }
+
+  /**
+   * Wait for every admission already past the {@link stopQueue} gate to
+   * finish. See the `#inFlight` field doc for why a shutdown needs this before
+   * it tears down live sessions.
+   */
+  async settleInFlight(): Promise<void> {
+    await Promise.allSettled(this.#inFlight);
+  }
+
+  /**
+   * The one door into the run path (issue #71): every admission — replayed,
+   * immediate, or drained off the queue — goes through here, tracked in
+   * `#inFlight` for exactly as long as it is running.
+   */
+  private runOnce(input: RunOneInput): Promise<RunOneResult> {
+    const started = this.deps.runs.runOne(input);
+    this.#inFlight.add(started);
+    // `.finally()` produces its own promise that mirrors a rejection, and
+    // nothing else ever looks at it — an unhandled one would surface as a
+    // process-wide `unhandledRejection`, landing on whichever test happens to
+    // be running next rather than on this admission's own caller (which still
+    // gets the rejection, from `started` itself, untouched below).
+    started.finally(() => this.#inFlight.delete(started)).catch(() => {});
+    return started;
   }
 
   /**
@@ -370,6 +423,16 @@ export class RunQueueService {
   > {
     const { stores } = this.deps;
 
+    // Shutdown closes the door before it tears down live sessions (issue #71):
+    // refused here rather than queued, since nothing will ever drain a queue
+    // that is no longer admitting.
+    if (this.#stopped) {
+      throw refused({
+        reason: "queue_stopped",
+        message: "the run queue is shutting down and is not admitting new work",
+      });
+    }
+
     // The same gesture twice is the same gesture, whichever side of the limit it
     // landed on the first time (principle 9). A key that already produced a run
     // replays through the run path; a key that already queued answers with that
@@ -381,7 +444,7 @@ export class RunQueueService {
         if (entry.runId !== null && entry.sessionId !== null) {
           return {
             admitted: true,
-            result: await this.deps.runs.runOne({
+            result: await this.runOnce({
               commandId: input.commandId,
               initiationKey: entry.initiationKey,
               actor: input.actor,
@@ -401,7 +464,7 @@ export class RunQueueService {
     ) {
       return {
         admitted: true,
-        result: await this.deps.runs.runOne({
+        result: await this.runOnce({
           commandId: input.commandId,
           initiationKey: input.initiationKey,
           actor: input.actor,
@@ -929,6 +992,11 @@ export class RunQueueService {
    * failing in exactly the way it exists to prevent.
    */
   async drain(): Promise<void> {
+    // Shutdown closes the door before it tears down live sessions (issue #71):
+    // a concurrency-limit raise or an event this drain reacts to must not admit
+    // anything once the queue has been told to stop.
+    if (this.#stopped) return;
+
     // A drain that arrives while one is running is *recorded*, not dropped. The
     // window is small and real: the last running session can end just after the
     // in-flight drain has taken its final look at the queue, and swallowing that
@@ -951,6 +1019,8 @@ export class RunQueueService {
         const attempted = new Set<string>();
 
         for (;;) {
+          if (this.#stopped) break;
+
           const running = this.runningCount();
           if (running >= this.#concurrencyLimit) break;
 
@@ -962,7 +1032,7 @@ export class RunQueueService {
 
           await this.admit(next.entry);
         }
-      } while (this.#drainAgain);
+      } while (this.#drainAgain && !this.#stopped);
     } finally {
       this.#draining = false;
     }
@@ -1063,7 +1133,7 @@ export class RunQueueService {
     > | null;
 
     try {
-      const started = await this.deps.runs.runOne({
+      const started = await this.runOnce({
         commandId: entry.commandId,
         initiationKey: entry.initiationKey,
         actor: actorOfBatch(batch),

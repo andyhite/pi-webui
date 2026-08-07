@@ -173,6 +173,7 @@ export function sessionRoutes(
       sessionId: param(c, "id"),
       mode: input.mode,
       cause: input.cause,
+      actor: actorOf(c),
       ...(input.scope === undefined ? {} : { scope: input.scope }),
     });
 
@@ -242,11 +243,12 @@ export function sessionRoutes(
       stores.bus,
       id,
       destructionGate(c),
-      async (sessionId) => {
+      async (sessionId, actor) => {
         await service.stopSession({
           sessionId,
           mode: "graceful",
           cause: "user",
+          actor,
         });
       },
     );
